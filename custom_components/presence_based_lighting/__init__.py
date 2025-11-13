@@ -13,7 +13,7 @@ from homeassistant.const import (
     STATE_ON,
     STATE_OFF,
 )
-from homeassistant.core import HomeAssistant, Event, callback
+from homeassistant.core import HomeAssistant, Event, Context, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
@@ -26,7 +26,6 @@ from .const import (
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
-
 
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up this integration using YAML is not supported."""
@@ -310,7 +309,7 @@ class PresenceBasedLightingCoordinator:
     async def _turn_on_lights(self) -> None:
         """Turn on all configured lights."""
         light_entities = self.entry.data[CONF_LIGHT_ENTITIES]
-        context = self.hass.context
+        context = Context()
         self._our_context_ids.add(context.id)
         
         await self.hass.services.async_call(
@@ -324,7 +323,7 @@ class PresenceBasedLightingCoordinator:
     async def _turn_off_lights(self) -> None:
         """Turn off all configured lights."""
         light_entities = self.entry.data[CONF_LIGHT_ENTITIES]
-        context = self.hass.context
+        context = Context()
         self._our_context_ids.add(context.id)
         
         await self.hass.services.async_call(
