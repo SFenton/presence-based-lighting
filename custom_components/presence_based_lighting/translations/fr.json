@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuration de l'éclairage basé sur la présence",
+        "description": "Configurer l'automatisation de l'éclairage basée sur la présence pour une pièce",
+        "data": {
+          "room_name": "Nom de la pièce",
+          "light_entities": "Lumières à contrôler",
+          "presence_sensors": "Capteurs de présence",
+          "off_delay": "Délai d'extinction (secondes)"
+        }
+      }
+    },
+    "error": {
+      "already_configured": "Cette pièce est déjà configurée"
+    },
+    "abort": {
+      "already_configured": "Cette pièce est déjà configurée"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configurer l'éclairage basé sur la présence",
+        "description": "Mettre à jour les paramètres de cette pièce",
+        "data": {
+          "light_entities": "Lumières à contrôler",
+          "presence_sensors": "Capteurs de présence",
+          "off_delay": "Délai d'extinction (secondes)"
+        }
+      }
+    }
+  }
+}

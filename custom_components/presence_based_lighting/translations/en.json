@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Setup Presence Based Lighting",
+        "description": "Configure presence-based lighting automation for a room",
+        "data": {
+          "room_name": "Room Name",
+          "light_entities": "Lights to Control",
+          "presence_sensors": "Presence Sensors",
+          "off_delay": "Turn Off Delay (seconds)"
+        }
+      }
+    },
+    "error": {
+      "already_configured": "This room is already configured"
+    },
+    "abort": {
+      "already_configured": "This room is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Presence Based Lighting",
+        "description": "Update settings for this room",
+        "data": {
+          "light_entities": "Lights to Control",
+          "presence_sensors": "Presence Sensors",
+          "off_delay": "Turn Off Delay (seconds)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "_checkout": null,
+  "_output_dir": "/Users/stephenfenton/repos/personal",
+  "_repo_dir": "/Users/stephenfenton/.cookiecutters/cookiecutter-homeassistant-custom-component",
+  "_template": "gh:oncleben31/cookiecutter-homeassistant-custom-component",
+  "class_name_prefix": "PresenceBasedLighting",
+  "domain_name": "presence_based_lighting",
+  "friendly_name": "Presence Based Lighting",
+  "github_user": "sfenton",
+  "project_name": "presence_based_lighting",
+  "test_suite": "no",
+  "version": "0.0.0"
+}

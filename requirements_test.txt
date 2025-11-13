@@ -1,0 +1,4 @@
+# Testing requirements for Presence Based Lighting
+# Using minimal dependencies for simpler testing
+pytest>=7.0.0
+pytest-asyncio>=0.20.0

@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Oppsett av tilstedeværelsesbasert belysning",
+        "description": "Konfigurer tilstedeværelsesbasert belysningsautomatisering for et rom",
+        "data": {
+          "room_name": "Romnavn",
+          "light_entities": "Lys å kontrollere",
+          "presence_sensors": "Tilstedeværelsessensorer",
+          "off_delay": "Slå av forsinkelse (sekunder)"
+        }
+      }
+    },
+    "error": {
+      "already_configured": "Dette rommet er allerede konfigurert"
+    },
+    "abort": {
+      "already_configured": "Dette rommet er allerede konfigurert"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Konfigurer tilstedeværelsesbasert belysning",
+        "description": "Oppdater innstillinger for dette rommet",
+        "data": {
+          "light_entities": "Lys å kontrollere",
+          "presence_sensors": "Tilstedeværelsessensorer",
+          "off_delay": "Slå av forsinkelse (sekunder)"
+        }
+      }
+    }
+  }
+}

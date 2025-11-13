@@ -1,0 +1,198 @@
+blueprint:
+  name: Presence-Based Lighting Control
+  description: >
+    Automates lights based on presence sensors with manual override protection.
+    Supports multiple lights/groups and multiple presence sensors.
+    Requires an input_boolean named "input_boolean.<room>_presence_allowed".
+  domain: automation
+  input:
+    presence_allowed_boolean:
+      name: Presence Allowed Boolean
+      description: Input boolean helper to track if presence automation is enabled
+      selector:
+        entity:
+          domain: input_boolean
+    light_targets:
+      name: Lights or Light Groups
+      description: One or more lights or groups to control
+      selector:
+        entity:
+          domain: light
+          multiple: true
+    presence_sensors:
+      name: Presence Sensors
+      description: One or more occupancy sensors for the room
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: occupancy
+          multiple: true
+    off_delay:
+      name: Turn Off Delay
+      description: Seconds to wait after occupancy clears before turning off lights
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: seconds
+          mode: box
+
+mode: queued
+max: 5
+
+variables:
+  presence_allowed_boolean: !input presence_allowed_boolean
+  light_entities: !input light_targets
+  presence_entities: !input presence_sensors
+  off_delay_seconds: !input off_delay
+  this_automation_id: "{{ this.entity_id }}"
+
+trigger:
+  # Manual override detection
+  - platform: state
+    entity_id: !input light_targets
+    to: "off"
+    id: lights_off
+  - platform: state
+    entity_id: !input light_targets
+    to: "on"
+    id: lights_on
+
+  # Re-enable presence-based lighting
+  - platform: state
+    entity_id: !input presence_allowed_boolean
+    to: "on"
+    id: re_enable
+
+  # Occupancy changes
+  - platform: state
+    entity_id: !input presence_sensors
+    to: "on"
+    id: occupancy_detected
+  - platform: state
+    entity_id: !input presence_sensors
+    to: "off"
+    id: occupancy_cleared
+
+action:
+  - choose:
+      # Manual override: lights turned off → disable presence automation
+      - conditions:
+          - condition: trigger
+            id: lights_off
+          - condition: template
+            value_template: >
+              {% set all_light_contexts = expand(light_entities) | map(attribute='context') | map(attribute='parent_id') | list %}
+              {{ trigger.to_state.context.parent_id is none 
+                 or trigger.to_state.context.parent_id not in all_light_contexts }}
+        sequence:
+          - service: input_boolean.turn_off
+            target:
+              entity_id: "{{ presence_allowed_boolean }}"
+
+      # Manual override: lights turned on → re-enable presence automation
+      - conditions:
+          - condition: trigger
+            id: lights_on
+        sequence:
+          - service: input_boolean.turn_on
+            target:
+              entity_id: "{{ presence_allowed_boolean }}"
+          - choose:
+              # If room is unoccupied, wait for occupancy or timeout
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ expand(presence_entities) | selectattr('state','eq','on') | list | count == 0 }}
+                sequence:
+                  - wait_template: >
+                      {{ expand(presence_entities) | selectattr('state','eq','on') | list | count > 0 
+                         or expand(light_entities) | selectattr('state','eq','off') | list | count > 0 }}
+                    timeout: "{{ off_delay_seconds }}"
+                    continue_on_timeout: true
+                  - condition: template
+                    value_template: >
+                      {{ not wait.completed 
+                         and expand(light_entities) | selectattr('state','eq','on') | list | count > 0
+                         and expand(presence_entities) | selectattr('state','eq','on') | list | count == 0 }}
+                  - service: light.turn_off
+                    target:
+                      entity_id: "{{ light_entities }}"
+
+      # Re-enable logic (but skip if lights just changed by this automation - handled above)
+      - conditions:
+          - condition: trigger
+            id: re_enable
+          - condition: template
+            value_template: >
+              {% set light_contexts = expand(light_entities) | map(attribute='context') | map(attribute='parent_id') | list %}
+              {{ this.context.id not in light_contexts }}
+        sequence:
+          - choose:
+              # Occupied + lights off → turn on
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ expand(presence_entities) | selectattr('state','eq','on') | list | count > 0 }}
+                  - condition: template
+                    value_template: >
+                      {{ expand(light_entities) | selectattr('state','eq','off') | list | count > 0 }}
+                sequence:
+                  - service: light.turn_on
+                    target:
+                      entity_id: "{{ light_entities }}"
+
+              # Not occupied + lights on → wait for occupancy
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ expand(presence_entities) | selectattr('state','eq','on') | list | count == 0 }}
+                  - condition: template
+                    value_template: >
+                      {{ expand(light_entities) | selectattr('state','eq','on') | list | count > 0 }}
+                sequence:
+                  - wait_template: >
+                      {{ expand(presence_entities) | selectattr('state','eq','on') | list | count > 0 
+                         or expand(light_entities) | selectattr('state','eq','off') | list | count > 0 }}
+                    timeout: "{{ off_delay_seconds }}"
+                    continue_on_timeout: true
+                  - condition: template
+                    value_template: >
+                      {{ not wait.completed 
+                         and expand(light_entities) | selectattr('state','eq','on') | list | count > 0
+                         and expand(presence_entities) | selectattr('state','eq','on') | list | count == 0 }}
+                  - service: light.turn_off
+                    target:
+                      entity_id: "{{ light_entities }}"
+
+      # Occupancy-driven toggling
+      - conditions:
+          - condition: trigger
+            id: occupancy_detected
+          - condition: template
+            value_template: "{{ is_state(presence_allowed_boolean, 'on') }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: "{{ light_entities }}"
+
+      - conditions:
+          - condition: trigger
+            id: occupancy_cleared
+          - condition: template
+            value_template: "{{ is_state(presence_allowed_boolean, 'on') }}"
+        sequence:
+          - wait_template: >
+              {{ expand(presence_entities) | selectattr('state','eq','on') | list | count > 0 
+                 or expand(light_entities) | selectattr('state','eq','off') | list | count > 0 }}
+            timeout: "{{ off_delay_seconds }}"
+            continue_on_timeout: true
+          - condition: template
+            value_template: >
+              {{ not wait.completed 
+                 and expand(light_entities) | selectattr('state','eq','on') | list | count > 0
+                 and expand(presence_entities) | selectattr('state','eq','on') | list | count == 0 }}
+          - service: light.turn_off
+            target:
+              entity_id: "{{ light_entities }}"
