@@ -78,7 +78,7 @@ class TestP0Critical:
         await coordinator._handle_presence_change(event)
         
         # Wait for timer (30 seconds)
-        await asyncio.sleep(30.1)  # Slightly over 30s
+        await asyncio.sleep(1.1)  # Slightly over 30s
         
         # Assert: Lights should be turned OFF
         assert_service_called(mock_hass, "light", "turn_off", "light.living_room")
@@ -136,7 +136,7 @@ class TestP0Critical:
         await coordinator._handle_light_change(event)
         
         # Assert: Timer should start and lights should turn off after delay
-        await asyncio.sleep(30.1)
+        await asyncio.sleep(1.1)
         assert_service_called(mock_hass, "light", "turn_off", "light.living_room")
 
     @pytest.mark.asyncio
@@ -169,5 +169,5 @@ class TestP0Critical:
         await coordinator.async_enable()
         
         # Assert: Timer should start (lights on in empty room)
-        await asyncio.sleep(30.1)
+        await asyncio.sleep(1.1)
         assert_service_called(mock_hass, "light", "turn_off", "light.living_room")

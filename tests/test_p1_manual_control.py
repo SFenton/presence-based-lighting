@@ -118,7 +118,7 @@ class TestManualLightControl:
         await coordinator._handle_light_change(event)
         
         # Wait for timer to expire
-        await asyncio.sleep(30.1)
+        await asyncio.sleep(1.1)
         
         # Assert: Lights should turn off
         assert_service_called(mock_hass, "light", "turn_off")
@@ -241,5 +241,5 @@ class TestManualLightControl:
         await coordinator.async_enable()
         
         # Assert: Timer should start and turn off lights
-        await asyncio.sleep(30.1)
+        await asyncio.sleep(1.1)
         assert_service_called(mock_hass, "light", "turn_off")

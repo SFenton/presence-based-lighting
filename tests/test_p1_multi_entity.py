@@ -91,7 +91,7 @@ class TestMultiSensor:
         await coordinator._handle_presence_change(event)
         
         # Wait for timer
-        await asyncio.sleep(30.1)
+        await asyncio.sleep(1.1)
         
         # Assert: Lights should turn off
         assert_service_called(mock_hass, "light", "turn_off")
@@ -198,7 +198,7 @@ class TestMultiSensor:
         await coordinator._handle_presence_change(event)
         
         # Wait for timer
-        await asyncio.sleep(30.1)
+        await asyncio.sleep(1.1)
         
         # Assert: Both lights should turn off
         service_call = None

@@ -31,14 +31,14 @@ from custom_components.presence_based_lighting.const import (
 
 @pytest.fixture
 def mock_config_entry():
-    """Return a mock config entry."""
+    """Return a mock config entry with 1 second delay for fast tests."""
     entry = MagicMock()
     entry.domain = DOMAIN
     entry.data = {
         CONF_ROOM_NAME: "Living Room",
         CONF_LIGHT_ENTITIES: ["light.living_room"],
         CONF_PRESENCE_SENSORS: ["binary_sensor.living_room_motion"],
-        CONF_OFF_DELAY: 30,
+        CONF_OFF_DELAY: 1,  # 1 second for fast tests
     }
     entry.entry_id = "test_entry_id"
     entry.unique_id = "Living Room"
@@ -56,7 +56,7 @@ def mock_config_entry_multi():
         CONF_ROOM_NAME: "Living Room",
         CONF_LIGHT_ENTITIES: ["light.living_room_1", "light.living_room_2"],
         CONF_PRESENCE_SENSORS: ["binary_sensor.motion_1", "binary_sensor.motion_2"],
-        CONF_OFF_DELAY: 30,
+        CONF_OFF_DELAY: 1,  # 1 second for fast tests
     }
     entry.entry_id = "test_entry_id"
     entry.unique_id = "Living Room"
@@ -114,6 +114,13 @@ class MockHass:
         self.services = MockServices()
         self.config_entries = MockConfigEntries()
         self._state_listeners = []
+        self._context_counter = 0
+        
+    @property
+    def context(self):
+        """Get a new context for service calls."""
+        self._context_counter += 1
+        return MockContext(id=f"test_context_{self._context_counter}")
         
     def is_state(self, entity_id, state):
         """Check if entity is in given state."""
@@ -153,13 +160,14 @@ class MockServices:
         """Initialize mock services."""
         self.calls = []
         
-    async def async_call(self, domain, service, service_data=None, blocking=False):
+    async def async_call(self, domain, service, service_data=None, blocking=False, context=None):
         """Call a service."""
         self.calls.append({
             "domain": domain,
             "service": service,
             "service_data": service_data or {},
             "blocking": blocking,
+            "context": context,
         })
         
     def clear(self):

@@ -87,6 +87,7 @@ class PresenceBasedLightingCoordinator:
         self._listeners = []
         self._pending_off_task = None
         self._update_callbacks = []
+        self._our_context_ids = set()  # Track our own service call contexts
 
     @property
     def is_enabled(self) -> bool:
@@ -183,10 +184,16 @@ class PresenceBasedLightingCoordinator:
         # Check if this was triggered by this integration
         context = event.data["new_state"].context
         
-        # If the change has no parent_id or user_id, it's likely internal/automation
-        # If it has a user_id, it's a manual change
-        # We identify our own changes by checking if we're currently turning lights on/off
-        automation_triggered = getattr(self, "_turning_lights", False)
+        # Check if the context ID or parent ID matches any of our service calls
+        automation_triggered = (
+            context.id in self._our_context_ids or
+            (context.parent_id and context.parent_id in self._our_context_ids)
+        )
+        
+        # Clean up old context IDs (keep only last 10)
+        if len(self._our_context_ids) > 10:
+            # Remove oldest (this is a set, so just keep it bounded)
+            self._our_context_ids = set(list(self._our_context_ids)[-10:])
         
         if new_state == STATE_OFF and not automation_triggered:
             # Manual override: lights turned off -> disable automation
@@ -303,27 +310,27 @@ class PresenceBasedLightingCoordinator:
     async def _turn_on_lights(self) -> None:
         """Turn on all configured lights."""
         light_entities = self.entry.data[CONF_LIGHT_ENTITIES]
-        self._turning_lights = True
-        try:
-            await self.hass.services.async_call(
-                "light",
-                "turn_on",
-                {"entity_id": light_entities},
-                blocking=True,
-            )
-        finally:
-            self._turning_lights = False
+        context = self.hass.context
+        self._our_context_ids.add(context.id)
+        
+        await self.hass.services.async_call(
+            "light",
+            "turn_on",
+            {"entity_id": light_entities},
+            blocking=True,
+            context=context,
+        )
 
     async def _turn_off_lights(self) -> None:
         """Turn off all configured lights."""
         light_entities = self.entry.data[CONF_LIGHT_ENTITIES]
-        self._turning_lights = True
-        try:
-            await self.hass.services.async_call(
-                "light",
-                "turn_off",
-                {"entity_id": light_entities},
-                blocking=True,
-            )
-        finally:
-            self._turning_lights = False
+        context = self.hass.context
+        self._our_context_ids.add(context.id)
+        
+        await self.hass.services.async_call(
+            "light",
+            "turn_off",
+            {"entity_id": light_entities},
+            blocking=True,
+            context=context,
+        )

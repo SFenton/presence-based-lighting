@@ -45,14 +45,14 @@ class TestSwitchToggle:
         event = type('obj', (object,), {'data': event_data})()
         await coordinator._handle_presence_change(event)
         
-        # Wait a bit
-        await asyncio.sleep(10)
+        # Wait a bit (but not long enough for 1s timer to expire)
+        await asyncio.sleep(0.5)
         
         # Disable switch
         await coordinator.async_disable()
         
         # Wait past timer expiration
-        await asyncio.sleep(25)
+        await asyncio.sleep(1)
         
         # Assert: Lights should NOT turn off (timer was cancelled)
         assert_service_not_called(mock_hass, "light", "turn_off")
@@ -104,7 +104,7 @@ class TestSwitchToggle:
         await coordinator.async_enable()
         
         # Wait for timer
-        await asyncio.sleep(30.1)
+        await asyncio.sleep(1.1)
         
         # Assert: Lights should turn off
         assert_service_called(mock_hass, "light", "turn_off")
