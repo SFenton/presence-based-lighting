@@ -7,6 +7,6 @@
   "config_flow": true,
   "codeowners": ["@sfenton"],
   "requirements": [],
-  "version": "1.0.0",
+  "version": "1.0.1",
   "iot_class": "local_polling"
 }
