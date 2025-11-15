@@ -9,6 +9,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    EVENT_CALL_SERVICE,
     EVENT_STATE_CHANGED,
     STATE_ON,
     STATE_OFF,
@@ -139,6 +140,15 @@ class PresenceBasedLightingCoordinator:
                 self._handle_presence_change,
             )
         )
+        
+        # Listen to service calls to detect manual interventions
+        # even when they don't result in state changes
+        self._listeners.append(
+            self.hass.bus.async_listen(
+                EVENT_CALL_SERVICE,
+                self._handle_service_call,
+            )
+        )
 
     @callback
     def async_stop(self) -> None:
@@ -168,6 +178,53 @@ class PresenceBasedLightingCoordinator:
         """Notify all listeners of an update."""
         for update_callback in self._update_callbacks:
             update_callback()
+
+    async def _handle_service_call(self, event: Event) -> None:
+        """Handle service calls to detect manual interventions.
+        
+        This catches service calls even when they don't result in state changes,
+        such as turning off an already-off light.
+        """
+        if not self._is_enabled:
+            return
+        
+        domain = event.data.get("domain")
+        service = event.data.get("service")
+        
+        # Only care about light service calls
+        if domain != "light":
+            return
+        
+        service_data = event.data.get("service_data", {})
+        target_entities = service_data.get("entity_id", [])
+        
+        # Normalize to list
+        if isinstance(target_entities, str):
+            target_entities = [target_entities]
+        
+        light_entities = self.entry.data[CONF_LIGHT_ENTITIES]
+        
+        # Check if any of our lights are targeted
+        if not any(entity in light_entities for entity in target_entities):
+            return
+        
+        # Check if this is our own service call
+        context = event.context
+        if context.id in self._our_context_ids or (context.parent_id and context.parent_id in self._our_context_ids):
+            return  # Ignore our own calls
+        
+        # External service call to our lights
+        if service == "turn_off":
+            _LOGGER.debug("External turn_off service call detected, disabling automation")
+            await self.async_disable()
+        elif service == "turn_on":
+            _LOGGER.debug("External turn_on service call detected, enabling automation")
+            self._is_enabled = True
+            self._notify_listeners()
+            
+            # Check if room is unoccupied after manual turn on
+            if not self._is_any_occupied():
+                await self._start_off_timer()
 
     async def _handle_light_change(self, event: Event) -> None:
         """Handle light state changes."""

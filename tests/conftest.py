@@ -113,6 +113,7 @@ class MockHass:
         self.states = MockStates()
         self.services = MockServices()
         self.config_entries = MockConfigEntries()
+        self.bus = MockBus()
         self._state_listeners = []
         self._context_counter = 0
         
@@ -185,6 +186,27 @@ class MockConfigEntries:
     async def async_unload_platforms(self, entry, platforms):
         """Unload platforms."""
         return True
+
+
+class MockBus:
+    """Mock event bus."""
+    
+    def __init__(self):
+        """Initialize mock bus."""
+        self._listeners = {}
+        
+    def async_listen(self, event_type, listener):
+        """Register an event listener."""
+        if event_type not in self._listeners:
+            self._listeners[event_type] = []
+        self._listeners[event_type].append(listener)
+        
+        # Return a function to remove the listener
+        def remove_listener():
+            if event_type in self._listeners:
+                self._listeners[event_type].remove(listener)
+        
+        return remove_listener
 
 
 @pytest.fixture
