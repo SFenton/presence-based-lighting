@@ -153,3 +153,103 @@ async def test_options_flow_requires_at_least_one_entity(mock_config_entry):
     assert handler._errors["base"] == "no_controlled_entities"  # type: ignore[attr-defined]
     handler.async_step_select_entity.assert_awaited_once()
     assert result == "select_entity_step"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_loads_existing_entities_on_init(mock_config_entry):
+    """Test that options flow loads existing entities from config entry on initialization."""
+    # mock_config_entry fixture has 1 entity: light.living_room
+    handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
+    
+    # Verify existing entities were loaded
+    assert len(handler._controlled_entities) == 1  # type: ignore[attr-defined]
+    assert handler._controlled_entities[0][CONF_ENTITY_ID] == "light.living_room"  # type: ignore[attr-defined]
+    assert handler._controlled_entities[0][CONF_PRESENCE_DETECTED_SERVICE] == DEFAULT_DETECTED_SERVICE  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_preserves_entities_when_updating_base_settings(mock_config_entry):
+    """Test that updating presence sensors and delay preserves existing entities.
+    
+    This is a regression test for the bug where async_step_init would wipe
+    all entities when the user updated base settings.
+    """
+    handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
+    
+    # Verify we start with 1 existing entity
+    assert len(handler._controlled_entities) == 1  # type: ignore[attr-defined]
+    original_entity = handler._controlled_entities[0]  # type: ignore[attr-defined]
+    
+    # Mock the next step
+    async def mock_select_entity():
+        return "select_entity_step"
+    handler.async_step_select_entity = mock_select_entity
+    
+    # Update base settings (sensors and delay)
+    user_input = {
+        CONF_PRESENCE_SENSORS: ["binary_sensor.new_sensor_1", "binary_sensor.new_sensor_2"],
+        CONF_OFF_DELAY: 30,
+    }
+    
+    result = await handler.async_step_init(user_input)
+    
+    # Verify base settings were updated
+    assert handler._base_data[CONF_PRESENCE_SENSORS] == ["binary_sensor.new_sensor_1", "binary_sensor.new_sensor_2"]  # type: ignore[attr-defined]
+    assert handler._base_data[CONF_OFF_DELAY] == 30  # type: ignore[attr-defined]
+    
+    # CRITICAL: Verify existing entity was preserved (not wiped)
+    assert len(handler._controlled_entities) == 1  # type: ignore[attr-defined]
+    assert handler._controlled_entities[0] == original_entity  # type: ignore[attr-defined]
+    assert handler._controlled_entities[0][CONF_ENTITY_ID] == "light.living_room"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_adds_new_entity_without_removing_existing(mock_config_entry):
+    """Test that adding a new entity preserves existing entities.
+    
+    Verifies the complete flow: init (with existing) -> add new -> both present.
+    """
+    handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
+    handler.hass = MagicMock()
+    handler.hass.config_entries = MagicMock()
+    handler.hass.states = MagicMock()
+    handler.hass.states.get = MagicMock(return_value=MagicMock(attributes={"friendly_name": "Bedroom Light"}))
+    handler.async_create_entry = MagicMock(return_value={"type": "create_entry"})
+    handler.async_step_add_another = AsyncMock(return_value="add_another_form")  # Mock to avoid UI rendering
+    
+    # Verify starting state: 1 entity (light.living_room from fixture)
+    assert len(handler._controlled_entities) == 1  # type: ignore[attr-defined]
+    assert handler._controlled_entities[0][CONF_ENTITY_ID] == "light.living_room"  # type: ignore[attr-defined]
+    
+    # Add a second entity
+    handler._selected_entity_id = "light.bedroom"
+    handler._current_entity_config = {CONF_ENTITY_ID: "light.bedroom"}
+    
+    configure_input = {
+        CONF_PRESENCE_DETECTED_SERVICE: "turn_on",
+        CONF_PRESENCE_CLEARED_SERVICE: "turn_off",
+        CONF_PRESENCE_DETECTED_STATE: "on",
+        CONF_PRESENCE_CLEARED_STATE: "off",
+        CONF_RESPECTS_PRESENCE_ALLOWED: True,
+        CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+    }
+    
+    await handler.async_step_configure_entity(configure_input)
+    
+    # Verify both entities are present
+    assert len(handler._controlled_entities) == 2  # type: ignore[attr-defined]
+    entity_ids = [e[CONF_ENTITY_ID] for e in handler._controlled_entities]  # type: ignore[attr-defined]
+    assert "light.living_room" in entity_ids  # Original preserved
+    assert "light.bedroom" in entity_ids  # New one added
+    
+    # Finish the flow - restore real method
+    handler.async_step_add_another = PresenceBasedLightingOptionsFlowHandler.async_step_add_another.__get__(handler)
+    await handler.async_step_add_another({"add_another": False})
+    
+    # Verify final data has both entities
+    update_call = handler.hass.config_entries.async_update_entry.call_args
+    updated_data = update_call[1]["data"]
+    final_entity_ids = [e[CONF_ENTITY_ID] for e in updated_data[CONF_CONTROLLED_ENTITIES]]
+    assert len(final_entity_ids) == 2
+    assert "light.living_room" in final_entity_ids
+    assert "light.bedroom" in final_entity_ids
