@@ -1,94 +1,99 @@
 """Switch platform for Presence Based Lighting."""
+from __future__ import annotations
+
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.const import STATE_ON
 from homeassistant.core import callback
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util.slugify import slugify
 
 from .const import (
-    ATTR_LIGHTS,
-    ATTR_SENSORS,
-    ATTR_OFF_DELAY,
-    ATTR_ANY_OCCUPIED,
-    ATTR_ANY_LIGHT_ON,
+    CONF_CONTROLLED_ENTITIES,
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+    CONF_ENTITY_ID,
+    CONF_INITIAL_PRESENCE_ALLOWED,
+    CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
-    CONF_LIGHT_ENTITIES,
-    CONF_PRESENCE_SENSORS,
-    CONF_OFF_DELAY,
     DOMAIN,
     ICON,
 )
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Setup switch platform."""
+    """Set up per-entity presence switches."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([PresenceBasedLightingSwitch(coordinator, entry)])
+    entities = [
+        PresenceEntitySwitch(coordinator, entry, entity_config)
+        for entity_config in entry.data.get(CONF_CONTROLLED_ENTITIES, [])
+    ]
+    async_add_entities(entities)
 
 
-class PresenceBasedLightingSwitch(SwitchEntity):
-    """Presence-based lighting control switch."""
+class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
+    """Switch controlling whether a specific entity follows presence automation."""
 
-    def __init__(self, coordinator, entry):
-        """Initialize the switch."""
+    def __init__(self, coordinator, entry, entity_config):
         self._coordinator = coordinator
         self._entry = entry
-        self._attr_name = f"{entry.data[CONF_ROOM_NAME]} Presence Automation"
-        self._attr_unique_id = f"{entry.entry_id}_switch"
+        self._entity_config = entity_config
+        self._entity_id = entity_config[CONF_ENTITY_ID]
+        sanitized = slugify(self._entity_id.split(".")[1])
+
+        self._attr_name = f"{entry.data[CONF_ROOM_NAME]} {self._entity_id} Presence Allowed"
+        self._attr_unique_id = f"{entry.entry_id}_{sanitized}_presence_allowed"
         self._attr_icon = ICON
-        
+        self._remove_listener = None
+
     @property
     def device_info(self):
-        """Return device information."""
+        """Return device information for grouping switches under the room."""
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
             "name": f"{self._entry.data[CONF_ROOM_NAME]} Presence Lighting",
             "manufacturer": "Presence Based Lighting",
             "model": "Presence Automation",
-            "sw_version": "1.0.0",
         }
 
     @property
     def is_on(self):
-        """Return true if presence automation is enabled."""
-        return self._coordinator.is_enabled
+        """Whether presence automation is currently allowed for this entity."""
+        return self._coordinator.get_presence_allowed(self._entity_id)
 
     async def async_turn_on(self, **kwargs):
-        """Enable presence automation."""
-        await self._coordinator.async_enable()
+        await self._coordinator.async_set_presence_allowed(self._entity_id, True)
 
     async def async_turn_off(self, **kwargs):
-        """Disable presence automation."""
-        await self._coordinator.async_disable()
+        await self._coordinator.async_set_presence_allowed(self._entity_id, False)
 
     @property
     def extra_state_attributes(self):
-        """Return the state attributes."""
-        light_entities = self._entry.data[CONF_LIGHT_ENTITIES]
-        presence_entities = self._entry.data[CONF_PRESENCE_SENSORS]
-        
-        # Get current states
-        any_occupied = any(
-            self.hass.states.is_state(entity, "on") 
-            for entity in presence_entities
-        )
-        any_light_on = any(
-            self.hass.states.is_state(entity, "on") 
-            for entity in light_entities
-        )
-        
         return {
-            ATTR_LIGHTS: light_entities,
-            ATTR_SENSORS: presence_entities,
-            ATTR_OFF_DELAY: self._entry.data[CONF_OFF_DELAY],
-            ATTR_ANY_OCCUPIED: any_occupied,
-            ATTR_ANY_LIGHT_ON: any_light_on,
+            "controlled_entity": self._entity_id,
+            CONF_RESPECTS_PRESENCE_ALLOWED: self._entity_config[CONF_RESPECTS_PRESENCE_ALLOWED],
+            CONF_DISABLE_ON_EXTERNAL_CONTROL: self._entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL],
         }
 
     async def async_added_to_hass(self):
-        """Register callbacks when entity is added."""
-        self.async_on_remove(
-            self._coordinator.async_add_listener(self._handle_coordinator_update)
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            initial_state = self._entity_config.get(
+                CONF_INITIAL_PRESENCE_ALLOWED, True
+            )
+        else:
+            initial_state = last_state.state == STATE_ON
+
+        self._remove_listener = self._coordinator.register_presence_switch(
+            self._entity_id,
+            initial_state,
+            self._handle_coordinator_update,
         )
 
+    async def async_will_remove_from_hass(self):
+        if self._remove_listener:
+            self._remove_listener()
+            self._remove_listener = None
+
     @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
+    def _handle_coordinator_update(self):
         self.async_write_ha_state()

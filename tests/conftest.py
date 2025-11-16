@@ -14,17 +14,38 @@ sys.modules['homeassistant.config_entries'] = MagicMock()
 sys.modules['homeassistant.const'] = MagicMock()
 sys.modules['homeassistant.helpers'] = MagicMock()
 sys.modules['homeassistant.helpers.event'] = MagicMock()
+sys.modules['homeassistant.helpers.entity_registry'] = MagicMock()
+sys.modules['homeassistant.helpers.restore_state'] = MagicMock()
 
 # Define constants we need
 STATE_ON = "on"
 STATE_OFF = "off"
 EVENT_STATE_CHANGED = "state_changed"
 
+homeassistant_const = sys.modules['homeassistant.const']
+homeassistant_const.STATE_ON = STATE_ON
+homeassistant_const.STATE_OFF = STATE_OFF
+homeassistant_const.EVENT_STATE_CHANGED = EVENT_STATE_CHANGED
+
 from custom_components.presence_based_lighting.const import (
-    CONF_ROOM_NAME,
-    CONF_LIGHT_ENTITIES,
-    CONF_PRESENCE_SENSORS,
+    CONF_CONTROLLED_ENTITIES,
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+    CONF_ENTITY_ID,
+    CONF_INITIAL_PRESENCE_ALLOWED,
     CONF_OFF_DELAY,
+    CONF_PRESENCE_CLEARED_SERVICE,
+    CONF_PRESENCE_CLEARED_STATE,
+    CONF_PRESENCE_DETECTED_SERVICE,
+    CONF_PRESENCE_DETECTED_STATE,
+    CONF_PRESENCE_SENSORS,
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+    CONF_ROOM_NAME,
+    DEFAULT_CLEARED_SERVICE,
+    DEFAULT_CLEARED_STATE,
+    DEFAULT_DETECTED_SERVICE,
+    DEFAULT_DETECTED_STATE,
+    DEFAULT_DISABLE_ON_EXTERNAL,
+    DEFAULT_INITIAL_PRESENCE_ALLOWED,
     DOMAIN,
 )
 
@@ -34,11 +55,23 @@ def mock_config_entry():
     """Return a mock config entry with 1 second delay for fast tests."""
     entry = MagicMock()
     entry.domain = DOMAIN
+    entry.version = 2
     entry.data = {
         CONF_ROOM_NAME: "Living Room",
-        CONF_LIGHT_ENTITIES: ["light.living_room"],
         CONF_PRESENCE_SENSORS: ["binary_sensor.living_room_motion"],
-        CONF_OFF_DELAY: 1,  # 1 second for fast tests
+        CONF_OFF_DELAY: 1,
+        CONF_CONTROLLED_ENTITIES: [
+            {
+                CONF_ENTITY_ID: "light.living_room",
+                CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+            }
+        ],
     }
     entry.entry_id = "test_entry_id"
     entry.unique_id = "Living Room"
@@ -52,11 +85,33 @@ def mock_config_entry_multi():
     """Return a mock config entry with multiple lights and sensors."""
     entry = MagicMock()
     entry.domain = DOMAIN
+    entry.version = 2
     entry.data = {
         CONF_ROOM_NAME: "Living Room",
-        CONF_LIGHT_ENTITIES: ["light.living_room_1", "light.living_room_2"],
         CONF_PRESENCE_SENSORS: ["binary_sensor.motion_1", "binary_sensor.motion_2"],
-        CONF_OFF_DELAY: 1,  # 1 second for fast tests
+        CONF_OFF_DELAY: 1,
+        CONF_CONTROLLED_ENTITIES: [
+            {
+                CONF_ENTITY_ID: "light.living_room_1",
+                CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+            },
+            {
+                CONF_ENTITY_ID: "light.living_room_2",
+                CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+            },
+        ],
     }
     entry.entry_id = "test_entry_id"
     entry.unique_id = "Living Room"
@@ -70,11 +125,23 @@ def mock_config_entry_zero_delay():
     """Return a mock config entry with zero delay."""
     entry = MagicMock()
     entry.domain = DOMAIN
+    entry.version = 2
     entry.data = {
         CONF_ROOM_NAME: "Bathroom",
-        CONF_LIGHT_ENTITIES: ["light.bathroom"],
         CONF_PRESENCE_SENSORS: ["binary_sensor.bathroom_motion"],
         CONF_OFF_DELAY: 0,
+        CONF_CONTROLLED_ENTITIES: [
+            {
+                CONF_ENTITY_ID: "light.bathroom",
+                CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+            }
+        ],
     }
     entry.entry_id = "test_entry_id_bathroom"
     entry.unique_id = "Bathroom"
@@ -187,6 +254,13 @@ class MockConfigEntries:
         """Unload platforms."""
         return True
 
+    def async_update_entry(self, entry, data=None, version=None):
+        """Update entry data/version for migration tests."""
+        if data is not None:
+            entry.data = data
+        if version is not None:
+            entry.version = version
+
 
 class MockBus:
     """Mock event bus."""
@@ -255,7 +329,12 @@ def assert_service_called(mock_hass, domain, service, entity_id=None):
         if call["domain"] == domain and call["service"] == service:
             if entity_id is None:
                 return True
-            if entity_id in call["service_data"].get("entity_id", []):
+            target = call["service_data"].get("entity_id", [])
+            if isinstance(target, str):
+                target_entities = [target]
+            else:
+                target_entities = target
+            if entity_id in target_entities:
                 return True
     raise AssertionError(f"Service {domain}.{service} was not called" + 
                         (f" for {entity_id}" if entity_id else ""))
