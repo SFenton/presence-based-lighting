@@ -34,8 +34,20 @@ class _BaseFlow:
         """Mock create entry - NOT async despite the name."""
         return {"type": "create_entry"}
 
-config_entries_module.ConfigFlow = type("ConfigFlow", (_BaseFlow,), {})
-config_entries_module.OptionsFlow = type("OptionsFlow", (_BaseFlow,), {})
+class ConfigFlow(_BaseFlow):
+    """ConfigFlow that accepts domain parameter."""
+    def __init_subclass__(cls, domain=None, **kwargs):
+        """Handle domain parameter in subclass definition."""
+        super().__init_subclass__(**kwargs)
+        if domain:
+            cls.DOMAIN = domain
+
+class OptionsFlow(_BaseFlow):
+    """OptionsFlow base class."""
+    pass
+
+config_entries_module.ConfigFlow = ConfigFlow
+config_entries_module.OptionsFlow = OptionsFlow
 config_entries_module.ConfigEntry = type("ConfigEntry", (), {})
 sys.modules['homeassistant.config_entries'] = config_entries_module
 sys.modules['homeassistant.helpers.event'] = MagicMock()

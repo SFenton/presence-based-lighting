@@ -138,11 +138,10 @@ def _get_entity_name(hass: HomeAssistant, entity_id: str) -> str:
 	return entity_id
 
 
-class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow):
+class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
 	VERSION = 2
-	DOMAIN = DOMAIN
 
 	def __init__(self):
 		"""Initialize."""
