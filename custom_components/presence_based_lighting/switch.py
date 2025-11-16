@@ -5,7 +5,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import STATE_ON
 from homeassistant.core import callback
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.util.slugify import slugify
+from homeassistant.util import slugify
 
 from .const import (
     CONF_CONTROLLED_ENTITIES,
