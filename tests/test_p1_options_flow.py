@@ -52,9 +52,9 @@ async def test_options_flow_init_transitions_to_select_entity(mock_config_entry)
     # Verify base data was updated
     assert handler._base_data[CONF_PRESENCE_SENSORS] == ["binary_sensor.updated_motion"]  # type: ignore[attr-defined]
     assert handler._base_data[CONF_OFF_DELAY] == 10  # type: ignore[attr-defined]
-    
-    # Verify entities list was reset
-    assert handler._controlled_entities == []  # type: ignore[attr-defined]
+
+    # Verify entities list was preserved (NOT reset - this was the bug!)
+    assert handler._controlled_entities == [{"existing": True}]  # type: ignore[attr-defined]
     assert handler._selected_entity_id is None  # type: ignore[attr-defined]
     
     # Verify it transitions to select_entity step
@@ -98,10 +98,11 @@ async def test_options_flow_complete_multi_step_flow(mock_config_entry):
     }
     
     result2 = await handler.async_step_configure_entity(configure_input)
-    
+
     # Verify entity was added to controlled_entities list with all fields
-    assert len(handler._controlled_entities) == 1  # type: ignore[attr-defined]
-    stored_entity = handler._controlled_entities[0]  # type: ignore[attr-defined]
+    # Note: mock_config_entry has 1 existing entity, so adding another makes 2
+    assert len(handler._controlled_entities) == 2  # type: ignore[attr-defined]
+    stored_entity = handler._controlled_entities[1]  # type: ignore[attr-defined]  # Get the newly added one
     assert stored_entity[CONF_ENTITY_ID] == "light.new_entity"
     assert stored_entity[CONF_PRESENCE_DETECTED_SERVICE] == DEFAULT_DETECTED_SERVICE
     assert stored_entity[CONF_PRESENCE_CLEARED_SERVICE] == DEFAULT_CLEARED_SERVICE
@@ -127,8 +128,12 @@ async def test_options_flow_complete_multi_step_flow(mock_config_entry):
     assert update_call[0][0] is mock_config_entry
     updated_data = update_call[1]["data"]
     assert CONF_CONTROLLED_ENTITIES in updated_data
-    assert len(updated_data[CONF_CONTROLLED_ENTITIES]) == 1
-    assert updated_data[CONF_CONTROLLED_ENTITIES][0][CONF_ENTITY_ID] == "light.new_entity"
+    # Now we have both the original entity and the new one
+    assert len(updated_data[CONF_CONTROLLED_ENTITIES]) == 2
+    # Check that the new entity was added
+    entity_ids = [e[CONF_ENTITY_ID] for e in updated_data[CONF_CONTROLLED_ENTITIES]]
+    assert "light.new_entity" in entity_ids
+    assert "light.living_room" in entity_ids  # Original entity preserved
     
     # Verify flow completed
     handler.async_create_entry.assert_called_once_with(title="", data={})

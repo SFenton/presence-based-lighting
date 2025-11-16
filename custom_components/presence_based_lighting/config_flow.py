@@ -362,7 +362,8 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 		}
-		self._controlled_entities: list[dict] = []
+		# Load existing entities from config entry
+		self._controlled_entities: list[dict] = list(config_entry.data.get(CONF_CONTROLLED_ENTITIES, []))
 		self._selected_entity_id: str | None = None
 		self._current_entity_config: dict = {}
 
@@ -373,7 +374,8 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		if user_input is not None:
 			self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
-			self._controlled_entities = []
+			# Don't reset controlled entities - keep existing ones
+			# self._controlled_entities = []  # REMOVED - this was wiping all entities!
 			self._selected_entity_id = None
 			return await self.async_step_select_entity()
 
