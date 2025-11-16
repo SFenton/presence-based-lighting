@@ -33,8 +33,8 @@
           "presence_detected_state": "Expected State After Detection",
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
-          "respects_presence_allowed": "Respect Presence Toggle Switch",
-          "disable_on_external_control": "Disable on External Control",
+          "respects_presence_allowed": "Enable Per-Entity Toggle Switch",
+          "disable_on_external_control": "Disable on Manual Control",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
@@ -42,8 +42,8 @@
           "presence_detected_state": "The state the entity should be in after the detection service is called",
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off). Select 'No Action' to do nothing.",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
-          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
-          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "respects_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
+          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       },
@@ -56,8 +56,8 @@
           "presence_detected_state": "Expected State After Detection",
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
-          "respects_presence_allowed": "Respect Presence Toggle Switch",
-          "disable_on_external_control": "Disable on External Control",
+          "respects_presence_allowed": "Enable Per-Entity Toggle Switch",
+          "disable_on_external_control": "Disable on Manual Control",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
           "skip_entity": "Skip This Entity",
           "add_another": "Add Another Entity"
@@ -68,8 +68,8 @@
           "presence_detected_state": "The state the entity should be in after the detection service is called",
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off, 'none' for no action)",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
-          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
-          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "respects_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
+          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "skip_entity": "Skip configuring this entity and move to the next",
           "add_another": "Configure another entity after this one"
@@ -118,8 +118,8 @@
           "presence_detected_state": "Expected State After Detection",
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
-          "respects_presence_allowed": "Respect Presence Toggle Switch",
-          "disable_on_external_control": "Disable on External Control",
+          "respects_presence_allowed": "Enable Per-Entity Toggle Switch",
+          "disable_on_external_control": "Disable on Manual Control",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
@@ -127,8 +127,8 @@
           "presence_detected_state": "The state the entity should be in after the detection service is called",
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off). Select 'No Action' to do nothing.",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
-          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
-          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "respects_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
+          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       },
@@ -141,8 +141,8 @@
           "presence_detected_state": "Expected State After Detection",
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
-          "respects_presence_allowed": "Respect Presence Toggle Switch",
-          "disable_on_external_control": "Disable on External Control",
+          "respects_presence_allowed": "Enable Per-Entity Toggle Switch",
+          "disable_on_external_control": "Disable on Manual Control",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
           "skip_entity": "Skip This Entity",
           "add_another": "Add Another Entity"
@@ -153,8 +153,8 @@
           "presence_detected_state": "The state the entity should be in after the detection service is called",
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off, 'none' for no action)",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
-          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
-          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "respects_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
+          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "skip_entity": "Skip configuring this entity and move to the next",
           "add_another": "Configure another entity after this one"
@@ -168,3 +168,4 @@
     }
   }
 }
+
