@@ -2,18 +2,85 @@
   "config": {
     "step": {
       "user": {
-        "title": "Setup Presence Based Lighting",
-        "description": "Configure presence-based lighting automation for a room",
+        "title": "Set Up Presence Based Lighting",
+        "description": "Configure a room with presence-based automation. You'll add entities in the next step.",
         "data": {
           "room_name": "Room Name",
-          "light_entities": "Lights to Control",
           "presence_sensors": "Presence Sensors",
-          "off_delay": "Turn Off Delay (seconds)"
+          "off_delay": "Global Turn Off Delay (seconds)"
+        },
+        "data_description": {
+          "room_name": "Friendly name for this room (e.g., 'Living Room', 'Kitchen')",
+          "presence_sensors": "Binary sensors that detect occupancy in this room",
+          "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)"
+        }
+      },
+      "select_entity": {
+        "title": "Add Entity to Control",
+        "description": "Select an entity to control with presence automation. You've added {added} entities so far.",
+        "data": {
+          "entity_id": "Entity to Control"
+        },
+        "data_description": {
+          "entity_id": "Select a light, switch, fan, or other entity to control based on presence"
+        }
+      },
+      "configure_entity": {
+        "title": "Configure {entity_name}",
+        "description": "Configure how {entity_name} responds to presence. Choose 'No Action' to skip an action.",
+        "data": {
+          "presence_detected_service": "Action When Presence Detected",
+          "presence_detected_state": "Expected State After Detection",
+          "presence_cleared_service": "Action When Presence Cleared",
+          "presence_cleared_state": "Expected State After Clear",
+          "respects_presence_allowed": "Respect Presence Toggle Switch",
+          "disable_on_external_control": "Disable on External Control",
+          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
+        },
+        "data_description": {
+          "presence_detected_service": "Service to call when presence is detected (e.g., turn_on). Select 'No Action' to do nothing.",
+          "presence_detected_state": "The state the entity should be in after the detection service is called",
+          "presence_cleared_service": "Service to call when presence clears (e.g., turn_off). Select 'No Action' to do nothing.",
+          "presence_cleared_state": "The state the entity should be in after the clear service is called",
+          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
+          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
+        }
+      },
+      "controlled_entities": {
+        "title": "Add Entities to Control",
+        "description": "Configure entities to control with presence automation. You've added {added} entities. {remaining_defaults} remaining to configure.",
+        "data": {
+          "entity_id": "Entity to Control",
+          "presence_detected_service": "Action When Presence Detected",
+          "presence_detected_state": "Expected State After Detection",
+          "presence_cleared_service": "Action When Presence Cleared",
+          "presence_cleared_state": "Expected State After Clear",
+          "respects_presence_allowed": "Respect Presence Toggle Switch",
+          "disable_on_external_control": "Disable on External Control",
+          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
+          "skip_entity": "Skip This Entity",
+          "add_another": "Add Another Entity"
+        },
+        "data_description": {
+          "entity_id": "Select a light, switch, fan, or other entity to control based on presence",
+          "presence_detected_service": "Service to call when presence is detected (e.g., turn_on, 'none' for no action)",
+          "presence_detected_state": "The state the entity should be in after the detection service is called",
+          "presence_cleared_service": "Service to call when presence clears (e.g., turn_off, 'none' for no action)",
+          "presence_cleared_state": "The state the entity should be in after the clear service is called",
+          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
+          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
+          "skip_entity": "Skip configuring this entity and move to the next",
+          "add_another": "Configure another entity after this one"
         }
       }
     },
     "error": {
-      "already_configured": "This room is already configured"
+      "already_configured": "This room is already configured",
+      "invalid_entity": "Invalid entity ID",
+      "no_controlled_entities": "You must add at least one entity to control",
+      "no_services_available": "No compatible services found for this entity"
     },
     "abort": {
       "already_configured": "This room is already configured"
@@ -22,14 +89,82 @@
   "options": {
     "step": {
       "init": {
-        "title": "Configure Presence Based Lighting",
-        "description": "Update settings for this room",
+        "title": "Update Presence Settings for {room}",
+        "description": "Update global settings for this room. Entity configuration will follow.",
         "data": {
-          "light_entities": "Lights to Control",
           "presence_sensors": "Presence Sensors",
-          "off_delay": "Turn Off Delay (seconds)"
+          "off_delay": "Global Turn Off Delay (seconds)"
+        },
+        "data_description": {
+          "presence_sensors": "Binary sensors that detect occupancy in this room",
+          "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)"
+        }
+      },
+      "select_entity": {
+        "title": "Add Entity to Control",
+        "description": "Select an entity to control with presence automation. You've added {added} entities so far.",
+        "data": {
+          "entity_id": "Entity to Control"
+        },
+        "data_description": {
+          "entity_id": "Select a light, switch, fan, or other entity to control based on presence"
+        }
+      },
+      "configure_entity": {
+        "title": "Configure {entity_name}",
+        "description": "Configure how {entity_name} responds to presence. Choose 'No Action' to skip an action.",
+        "data": {
+          "presence_detected_service": "Action When Presence Detected",
+          "presence_detected_state": "Expected State After Detection",
+          "presence_cleared_service": "Action When Presence Cleared",
+          "presence_cleared_state": "Expected State After Clear",
+          "respects_presence_allowed": "Respect Presence Toggle Switch",
+          "disable_on_external_control": "Disable on External Control",
+          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
+        },
+        "data_description": {
+          "presence_detected_service": "Service to call when presence is detected (e.g., turn_on). Select 'No Action' to do nothing.",
+          "presence_detected_state": "The state the entity should be in after the detection service is called",
+          "presence_cleared_service": "Service to call when presence clears (e.g., turn_off). Select 'No Action' to do nothing.",
+          "presence_cleared_state": "The state the entity should be in after the clear service is called",
+          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
+          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
+        }
+      },
+      "entities": {
+        "title": "Update Controlled Entities",
+        "description": "Reconfigure entities for this room. You've added {added} entities. {remaining_defaults} remaining to configure.",
+        "data": {
+          "entity_id": "Entity to Control",
+          "presence_detected_service": "Action When Presence Detected",
+          "presence_detected_state": "Expected State After Detection",
+          "presence_cleared_service": "Action When Presence Cleared",
+          "presence_cleared_state": "Expected State After Clear",
+          "respects_presence_allowed": "Respect Presence Toggle Switch",
+          "disable_on_external_control": "Disable on External Control",
+          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
+          "skip_entity": "Skip This Entity",
+          "add_another": "Add Another Entity"
+        },
+        "data_description": {
+          "entity_id": "Select a light, switch, fan, or other entity to control based on presence",
+          "presence_detected_service": "Service to call when presence is detected (e.g., turn_on, 'none' for no action)",
+          "presence_detected_state": "The state the entity should be in after the detection service is called",
+          "presence_cleared_service": "Service to call when presence clears (e.g., turn_off, 'none' for no action)",
+          "presence_cleared_state": "The state the entity should be in after the clear service is called",
+          "respects_presence_allowed": "Only control this entity when its presence switch is enabled. Allows manual override via UI.",
+          "disable_on_external_control": "Automatically disable presence control if entity is manually controlled outside this automation",
+          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
+          "skip_entity": "Skip configuring this entity and move to the next",
+          "add_another": "Configure another entity after this one"
         }
       }
+    },
+    "error": {
+      "invalid_entity": "Invalid entity ID",
+      "no_controlled_entities": "You must add at least one entity to control",
+      "no_services_available": "No compatible services found for this entity"
     }
   }
 }

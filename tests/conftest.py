@@ -6,26 +6,93 @@ import pytest
 # Mock homeassistant before importing integration
 import sys
 from unittest.mock import MagicMock
+import types
 
-# Create mock modules
-sys.modules['homeassistant'] = MagicMock()
-sys.modules['homeassistant.core'] = MagicMock()
-sys.modules['homeassistant.config_entries'] = MagicMock()
-sys.modules['homeassistant.const'] = MagicMock()
-sys.modules['homeassistant.helpers'] = MagicMock()
+# Create base homeassistant module as a real module, not a MagicMock
+homeassistant_module = types.ModuleType('homeassistant')
+sys.modules['homeassistant'] = homeassistant_module
+
+# Create core and const modules
+core_module = types.ModuleType('homeassistant.core')
+sys.modules['homeassistant.core'] = core_module
+homeassistant_module.core = core_module
+
+const_module = types.ModuleType('homeassistant.const')
+sys.modules['homeassistant.const'] = const_module
+homeassistant_module.const = const_module
+
+config_entries_module = types.ModuleType('homeassistant.config_entries')
+
+# Create base flow classes with async methods
+class _BaseFlow:
+    """Base flow class."""
+    async def async_show_form(self, *args, **kwargs):
+        """Mock show form."""
+        return {"type": "form"}
+    
+    def async_create_entry(self, *args, **kwargs):
+        """Mock create entry - NOT async despite the name."""
+        return {"type": "create_entry"}
+
+config_entries_module.ConfigFlow = type("ConfigFlow", (_BaseFlow,), {})
+config_entries_module.OptionsFlow = type("OptionsFlow", (_BaseFlow,), {})
+config_entries_module.ConfigEntry = type("ConfigEntry", (), {})
+sys.modules['homeassistant.config_entries'] = config_entries_module
 sys.modules['homeassistant.helpers.event'] = MagicMock()
 sys.modules['homeassistant.helpers.entity_registry'] = MagicMock()
 sys.modules['homeassistant.helpers.restore_state'] = MagicMock()
+sys.modules['homeassistant.util'] = MagicMock()
+
+# Set up config_validation as a real module with entity_id function
+import voluptuous as vol
+
+# Create helpers as a real module so submodules work properly
+helpers_module = types.ModuleType('homeassistant.helpers')
+sys.modules['homeassistant.helpers'] = helpers_module
+
+# Create selector module with real classes
+selector_module = types.ModuleType('homeassistant.helpers.selector')
+selector_module.SelectSelector = type("SelectSelector", (), {})
+selector_module.EntitySelector = type("EntitySelector", (), {})
+selector_module.NumberSelector = type("NumberSelector", (), {})
+sys.modules['homeassistant.helpers.selector'] = selector_module
+helpers_module.selector = selector_module
+
+cv_module = types.ModuleType('homeassistant.helpers.config_validation')
+def _validate_entity_id(value: str) -> str:
+    """Validate entity ID format."""
+    if not isinstance(value, str) or "." not in value:
+        raise vol.Invalid("invalid_entity")
+    return value
+cv_module.entity_id = _validate_entity_id
+sys.modules['homeassistant.helpers.config_validation'] = cv_module
+helpers_module.config_validation = cv_module
+
+# Add types to core module
+import uuid
+# core_module already created above
+core_module.HomeAssistant = type("HomeAssistant", (), {})
+
+# Context with id attribute
+class MockContext:
+    def __init__(self):
+        self.id = str(uuid.uuid4())
+
+core_module.Context = MockContext
+core_module.Event = type("Event", (), {})
+core_module.callback = lambda func: func  # Simple decorator that returns function as-is
 
 # Define constants we need
 STATE_ON = "on"
 STATE_OFF = "off"
 EVENT_STATE_CHANGED = "state_changed"
+EVENT_CALL_SERVICE = "call_service"
 
-homeassistant_const = sys.modules['homeassistant.const']
-homeassistant_const.STATE_ON = STATE_ON
-homeassistant_const.STATE_OFF = STATE_OFF
-homeassistant_const.EVENT_STATE_CHANGED = EVENT_STATE_CHANGED
+# const_module already created above
+const_module.STATE_ON = STATE_ON
+const_module.STATE_OFF = STATE_OFF
+const_module.EVENT_STATE_CHANGED = EVENT_STATE_CHANGED
+const_module.EVENT_CALL_SERVICE = EVENT_CALL_SERVICE
 
 from custom_components.presence_based_lighting.const import (
     CONF_CONTROLLED_ENTITIES,
