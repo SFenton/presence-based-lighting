@@ -16,7 +16,7 @@ from homeassistant.const import (
 from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.helpers.restore_state import async_get_last_state
+from homeassistant.helpers import restore_state as rs
 
 from .const import (
 	CONF_CONTROLLED_ENTITIES,
@@ -68,7 +68,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	old_unique_id = f"{entry.entry_id}_switch"
 	old_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, old_unique_id)
 	if old_entity_id:
-		last_state = await async_get_last_state(hass, old_entity_id)
+		restore_data = rs.async_get(hass)
+		if stored_state := restore_data.last_states.get(old_entity_id):
+			last_state = stored_state.state
 		entity_registry.async_remove(old_entity_id)
 
 	initial_allowed = True

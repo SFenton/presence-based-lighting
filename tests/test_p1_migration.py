@@ -46,10 +46,15 @@ async def test_migrate_populates_controlled_entities(mock_hass):
     registry.async_get_entity_id.return_value = "switch.presence_based_lighting_legacy"
     last_state = MagicMock()
     last_state.state = STATE_OFF
+    
+    stored_state = MagicMock()
+    stored_state.state = last_state
+    restore_data = MagicMock()
+    restore_data.last_states = {"switch.presence_based_lighting_legacy": stored_state}
 
     with patch("custom_components.presence_based_lighting.er.async_get", return_value=registry), patch(
-        "custom_components.presence_based_lighting.async_get_last_state",
-        AsyncMock(return_value=last_state),
+        "custom_components.presence_based_lighting.rs.async_get",
+        return_value=restore_data,
     ):
         assert await async_migrate_entry(mock_hass, entry) is True
 
@@ -81,10 +86,13 @@ async def test_migrate_without_legacy_switch_uses_defaults(mock_hass):
 
     registry = MagicMock()
     registry.async_get_entity_id.return_value = None
+    
+    restore_data = MagicMock()
+    restore_data.last_states = {}
 
     with patch("custom_components.presence_based_lighting.er.async_get", return_value=registry), patch(
-        "custom_components.presence_based_lighting.async_get_last_state",
-        AsyncMock(return_value=None),
+        "custom_components.presence_based_lighting.rs.async_get",
+        return_value=restore_data,
     ):
         assert await async_migrate_entry(mock_hass, entry) is True
 
