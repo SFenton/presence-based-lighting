@@ -49,6 +49,26 @@ from .const import (
 
 _LOGGER = logging.getLogger(__package__)
 
+# Add file handler for persistent logging across crashes
+_log_file_handler = None
+
+def _setup_file_logging(hass: HomeAssistant):
+	"""Set up file logging that persists across crashes."""
+	global _log_file_handler
+	if _log_file_handler is None:
+		try:
+			log_path = hass.config.path("presence_based_lighting_debug.log")
+			_log_file_handler = logging.FileHandler(log_path, mode='a')
+			_log_file_handler.setLevel(logging.DEBUG)
+			formatter = logging.Formatter(
+				'%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+			)
+			_log_file_handler.setFormatter(formatter)
+			_LOGGER.addHandler(_log_file_handler)
+			_LOGGER.info("File logging enabled at: %s", log_path)
+		except Exception as err:
+			_LOGGER.error("Failed to set up file logging: %s", err)
+
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 	"""YAML setup is not supported."""
@@ -106,6 +126,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Set up Presence Based Lighting via the UI."""
+	
+	# Enable persistent file logging
+	_setup_file_logging(hass)
 
 	if DOMAIN not in hass.data:
 		hass.data[DOMAIN] = {}
