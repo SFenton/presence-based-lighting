@@ -1,7 +1,23 @@
 """Test configuration and fixtures for Presence Based Lighting."""
 import asyncio
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
+import pytest_asyncio
+from aiohttp.resolver import ThreadedResolver
+
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+@pytest_asyncio.fixture
+def event_loop():
+    """Provide a real event loop for pytest-asyncio/HA fixtures."""
+    loop = asyncio.new_event_loop()
+    try:
+        yield loop
+    finally:
+        loop.close()
 
 # Mock homeassistant before importing integration
 import sys
@@ -60,7 +76,31 @@ sys.modules['homeassistant.config_entries'] = config_entries_module
 sys.modules['homeassistant.helpers.event'] = MagicMock()
 sys.modules['homeassistant.helpers.entity_registry'] = MagicMock()
 sys.modules['homeassistant.helpers.restore_state'] = MagicMock()
-sys.modules['homeassistant.util'] = MagicMock()
+
+# Provide a concrete homeassistant.util module with logging helpers
+util_module = types.ModuleType('homeassistant.util')
+homeassistant_module.util = util_module
+sys.modules['homeassistant.util'] = util_module
+
+logging_module = types.ModuleType('homeassistant.util.logging')
+
+def _log_exception(*args, **kwargs):
+    """Stub log_exception used by HA test fixtures."""
+    return None
+
+logging_module.log_exception = _log_exception
+util_module.logging = logging_module
+sys.modules['homeassistant.util.logging'] = logging_module
+
+
+@pytest_asyncio.fixture(autouse=True, scope="session")
+async def mock_zeroconf_resolver():
+    """Override HA's zeroconf resolver with platform-friendly default."""
+    with patch(
+        "homeassistant.helpers.aiohttp_client._async_make_resolver",
+        return_value=ThreadedResolver(),
+    ):
+        yield
 
 # Set up config_validation as a real module with entity_id function
 import voluptuous as vol
@@ -69,11 +109,44 @@ import voluptuous as vol
 helpers_module = types.ModuleType('homeassistant.helpers')
 sys.modules['homeassistant.helpers'] = helpers_module
 
-# Create selector module with real classes
+# Create selector module with lightweight placeholder classes used in config flow
 selector_module = types.ModuleType('homeassistant.helpers.selector')
-selector_module.SelectSelector = type("SelectSelector", (), {})
-selector_module.EntitySelector = type("EntitySelector", (), {})
-selector_module.NumberSelector = type("NumberSelector", (), {})
+
+class _SelectorConfig(dict):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+def _make_selector(selector_key: str):
+    def _factory(config=None):
+        if isinstance(config, _SelectorConfig):
+            payload = dict(config)
+        elif isinstance(config, dict):
+            payload = dict(config)
+        else:
+            payload = {}
+        return {selector_key: payload}
+    return _factory
+
+
+class _SelectOptionDict(dict):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class _SelectSelectorMode:
+    DROPDOWN = "dropdown"
+    LIST = "list"
+
+
+selector_module.SelectSelector = _make_selector("select")
+selector_module.SelectSelectorConfig = _SelectorConfig
+selector_module.SelectSelectorMode = _SelectSelectorMode
+selector_module.SelectOptionDict = _SelectOptionDict
+selector_module.EntitySelector = _make_selector("entity")
+selector_module.EntitySelectorConfig = _SelectorConfig
+selector_module.NumberSelector = _make_selector("number")
+selector_module.BooleanSelector = _make_selector("boolean")
 sys.modules['homeassistant.helpers.selector'] = selector_module
 helpers_module.selector = selector_module
 

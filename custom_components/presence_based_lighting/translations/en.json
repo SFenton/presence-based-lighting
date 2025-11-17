@@ -132,6 +132,16 @@
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       },
+      "manage_entities": {
+        "title": "Manage Controlled Entities for {room}",
+        "description": "Review configured entities and choose an action.\n{entity_list}",
+        "data": {
+          "entity_action": "Select an action"
+        },
+        "data_description": {
+          "entity_action": "Pick an entity to edit/delete, add a new entity, or finish"
+        }
+      },
       "entities": {
         "title": "Update Controlled Entities",
         "description": "Reconfigure entities for this room. You've added {added} entities. {remaining_defaults} remaining to configure.",

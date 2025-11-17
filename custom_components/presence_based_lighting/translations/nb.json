@@ -29,6 +29,13 @@
           "presence_sensors": "Tilstedeværelsessensorer",
           "off_delay": "Slå av forsinkelse (sekunder)"
         }
+      },
+      "manage_entities": {
+        "title": "Administrer enheter for {room}",
+        "description": "Se konfigurerte enheter og velg en handling.\n{entity_list}",
+        "data": {
+          "entity_action": "Velg handling"
+        }
       }
     }
   }

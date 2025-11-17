@@ -4,6 +4,7 @@ from __future__ import annotations
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import STATE_ON
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
@@ -39,10 +40,61 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
         self._entity_id = entity_config[CONF_ENTITY_ID]
         sanitized = slugify(self._entity_id.split(".")[1])
 
-        self._attr_name = f"{entry.data[CONF_ROOM_NAME]} {self._entity_id} Presence Allowed"
+        self._attr_name = self._format_switch_name(self._entity_id)
         self._attr_unique_id = f"{entry.entry_id}_{sanitized}_presence_allowed"
         self._attr_icon = ICON
         self._remove_listener = None
+        self._entity_friendly_name: str | None = None
+
+    def _format_switch_name(self, entity_label: str) -> str:
+        room = self._entry.data[CONF_ROOM_NAME]
+        return f"{room} Presence - {entity_label} - Presence Allowed"
+
+    def _derive_target_friendly_name(self) -> str:
+        # Try to get the friendly name from hass states first
+        if self._coordinator.hass and self._coordinator.hass.states:
+            state = self._coordinator.hass.states.get(self._entity_id)
+            if state:
+                friendly = state.attributes.get("friendly_name")
+                if friendly:
+                    return friendly
+
+        # Fall back to entity registry metadata
+        if self.hass:
+            registry = er.async_get(self.hass)
+            if (entry := registry.async_get(self._entity_id)) is not None:
+                if entry.name:
+                    return entry.name
+                if entry.original_name:
+                    return entry.original_name
+
+        # Fallback to last part of entity_id if nothing else is available
+        object_id = self._entity_id.split(".")[-1]
+        return object_id.replace("_", " ").title()
+
+    def _desired_entity_id(self, friendly_name: str) -> str:
+        slug_source = f"{self._entry.data[CONF_ROOM_NAME]} Presence {friendly_name} Presence Allowed"
+        return f"switch.{slugify(slug_source)}"
+
+    def _update_display_metadata(self) -> None:
+        friendly = self._derive_target_friendly_name()
+        self._entity_friendly_name = friendly
+        self._attr_name = self._format_switch_name(friendly)
+
+        if not self.hass or not self.entity_id:
+            return
+
+        registry = er.async_get(self.hass)
+        reg_entry = registry.async_get(self.entity_id)
+        desired_entity_id = self._desired_entity_id(friendly)
+
+        # Only rename automatically if no custom name is set and entity_id differs
+        if reg_entry and not reg_entry.name and reg_entry.entity_id != desired_entity_id:
+            try:
+                registry.async_update_entity(reg_entry.entity_id, new_entity_id=desired_entity_id)
+            except ValueError:
+                # Another entity might already use the desired id; skip renaming
+                return
 
     @property
     def device_info(self):
@@ -75,6 +127,7 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
+        self._update_display_metadata()
         last_state = await self.async_get_last_state()
         if last_state is None:
             initial_state = self._entity_config.get(

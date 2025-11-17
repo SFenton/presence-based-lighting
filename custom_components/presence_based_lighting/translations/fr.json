@@ -29,6 +29,13 @@
           "presence_sensors": "Capteurs de présence",
           "off_delay": "Délai d'extinction (secondes)"
         }
+      },
+      "manage_entities": {
+        "title": "Gérer les entités pour {room}",
+        "description": "Consulter les entités configurées et choisir une action.\n{entity_list}",
+        "data": {
+          "entity_action": "Choisir une action"
+        }
       }
     }
   }
