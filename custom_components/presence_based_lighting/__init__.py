@@ -51,10 +51,18 @@ _LOGGER = logging.getLogger(__package__)
 
 # Add file handler for persistent logging across crashes
 _log_file_handler = None
+_file_logging_setup = False
 
 async def _setup_file_logging(hass: HomeAssistant):
-	"""Set up file logging that persists across crashes."""
-	global _log_file_handler
+	"""Set up file logging that persists across crashes. Only sets up once globally."""
+	global _log_file_handler, _file_logging_setup
+	
+	# Use a flag to ensure we only setup once, even if multiple entries are being set up simultaneously
+	if _file_logging_setup:
+		return
+	
+	_file_logging_setup = True
+	
 	if _log_file_handler is None:
 		try:
 			log_path = hass.config.path("presence_based_lighting_debug.log")
@@ -183,22 +191,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-	"""Reload an existing config entry."""
-	
+	"""Reload an existing config entry via Home Assistant helpers.
+
+	Using Home Assistant's built-in reload ensures update listeners are
+	registered only once and prevents runaway reload loops when options
+	changes trigger async_update_entry.
+	"""
+
 	try:
-		_LOGGER.info("Reloading Presence Based Lighting entry: %s", entry.entry_id)
-		
-		_LOGGER.debug("Unloading entry: %s", entry.entry_id)
-		unload_result = await async_unload_entry(hass, entry)
-		if not unload_result:
-			_LOGGER.error("Unload failed for entry %s, attempting setup anyway", entry.entry_id)
-		
-		_LOGGER.debug("Setting up entry: %s", entry.entry_id)
-		setup_result = await async_setup_entry(hass, entry)
-		if not setup_result:
-			_LOGGER.error("Setup failed for entry %s after reload", entry.entry_id)
-		else:
-			_LOGGER.info("Successfully reloaded Presence Based Lighting entry: %s", entry.entry_id)
+		_LOGGER.info("Reloading Presence Based Lighting entry via HA: %s", entry.entry_id)
+		await hass.config_entries.async_reload(entry.entry_id)
+		_LOGGER.info("Successfully reloaded Presence Based Lighting entry: %s", entry.entry_id)
 	except Exception as err:
 		_LOGGER.exception("Error reloading Presence Based Lighting entry %s: %s", entry.entry_id, err)
 
