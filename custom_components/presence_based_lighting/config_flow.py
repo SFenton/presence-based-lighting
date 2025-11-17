@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import copy
+import logging
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback, HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
+
+_LOGGER = logging.getLogger(__name__)
 
 from .const import (
 	CONF_CONTROLLED_ENTITIES,
@@ -359,6 +362,7 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		Note: config_entry parameter is for test compatibility.
 		In production, self.config_entry is automatically set by OptionsFlow.
 		"""
+		_LOGGER.debug("OptionsFlow.__init__ starting")
 		self._errors: dict[str, str] = {}
 		# Store config_entry for test environment (where it's passed as parameter)
 		# In production HA, self.config_entry is automatically available as a property
@@ -366,15 +370,19 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		if not hasattr(self, '_config_entry'):
 			self._config_entry = config_entry
 		
+		_LOGGER.debug("Loading config_entry.data: %s", config_entry.data)
 		self._base_data = {
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 		}
 		# Load existing entities from config entry
-		self._controlled_entities: list[dict] = list(config_entry.data.get(CONF_CONTROLLED_ENTITIES, []))
+		existing_entities = config_entry.data.get(CONF_CONTROLLED_ENTITIES, [])
+		_LOGGER.debug("Loading existing entities: %s", existing_entities)
+		self._controlled_entities: list[dict] = list(existing_entities)
 		self._selected_entity_id: str | None = None
 		self._current_entity_config: dict = {}
+		_LOGGER.debug("OptionsFlow.__init__ complete. Loaded %d entities", len(self._controlled_entities))
 	
 	@property
 	def config_entry(self):
@@ -386,15 +394,19 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		return super().config_entry
 
 	async def async_step_init(self, user_input=None):
+		"""Manage shared configuration values (OptionsFlow)."""
 		"""Manage shared configuration values."""
+		_LOGGER.debug("async_step_init called with user_input: %s", user_input)
 		self._errors = {}
 
 		if user_input is not None:
+			_LOGGER.debug("Processing user input, updating base_data")
 			self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
 			# Don't reset controlled entities - keep existing ones
 			# self._controlled_entities = []  # REMOVED - this was wiping all entities!
 			self._selected_entity_id = None
+			_LOGGER.debug("Transitioning to select_entity step. Current entities: %d", len(self._controlled_entities))
 			return await self.async_step_select_entity()
 
 		return self.async_show_form(
@@ -545,25 +557,37 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 
 	async def async_step_add_another(self, user_input=None):
 		"""Ask if user wants to add another entity."""
+		_LOGGER.debug("async_step_add_another called with user_input: %s", user_input)
 		if user_input is not None:
 			if user_input.get("add_another", False):
+				_LOGGER.debug("User wants to add another entity")
 				return await self.async_step_select_entity()
 			
 			# User is done adding entities
+			_LOGGER.debug("User finished adding entities. Total entities: %d", len(self._controlled_entities))
 			if not self._controlled_entities:
+				_LOGGER.warning("No controlled entities found, showing error")
 				self._errors = {"base": "no_controlled_entities"}
 				return await self.async_step_select_entity()
 
+			_LOGGER.debug("Building new_data to update config entry")
+			_LOGGER.debug("  config_entry.data: %s", self.config_entry.data)
+			_LOGGER.debug("  _base_data: %s", self._base_data)
+			_LOGGER.debug("  _controlled_entities: %s", self._controlled_entities)
+			
 			new_data = {
 				**self.config_entry.data,
 				CONF_PRESENCE_SENSORS: self._base_data[CONF_PRESENCE_SENSORS],
 				CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
 				CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 			}
+			_LOGGER.debug("new_data constructed: %s", new_data)
+			_LOGGER.debug("Calling async_update_entry...")
 			self.hass.config_entries.async_update_entry(
 				self.config_entry,
 				data=new_data,
 			)
+			_LOGGER.debug("async_update_entry completed, creating entry")
 			return self.async_create_entry(title="", data={})
 
 		return self.async_show_form(
