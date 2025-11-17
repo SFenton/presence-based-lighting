@@ -355,7 +355,8 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 
 	def __init__(self, config_entry):
 		"""Initialize options flow."""
-		self.config_entry = config_entry
+		# Call parent __init__ to set up config_entry property
+		super().__init__(config_entry)
 		self._errors: dict[str, str] = {}
 		self._base_data = {
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],

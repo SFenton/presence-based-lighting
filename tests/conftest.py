@@ -44,7 +44,14 @@ class ConfigFlow(_BaseFlow):
 
 class OptionsFlow(_BaseFlow):
     """OptionsFlow base class."""
-    pass
+    def __init__(self, config_entry):
+        """Initialize options flow."""
+        self._config_entry = config_entry
+    
+    @property
+    def config_entry(self):
+        """Return the config entry."""
+        return self._config_entry
 
 config_entries_module.ConfigFlow = ConfigFlow
 config_entries_module.OptionsFlow = OptionsFlow
