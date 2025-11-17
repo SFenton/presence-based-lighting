@@ -32,9 +32,10 @@
       },
       "manage_entities": {
         "title": "Gérer les entités pour {room}",
-        "description": "Consulter les entités configurées et choisir une action.\n{entity_list}",
+        "description": "{entity_count} entités configurées. Chaque carte résume les services associés.\n{entity_cards}\n\nUtilisez le bouton Ajouter une entité ou Soumettre pour enregistrer les changements.",
         "data": {
-          "entity_action": "Choisir une action"
+          "entity_action": "Action par carte",
+          "primary_action": "Action principale"
         }
       }
     }

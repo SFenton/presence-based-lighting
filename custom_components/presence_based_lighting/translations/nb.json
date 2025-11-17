@@ -32,9 +32,10 @@
       },
       "manage_entities": {
         "title": "Administrer enheter for {room}",
-        "description": "Se konfigurerte enheter og velg en handling.\n{entity_list}",
+        "description": "{entity_count} enheter er konfigurert. Hvert kort viser tjenestene for enheten.\n{entity_cards}\n\nBruk Legg til enhet-knappen eller Send inn for å lagre endringene.",
         "data": {
-          "entity_action": "Velg handling"
+          "entity_action": "Handling per kort",
+          "primary_action": "Hovedhandling"
         }
       }
     }

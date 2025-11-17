@@ -45,6 +45,7 @@ STEP_MANAGE_ENTITIES = "manage_entities"
 FIELD_ADD_ANOTHER = "add_another"
 FIELD_SKIP_ENTITY = "skip_entity"
 FIELD_MANAGE_ACTION = "entity_action"
+FIELD_PRIMARY_ACTION = "primary_action"
 
 ACTION_ADD_ENTITY = "add"
 ACTION_FINISH = "finish"
@@ -444,66 +445,78 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		"""Display and manage existing controlled entities."""
 		self._errors = {}
 		if user_input is not None:
-			action = user_input.get(FIELD_MANAGE_ACTION)
-			if action == ACTION_ADD_ENTITY:
-				self._editing_index = None
-				self._selected_entity_id = None
-				self._current_entity_config = {}
-				return await self.async_step_select_entity()
-			if action == ACTION_FINISH:
-				if not self._controlled_entities:
-					self._errors = {"base": "no_controlled_entities"}
-				else:
-					return await self._finalize_and_reload()
-			if isinstance(action, str) and action.startswith("edit:"):
-				idx = int(action.split(":", 1)[1])
+			entity_action = user_input.get(FIELD_MANAGE_ACTION)
+			primary_action = user_input.get(FIELD_PRIMARY_ACTION)
+			if entity_action in (ACTION_ADD_ENTITY, ACTION_FINISH) and not primary_action:
+				primary_action = entity_action
+
+			if isinstance(entity_action, str) and entity_action.startswith("edit:"):
+				idx = int(entity_action.split(":", 1)[1])
 				if 0 <= idx < len(self._controlled_entities):
 					self._editing_index = idx
 					self._current_entity_config = copy.deepcopy(self._controlled_entities[idx])
 					self._selected_entity_id = self._current_entity_config[CONF_ENTITY_ID]
 					return await self.async_step_configure_entity()
-			if isinstance(action, str) and action.startswith("delete:"):
-				idx = int(action.split(":", 1)[1])
+			if isinstance(entity_action, str) and entity_action.startswith("delete:"):
+				idx = int(entity_action.split(":", 1)[1])
 				if 0 <= idx < len(self._controlled_entities):
 					removed = self._controlled_entities.pop(idx)
 					_LOGGER.debug("Removed entity from options: %s", removed)
 					return await self.async_step_manage_entities()
 
-		options = []
+			if primary_action == ACTION_ADD_ENTITY:
+				self._editing_index = None
+				self._selected_entity_id = None
+				self._current_entity_config = {}
+				return await self.async_step_select_entity()
+			if primary_action == ACTION_FINISH:
+				if not self._controlled_entities:
+					self._errors = {"base": "no_controlled_entities"}
+				else:
+					return await self._finalize_and_reload()
+
+		entity_action_options: list[selector.SelectOptionDict] = []
 		for idx, entity in enumerate(self._controlled_entities):
 			label = self._format_entity_label(entity)
-			options.append(
+			entity_action_options.append(
 				selector.SelectOptionDict(value=f"edit:{idx}", label=f"Edit {label}")
 			)
-			options.append(
+			entity_action_options.append(
 				selector.SelectOptionDict(value=f"delete:{idx}", label=f"Delete {label}")
 			)
 
-		options.append(
-			selector.SelectOptionDict(value=ACTION_ADD_ENTITY, label="Add Entity")
-		)
-		options.append(
-			selector.SelectOptionDict(value=ACTION_FINISH, label="Save & Reload")
-		)
+		primary_action_options = [
+			selector.SelectOptionDict(value=ACTION_ADD_ENTITY, label="Add Entity"),
+			selector.SelectOptionDict(value=ACTION_FINISH, label="Submit Changes"),
+		]
 
-		description_lines = self._entity_summary_lines()
-		description = "\n".join(description_lines) if description_lines else "No entities configured yet."
+		schema_fields: dict = {}
+		if entity_action_options:
+			schema_fields[
+				vol.Optional(FIELD_MANAGE_ACTION)
+			] = selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=entity_action_options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			)
+
+		schema_fields[
+			vol.Required(FIELD_PRIMARY_ACTION, default=ACTION_ADD_ENTITY)
+		] = selector.SelectSelector(
+			selector.SelectSelectorConfig(
+				options=primary_action_options,
+				mode=selector.SelectSelectorMode.DROPDOWN,
+			)
+		)
 
 		return self.async_show_form(
 			step_id=STEP_MANAGE_ENTITIES,
-			data_schema=vol.Schema(
-				{
-					vol.Required(FIELD_MANAGE_ACTION): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=options,
-							mode=selector.SelectSelectorMode.LIST,
-						)
-					)
-				}
-			),
+			data_schema=vol.Schema(schema_fields),
 			description_placeholders={
 				"room": self._base_data[CONF_ROOM_NAME],
-				"entity_list": description,
+				"entity_cards": self._entity_cards_description(),
+				"entity_count": str(len(self._controlled_entities)),
 			},
 			errors=self._errors,
 		)
@@ -513,17 +526,37 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		friendly = _get_entity_name(self.hass, entity_id)
 		return f"{friendly} ({entity_id})"
 
-	def _entity_summary_lines(self) -> list[str]:
-		lines: list[str] = []
+	def _entity_cards_description(self) -> str:
+		"""Build a card-like textual summary for the manage view."""
+		if not self._controlled_entities:
+			return "• No entities configured yet."
+
+		cards: list[str] = []
 		for idx, entity in enumerate(self._controlled_entities, start=1):
 			entity_id = entity.get(CONF_ENTITY_ID, "")
 			friendly = _get_entity_name(self.hass, entity_id)
 			detected_service = entity.get(CONF_PRESENCE_DETECTED_SERVICE, DEFAULT_DETECTED_SERVICE)
+			detected_state = entity.get(CONF_PRESENCE_DETECTED_STATE, DEFAULT_DETECTED_STATE)
 			cleared_service = entity.get(CONF_PRESENCE_CLEARED_SERVICE, DEFAULT_CLEARED_SERVICE)
-			lines.append(
-				f"{idx}. {friendly} ({entity_id})\n   ↳ Detected: {detected_service}, Cleared: {cleared_service}"
-			)
-		return lines
+			cleared_state = entity.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
+			respects_toggle = entity.get(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
+			disable_on_manual = entity.get(CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL)
+			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
+
+			lines = [
+				f"{idx}. {friendly} ({entity_id})",
+				f"   ↳ Detected: {detected_service} → {detected_state}",
+				f"   ↳ Cleared: {cleared_service} → {cleared_state}",
+			]
+			if not respects_toggle:
+				lines.append("   ↳ Presence toggle disabled")
+			if disable_on_manual:
+				lines.append("   ↳ Disables when manually controlled")
+			if entity_off_delay is not None:
+				lines.append(f"   ↳ Uses {entity_off_delay}s off delay")
+			cards.append("\n".join(lines))
+
+		return "\n\n".join(cards)
 
 	async def async_step_init(self, user_input=None):
 		"""Manage shared configuration values (OptionsFlow)."""

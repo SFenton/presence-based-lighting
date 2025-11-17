@@ -11,6 +11,7 @@ import pytest
 from custom_components.presence_based_lighting.config_flow import (  # noqa: E402  # pylint: disable=wrong-import-position
     ACTION_FINISH,
     FIELD_MANAGE_ACTION,
+    FIELD_PRIMARY_ACTION,
     PresenceBasedLightingOptionsFlowHandler,
 )
 from custom_components.presence_based_lighting.const import (  # noqa: E402  # pylint: disable=wrong-import-position
@@ -110,7 +111,7 @@ async def test_options_flow_complete_multi_step_flow(mock_config_entry):
     # Step 3: Finish the flow via manage_entities
     handler.async_step_manage_entities = PresenceBasedLightingOptionsFlowHandler.async_step_manage_entities.__get__(handler)
 
-    finish_input = {FIELD_MANAGE_ACTION: ACTION_FINISH}
+    finish_input = {FIELD_PRIMARY_ACTION: ACTION_FINISH}
     result3 = await handler.async_step_manage_entities(finish_input)
 
     handler.hass.config_entries.async_update_entry.assert_called_once()
@@ -133,7 +134,7 @@ async def test_options_flow_requires_at_least_one_entity(mock_config_entry):
     handler._controlled_entities = []  # type: ignore[attr-defined]
     handler.async_show_form = MagicMock(return_value="manage_form")
 
-    result = await handler.async_step_manage_entities({FIELD_MANAGE_ACTION: ACTION_FINISH})
+    result = await handler.async_step_manage_entities({FIELD_PRIMARY_ACTION: ACTION_FINISH})
 
     assert handler._errors["base"] == "no_controlled_entities"  # type: ignore[attr-defined]
     handler.async_show_form.assert_called_once()
@@ -230,7 +231,7 @@ async def test_options_flow_adds_new_entity_without_removing_existing(mock_confi
     
     # Finish the flow via manage_entities
     handler.async_step_manage_entities = PresenceBasedLightingOptionsFlowHandler.async_step_manage_entities.__get__(handler)
-    await handler.async_step_manage_entities({FIELD_MANAGE_ACTION: ACTION_FINISH})
+    await handler.async_step_manage_entities({FIELD_PRIMARY_ACTION: ACTION_FINISH})
     
     # Verify final data has both entities
     update_call = handler.hass.config_entries.async_update_entry.call_args

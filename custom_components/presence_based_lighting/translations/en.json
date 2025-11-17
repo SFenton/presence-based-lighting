@@ -134,12 +134,14 @@
       },
       "manage_entities": {
         "title": "Manage Controlled Entities for {room}",
-        "description": "Review configured entities and choose an action.\n{entity_list}",
+        "description": "{entity_count} entities configured. Each card summarizes the services for that device.\n{entity_cards}\n\nUse the Add Entity pill to create another card or Submit to save your changes.",
         "data": {
-          "entity_action": "Select an action"
+          "entity_action": "Entity card action",
+          "primary_action": "Primary action"
         },
         "data_description": {
-          "entity_action": "Pick an entity to edit/delete, add a new entity, or finish"
+          "entity_action": "Pick which card to edit or delete",
+          "primary_action": "Choose to add a new entity or submit the updated configuration"
         }
       },
       "entities": {
