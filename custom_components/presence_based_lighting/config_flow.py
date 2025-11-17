@@ -354,10 +354,17 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 	"""Config flow options handler for presence_based_lighting."""
 
 	def __init__(self, config_entry):
-		"""Initialize options flow."""
-		# Call parent __init__ to set up config_entry property
-		super().__init__(config_entry)
+		"""Initialize options flow.
+		
+		Note: config_entry parameter is for test compatibility.
+		In production, self.config_entry is automatically set by OptionsFlow.
+		"""
 		self._errors: dict[str, str] = {}
+		# Store config_entry for test environment (where it's passed as parameter)
+		# In production HA, self.config_entry is automatically available as a property
+		if not hasattr(self, 'config_entry'):
+			self._config_entry = config_entry
+		
 		self._base_data = {
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
@@ -367,6 +374,11 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		self._controlled_entities: list[dict] = list(config_entry.data.get(CONF_CONTROLLED_ENTITIES, []))
 		self._selected_entity_id: str | None = None
 		self._current_entity_config: dict = {}
+	
+	@property
+	def config_entry(self):
+		"""Return config entry (for test compatibility)."""
+		return getattr(self, '_config_entry', None) or super().config_entry
 
 	async def async_step_init(self, user_input=None):
 		"""Manage shared configuration values."""
