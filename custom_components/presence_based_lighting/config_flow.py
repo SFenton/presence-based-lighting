@@ -362,7 +362,8 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		self._errors: dict[str, str] = {}
 		# Store config_entry for test environment (where it's passed as parameter)
 		# In production HA, self.config_entry is automatically available as a property
-		if not hasattr(self, 'config_entry'):
+		# Check for private attribute to avoid triggering property during init
+		if not hasattr(self, '_config_entry'):
 			self._config_entry = config_entry
 		
 		self._base_data = {
@@ -378,7 +379,11 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 	@property
 	def config_entry(self):
 		"""Return config entry (for test compatibility)."""
-		return getattr(self, '_config_entry', None) or super().config_entry
+		# In tests, _config_entry is set in __init__
+		# In production HA, super().config_entry is automatically available
+		if hasattr(self, '_config_entry'):
+			return self._config_entry
+		return super().config_entry
 
 	async def async_step_init(self, user_input=None):
 		"""Manage shared configuration values."""
