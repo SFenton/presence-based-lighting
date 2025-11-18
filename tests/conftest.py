@@ -57,6 +57,18 @@ class ConfigFlow(_BaseFlow):
         if domain:
             cls.DOMAIN = domain
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._flow_unique_id = None
+
+    async def async_set_unique_id(self, unique_id):
+        """Store unique_id for the flow."""
+        self._flow_unique_id = unique_id
+
+    def _abort_if_unique_id_configured(self):
+        """Stub no-op for tests."""
+        return None
+
 class OptionsFlow(_BaseFlow):
     """OptionsFlow base class."""
     def __init__(self, config_entry):
@@ -176,6 +188,16 @@ def _validate_entity_id(value: str) -> str:
 cv_module.entity_id = _validate_entity_id
 sys.modules['homeassistant.helpers.config_validation'] = cv_module
 helpers_module.config_validation = cv_module
+
+# Provide aiohttp_client submodule stub for fixtures expecting resolver patching
+aiohttp_client_module = types.ModuleType('homeassistant.helpers.aiohttp_client')
+
+async def _async_make_resolver(*_args, **_kwargs):
+    return ThreadedResolver()
+
+aiohttp_client_module._async_make_resolver = _async_make_resolver
+sys.modules['homeassistant.helpers.aiohttp_client'] = aiohttp_client_module
+helpers_module.aiohttp_client = aiohttp_client_module
 
 # Add types to core module
 import uuid

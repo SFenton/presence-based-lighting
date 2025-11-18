@@ -147,7 +147,49 @@ def _presence_switch_unique_id(entry_id: str | None, entity_id: str | None) -> s
 	return f"{entry_id}_{sanitized}_presence_allowed"
 
 
-class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
+class _EntityManagementMixin:
+	"""Shared helpers for presenting entity summaries in flows."""
+
+	def _format_entity_label(self, entity: dict) -> str:
+		entity_id = entity.get(CONF_ENTITY_ID, "")
+		friendly = _get_entity_name(self.hass, entity_id)
+		return f"{friendly} ({entity_id})" if entity_id else friendly
+
+	def _entity_cards_description(self) -> str:
+		"""Render a textual summary of configured entities."""
+		entities = getattr(self, "_controlled_entities", [])
+		if not entities:
+			return "• No entities configured yet."
+
+		cards: list[str] = []
+		for idx, entity in enumerate(entities, start=1):
+			entity_id = entity.get(CONF_ENTITY_ID, "")
+			friendly = _get_entity_name(self.hass, entity_id)
+			detected_service = entity.get(CONF_PRESENCE_DETECTED_SERVICE, DEFAULT_DETECTED_SERVICE)
+			detected_state = entity.get(CONF_PRESENCE_DETECTED_STATE, DEFAULT_DETECTED_STATE)
+			cleared_service = entity.get(CONF_PRESENCE_CLEARED_SERVICE, DEFAULT_CLEARED_SERVICE)
+			cleared_state = entity.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
+			respects_toggle = entity.get(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
+			disable_on_manual = entity.get(CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL)
+			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
+
+			lines = [
+				f"{idx}. {friendly} ({entity_id})",
+				f"   ↳ Detected: {detected_service} → {detected_state}",
+				f"   ↳ Cleared: {cleared_service} → {cleared_state}",
+			]
+			if not respects_toggle:
+				lines.append("   ↳ Presence toggle disabled")
+			if disable_on_manual:
+				lines.append("   ↳ Disables when manually controlled")
+			if entity_off_delay is not None:
+				lines.append(f"   ↳ Uses {entity_off_delay}s off delay")
+			cards.append("\n".join(lines))
+
+		return "\n\n".join(cards)
+
+
+class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
 	VERSION = 2
@@ -348,8 +390,167 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 		"""Get the options flow for this handler."""
 		return PresenceBasedLightingOptionsFlowHandler(config_entry)
 
+	def _create_entry_payload(self) -> dict:
+		return {
+			CONF_ROOM_NAME: self._base_data[CONF_ROOM_NAME],
+			CONF_PRESENCE_SENSORS: self._base_data.get(CONF_PRESENCE_SENSORS, []),
+			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
+			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
+		}
 
-class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
+	async def async_step_manage_entities(self, user_input=None):
+		"""Landing step for managing entities before creating the entry."""
+		self._errors = {}
+		if user_input is not None:
+			action = user_input.get(FIELD_LANDING_ACTION)
+			if action == ACTION_NO_ACTION:
+				if not self._controlled_entities:
+					self._errors = {"base": "no_controlled_entities"}
+				else:
+					return self.async_create_entry(
+						title=self._base_data[CONF_ROOM_NAME],
+						data=self._create_entry_payload(),
+					)
+			elif action == ACTION_ADD_ENTITY:
+				self._selected_entity_id = None
+				self._current_entity_config = {}
+				self._editing_index = None
+				return await self.async_step_select_entity()
+			elif action == ACTION_EDIT_ENTITY:
+				if not self._controlled_entities:
+					self._errors = {"base": "no_controlled_entities"}
+				else:
+					return await self.async_step_choose_edit_entity()
+			elif action == ACTION_DELETE_ENTITIES:
+				if not self._controlled_entities:
+					self._errors = {"base": "no_controlled_entities"}
+				else:
+					return await self.async_step_delete_entities()
+
+		options = [
+			selector.SelectOptionDict(value=ACTION_NO_ACTION, label="Submit pending changes"),
+			selector.SelectOptionDict(value=ACTION_ADD_ENTITY, label="Add entity"),
+			selector.SelectOptionDict(value=ACTION_EDIT_ENTITY, label="Edit an entity"),
+			selector.SelectOptionDict(value=ACTION_DELETE_ENTITIES, label="Delete entities"),
+		]
+
+		return self.async_show_form(
+			step_id=STEP_MANAGE_ENTITIES,
+			data_schema=vol.Schema(
+				{
+					vol.Required(FIELD_LANDING_ACTION, default=ACTION_NO_ACTION): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=options,
+							mode=selector.SelectSelectorMode.DROPDOWN,
+						)
+					)
+				}
+			),
+			description_placeholders={
+				"room": self._base_data.get(CONF_ROOM_NAME, ""),
+				"entity_cards": self._entity_cards_description(),
+				"entity_count": str(len(self._controlled_entities)),
+			},
+			errors=self._errors,
+		)
+
+	async def async_step_choose_edit_entity(self, user_input=None):
+		"""Allow the user to pick which entity to edit during setup."""
+		self._errors = {}
+		if not self._controlled_entities:
+			self._errors = {"base": "no_controlled_entities"}
+			return await self.async_step_manage_entities()
+
+		if user_input is not None:
+			selection = user_input.get(FIELD_EDIT_ENTITY)
+			try:
+				idx = int(selection)
+			except (TypeError, ValueError):
+				self._errors = {FIELD_EDIT_ENTITY: "invalid_entity"}
+			else:
+				if 0 <= idx < len(self._controlled_entities):
+					self._editing_index = idx
+					self._current_entity_config = copy.deepcopy(self._controlled_entities[idx])
+					self._selected_entity_id = self._current_entity_config[CONF_ENTITY_ID]
+					return await self.async_step_configure_entity()
+				self._errors = {FIELD_EDIT_ENTITY: "invalid_entity"}
+
+		options: list[selector.SelectOptionDict] = [
+			selector.SelectOptionDict(value=str(idx), label=self._format_entity_label(entity))
+			for idx, entity in enumerate(self._controlled_entities)
+		]
+
+		return self.async_show_form(
+			step_id=STEP_CHOOSE_EDIT_ENTITY,
+			data_schema=vol.Schema(
+				{
+					vol.Required(FIELD_EDIT_ENTITY): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=options,
+							mode=selector.SelectSelectorMode.DROPDOWN,
+						)
+					)
+				}
+			),
+			description_placeholders={
+				"entity_cards": self._entity_cards_description(),
+				"entity_count": str(len(self._controlled_entities)),
+			},
+			errors=self._errors,
+		)
+
+	async def async_step_delete_entities(self, user_input=None):
+		"""Allow deleting entities before finishing setup."""
+		self._errors = {}
+		if not self._controlled_entities:
+			self._errors = {"base": "no_controlled_entities"}
+			return await self.async_step_manage_entities()
+
+		if user_input is not None:
+			selected = user_input.get(FIELD_DELETE_ENTITIES, []) or []
+			if not selected:
+				self._errors = {FIELD_DELETE_ENTITIES: "select_entities_to_delete"}
+			else:
+				indices: list[int] = []
+				for raw in selected:
+					try:
+						indices.append(int(raw))
+					except (TypeError, ValueError):
+						continue
+				if indices:
+					for idx in sorted(set(indices), reverse=True):
+						if 0 <= idx < len(self._controlled_entities):
+							self._controlled_entities.pop(idx)
+					return await self.async_step_manage_entities()
+				self._errors = {FIELD_DELETE_ENTITIES: "select_entities_to_delete"}
+
+		options = [
+			selector.SelectOptionDict(value=str(idx), label=self._format_entity_label(entity))
+			for idx, entity in enumerate(self._controlled_entities)
+		]
+
+		return self.async_show_form(
+			step_id=STEP_DELETE_ENTITIES,
+			data_schema=vol.Schema(
+				{
+					vol.Required(FIELD_DELETE_ENTITIES): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=options,
+							multiple=True,
+							mode=selector.SelectSelectorMode.LIST,
+						)
+					)
+				}
+			),
+			description_placeholders={
+				"entity_cards": self._entity_cards_description(),
+				"entity_count": str(len(self._controlled_entities)),
+			},
+			errors=self._errors,
+		)
+
+
+class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_entries.OptionsFlow):
 	"""Config flow options handler for presence_based_lighting."""
 
 	def __init__(self, config_entry):
@@ -572,43 +773,6 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 			},
 			errors=self._errors,
 		)
-
-	def _format_entity_label(self, entity: dict) -> str:
-		entity_id = entity.get(CONF_ENTITY_ID, "")
-		friendly = _get_entity_name(self.hass, entity_id)
-		return f"{friendly} ({entity_id})"
-
-	def _entity_cards_description(self) -> str:
-		"""Build a card-like textual summary for the manage view."""
-		if not self._controlled_entities:
-			return "• No entities configured yet."
-
-		cards: list[str] = []
-		for idx, entity in enumerate(self._controlled_entities, start=1):
-			entity_id = entity.get(CONF_ENTITY_ID, "")
-			friendly = _get_entity_name(self.hass, entity_id)
-			detected_service = entity.get(CONF_PRESENCE_DETECTED_SERVICE, DEFAULT_DETECTED_SERVICE)
-			detected_state = entity.get(CONF_PRESENCE_DETECTED_STATE, DEFAULT_DETECTED_STATE)
-			cleared_service = entity.get(CONF_PRESENCE_CLEARED_SERVICE, DEFAULT_CLEARED_SERVICE)
-			cleared_state = entity.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
-			respects_toggle = entity.get(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
-			disable_on_manual = entity.get(CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL)
-			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
-
-			lines = [
-				f"{idx}. {friendly} ({entity_id})",
-				f"   ↳ Detected: {detected_service} → {detected_state}",
-				f"   ↳ Cleared: {cleared_service} → {cleared_state}",
-			]
-			if not respects_toggle:
-				lines.append("   ↳ Presence toggle disabled")
-			if disable_on_manual:
-				lines.append("   ↳ Disables when manually controlled")
-			if entity_off_delay is not None:
-				lines.append(f"   ↳ Uses {entity_off_delay}s off delay")
-			cards.append("\n".join(lines))
-
-		return "\n\n".join(cards)
 
 	async def async_step_init(self, user_input=None):
 		"""Manage shared configuration values (OptionsFlow)."""
