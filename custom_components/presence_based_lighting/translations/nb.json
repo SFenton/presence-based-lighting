@@ -32,10 +32,39 @@
       },
       "manage_entities": {
         "title": "Administrer enheter for {room}",
-        "description": "{entity_count} enheter er konfigurert. Hvert kort viser tjenestene for enheten.\n{entity_cards}\n\nBruk Legg til enhet-knappen eller Send inn for å lagre endringene.",
+        "description": "{entity_count} enheter er konfigurert. Velg hva du vil gjøre videre, eller send inn hvis du er ferdig.\n{entity_cards}",
         "data": {
-          "entity_action": "Handling per kort",
-          "primary_action": "Hovedhandling"
+          "landing_action": "Neste handling"
+        },
+        "data_description": {
+          "landing_action": "Velg å legge til, redigere, slette enheter eller sende inn endringer"
+        }
+      },
+      "choose_edit_entity": {
+        "title": "Legg til eller rediger en enhet",
+        "description": "Velg en enhet å redigere, eller velg 'Legg til ny enhet'.\n{entity_cards}",
+        "data": {
+          "entity_to_edit": "Enhet å redigere"
+        }
+      },
+      "delete_entities": {
+        "title": "Slett enheter",
+        "description": "Velg én eller flere enheter som skal fjernes.\n{entity_cards}",
+        "data": {
+          "entities_to_delete": "Enheter som skal slettes"
+        },
+        "error": {
+          "select_entities_to_delete": "Velg minst én enhet som skal slettes"
+        }
+      },
+      "entity_component": {
+        "switch": {
+          "state_attributes": {
+            "respect_presence_allowed": {
+              "name": "Respekterer nærværsbryteren",
+              "description": "Viser om denne enheten følger bryteren for tillatt nærvær"
+            }
+          }
         }
       }
     }

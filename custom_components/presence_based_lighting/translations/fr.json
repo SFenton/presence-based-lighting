@@ -32,10 +32,39 @@
       },
       "manage_entities": {
         "title": "Gérer les entités pour {room}",
-        "description": "{entity_count} entités configurées. Chaque carte résume les services associés.\n{entity_cards}\n\nUtilisez le bouton Ajouter une entité ou Soumettre pour enregistrer les changements.",
+        "description": "{entity_count} entités configurées. Choisissez l'action suivante ou soumettez si c'est terminé.\n{entity_cards}",
         "data": {
-          "entity_action": "Action par carte",
-          "primary_action": "Action principale"
+          "landing_action": "Action suivante"
+        },
+        "data_description": {
+          "landing_action": "Choisissez d'ajouter, modifier, supprimer des entités ou de valider"
+        }
+      },
+      "choose_edit_entity": {
+        "title": "Ajouter ou modifier une entité",
+        "description": "Sélectionnez une entité à modifier ou choisissez 'Ajouter une nouvelle entité'.\n{entity_cards}",
+        "data": {
+          "entity_to_edit": "Entité à modifier"
+        }
+      },
+      "delete_entities": {
+        "title": "Supprimer des entités",
+        "description": "Choisissez une ou plusieurs entités à supprimer.\n{entity_cards}",
+        "data": {
+          "entities_to_delete": "Entités à supprimer"
+        }
+      }
+    },
+    "error": {
+      "select_entities_to_delete": "Sélectionnez au moins une entité à supprimer"
+    }
+  },
+  "entity_component": {
+    "switch": {
+      "state_attributes": {
+        "respect_presence_allowed": {
+          "name": "Respecte l'interrupteur de présence",
+          "description": "Indique si cette entité suit l'interrupteur « Présence autorisée »"
         }
       }
     }

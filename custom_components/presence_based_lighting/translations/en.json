@@ -134,14 +134,32 @@
       },
       "manage_entities": {
         "title": "Manage Controlled Entities for {room}",
-        "description": "{entity_count} entities configured. Each card summarizes the services for that device.\n{entity_cards}\n\nUse the Add Entity pill to create another card or Submit to save your changes.",
+        "description": "{entity_count} entities configured. Choose what to do next, or submit immediately if you're done.\n{entity_cards}",
         "data": {
-          "entity_action": "Entity card action",
-          "primary_action": "Primary action"
+          "landing_action": "Next action"
         },
         "data_description": {
-          "entity_action": "Pick which card to edit or delete",
-          "primary_action": "Choose to add a new entity or submit the updated configuration"
+          "landing_action": "Select to add, edit, delete entities, or submit any pending changes"
+        }
+      },
+      "choose_edit_entity": {
+        "title": "Add or Edit an Entity",
+        "description": "Pick an entity to edit or choose 'Add a new entity'.\n{entity_cards}",
+        "data": {
+          "entity_to_edit": "Entity to edit"
+        },
+        "data_description": {
+          "entity_to_edit": "Select an existing entity to edit or choose to add a brand new one"
+        }
+      },
+      "delete_entities": {
+        "title": "Delete Entities",
+        "description": "Select one or more entities to remove.\n{entity_cards}",
+        "data": {
+          "entities_to_delete": "Entities to delete"
+        },
+        "data_description": {
+          "entities_to_delete": "Check every entity you want to delete"
         }
       },
       "entities": {
@@ -176,7 +194,18 @@
     "error": {
       "invalid_entity": "Invalid entity ID",
       "no_controlled_entities": "You must add at least one entity to control",
-      "no_services_available": "No compatible services found for this entity"
+      "no_services_available": "No compatible services found for this entity",
+      "select_entities_to_delete": "Select at least one entity to delete"
+    }
+  },
+  "entity_component": {
+    "switch": {
+      "state_attributes": {
+        "respect_presence_allowed": {
+          "name": "Respects Presence Toggle",
+          "description": "Indicates if this entity honors the per-entity Presence Allowed switch"
+        }
+      }
     }
   }
 }

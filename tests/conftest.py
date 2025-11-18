@@ -93,6 +93,24 @@ util_module.logging = logging_module
 sys.modules['homeassistant.util.logging'] = logging_module
 
 
+def _slugify(value: str) -> str:
+    """Simplified slugify implementation for tests."""
+    if not isinstance(value, str):
+        value = str(value)
+    value = value.strip().lower()
+    slug = []
+    for char in value:
+        if char.isalnum() or char in {"_", "-"}:
+            slug.append(char)
+        else:
+            slug.append("_")
+    result = "".join(slug)
+    return result.strip("_") or "entity"
+
+
+util_module.slugify = _slugify
+
+
 @pytest_asyncio.fixture(autouse=True, scope="session")
 async def mock_zeroconf_resolver():
     """Override HA's zeroconf resolver with platform-friendly default."""
@@ -363,6 +381,20 @@ class MockStates:
     def __init__(self):
         """Initialize mock states."""
         self._states = {}
+        self._descriptions = {
+            "light": {
+                "turn_on": {
+                    "name": "Turn On",
+                    "description": "Turn the entity on",
+                    "icon": "mdi:lightbulb-on",
+                },
+                "turn_off": {
+                    "name": "Turn Off",
+                    "description": "Turn the entity off",
+                    "icon": "mdi:lightbulb-off",
+                },
+            },
+        }
         
     def get(self, entity_id):
         """Get state of entity."""
@@ -386,6 +418,20 @@ class MockServices:
     def __init__(self):
         """Initialize mock services."""
         self.calls = []
+        self._descriptions = {
+            "light": {
+                "turn_on": {
+                    "name": "Turn On",
+                    "description": "Turn the entity on",
+                    "icon": "mdi:lightbulb-on",
+                },
+                "turn_off": {
+                    "name": "Turn Off",
+                    "description": "Turn the entity off",
+                    "icon": "mdi:lightbulb-off",
+                },
+            },
+        }
         
     async def async_call(self, domain, service, service_data=None, blocking=False, context=None):
         """Call a service."""
@@ -399,7 +445,11 @@ class MockServices:
         
     def clear(self):
         """Clear service calls."""
-        self.calls = []
+        self.calls.clear()
+
+    def async_get_all_descriptions(self):
+        """Return mocked service descriptions."""
+        return self._descriptions
 
 
 class MockConfigEntries:
@@ -438,7 +488,7 @@ class MockBus:
         def remove_listener():
             if event_type in self._listeners:
                 self._listeners[event_type].remove(listener)
-        
+		
         return remove_listener
 
 

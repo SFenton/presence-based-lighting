@@ -7,7 +7,8 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback, HomeAssistant
 import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers import selector
+from homeassistant.helpers import selector, entity_registry as er
+from homeassistant.util import slugify
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,13 +43,18 @@ STEP_SELECT_ENTITY = "select_entity"
 STEP_CONFIGURE_ENTITY = "configure_entity"
 STEP_CONTROLLED_ENTITIES = "controlled_entities"
 STEP_MANAGE_ENTITIES = "manage_entities"
+STEP_CHOOSE_EDIT_ENTITY = "choose_edit_entity"
+STEP_DELETE_ENTITIES = "delete_entities"
 FIELD_ADD_ANOTHER = "add_another"
 FIELD_SKIP_ENTITY = "skip_entity"
-FIELD_MANAGE_ACTION = "entity_action"
-FIELD_PRIMARY_ACTION = "primary_action"
+FIELD_LANDING_ACTION = "landing_action"
+FIELD_EDIT_ENTITY = "entity_to_edit"
+FIELD_DELETE_ENTITIES = "entities_to_delete"
 
 ACTION_ADD_ENTITY = "add"
-ACTION_FINISH = "finish"
+ACTION_NO_ACTION = "no_action"
+ACTION_EDIT_ENTITY = "edit"
+ACTION_DELETE_ENTITIES = "delete"
 
 # Common services by domain
 DOMAIN_SERVICES = {
@@ -90,30 +96,56 @@ def _get_entity_domain(entity_id: str) -> str:
 
 
 def _get_services_for_entity(hass: HomeAssistant, entity_id: str) -> list[selector.SelectOptionDict]:
-	"""Get available services for an entity with NO_ACTION option."""
+	"""Build action dropdown options using HA service descriptions (plus No Action)."""
 	domain = _get_entity_domain(entity_id)
-	
-	# Start with NO_ACTION
-	options = [
+	options: list[selector.SelectOptionDict] = [
 		selector.SelectOptionDict(value=NO_ACTION, label="No Action")
 	]
-	
-	# Get services from domain mapping
-	if domain in DOMAIN_SERVICES:
-		for service in DOMAIN_SERVICES[domain]:
+
+	services_desc: dict[str, dict] | None = None
+	if hass and getattr(hass, "services", None):
+		get_desc = getattr(hass.services, "async_get_all_descriptions", None)
+		if callable(get_desc):
+			services_desc = get_desc()
+
+	if services_desc and domain in services_desc:
+		domain_services = services_desc[domain]
+		for service_name, meta in sorted(domain_services.items()):
+			label = _format_action_option_label(service_name, meta)
 			options.append(
 				selector.SelectOptionDict(
-					value=service,
-					label=service.replace("_", " ").title()
+					value=service_name,
+					label=label,
 				)
 			)
-	
-	# Try to get additional services from hass.services
-	if hass and hass.services.has_service(domain, "turn_on"):
-		# Domain has services registered, we can use our predefined list
-		pass
-	
+		return options
+
+	# Fallback: use legacy hardcoded list if HA service metadata isn't available
+	for service in DOMAIN_SERVICES.get(domain, []):
+		options.append(
+			selector.SelectOptionDict(
+				value=service,
+				label=service.replace("_", " ").title(),
+			)
+		)
+
 	return options
+
+
+def _format_action_option_label(service_name: str, metadata: dict | None) -> str:
+	"""Format an action label showing icon, title, and description when available."""
+	metadata = metadata or {}
+	icon = metadata.get("icon")
+	name = metadata.get("name") or service_name.replace("_", " ").title()
+	description = metadata.get("description")
+	parts: list[str] = []
+	if icon:
+		parts.append(f"[{icon}]")
+	parts.append(name)
+	label = " ".join(parts)
+	if description:
+		label = f"{label} – {description}"
+	return label
 
 
 def _get_states_for_entity(entity_id: str) -> list[selector.SelectOptionDict]:
@@ -145,6 +177,17 @@ def _get_entity_name(hass: HomeAssistant, entity_id: str) -> str:
 	if hass and (state := hass.states.get(entity_id)):
 		return state.attributes.get("friendly_name", entity_id)
 	return entity_id
+
+
+def _presence_switch_unique_id(entry_id: str | None, entity_id: str | None) -> str | None:
+	"""Build the unique_id used by per-entity presence switches."""
+	if not entry_id or not entity_id or "." not in entity_id:
+		return None
+	object_id = entity_id.split(".", 1)[1]
+	sanitized = slugify(object_id)
+	if not sanitized:
+		sanitized = object_id.replace(".", "_")
+	return f"{entry_id}_{sanitized}_presence_allowed"
 
 
 class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -256,6 +299,9 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 			self._current_entity_config = {}
 			self._selected_entity_id = None
 			self._editing_index = None
+			if getattr(self, "_finalize_after_configure", False) and hasattr(self, "_finalize_and_reload"):
+				self._finalize_after_configure = False
+				return await self._finalize_and_reload()
 			return await self.async_step_manage_entities()
 
 		entity_id = self._selected_entity_id
@@ -415,6 +461,7 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		self._selected_entity_id: str | None = None
 		self._current_entity_config: dict = {}
 		self._editing_index: int | None = None
+		self._finalize_after_configure: bool = False
 		_LOGGER.debug("OptionsFlow.__init__ complete. Loaded %d entities", len(self._controlled_entities))
 	
 	@property
@@ -425,6 +472,19 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		if hasattr(self, '_config_entry'):
 			return self._config_entry
 		return super().config_entry
+
+	def _cleanup_presence_switch(self, entity_id: str | None) -> None:
+		"""Remove the per-entity presence switch tied to a controlled entity."""
+		if not self.hass or not entity_id:
+			return
+		unique_id = _presence_switch_unique_id(self.config_entry.entry_id, entity_id)
+		if not unique_id:
+			return
+		registry = er.async_get(self.hass)
+		existing_entity_id = registry.async_get_entity_id("switch", DOMAIN, unique_id)
+		if existing_entity_id:
+			_LOGGER.debug("Removing presence switch %s for entity %s", existing_entity_id, entity_id)
+			registry.async_remove(existing_entity_id)
 
 	async def _finalize_and_reload(self):
 		"""Persist options changes back to the config entry."""
@@ -442,79 +502,162 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		return self.async_create_entry(title="", data={})
 
 	async def async_step_manage_entities(self, user_input=None):
-		"""Display and manage existing controlled entities."""
+		"""Landing step for managing entities."""
 		self._errors = {}
 		if user_input is not None:
-			entity_action = user_input.get(FIELD_MANAGE_ACTION)
-			primary_action = user_input.get(FIELD_PRIMARY_ACTION)
-			if entity_action in (ACTION_ADD_ENTITY, ACTION_FINISH) and not primary_action:
-				primary_action = entity_action
-
-			if isinstance(entity_action, str) and entity_action.startswith("edit:"):
-				idx = int(entity_action.split(":", 1)[1])
-				if 0 <= idx < len(self._controlled_entities):
-					self._editing_index = idx
-					self._current_entity_config = copy.deepcopy(self._controlled_entities[idx])
-					self._selected_entity_id = self._current_entity_config[CONF_ENTITY_ID]
-					return await self.async_step_configure_entity()
-			if isinstance(entity_action, str) and entity_action.startswith("delete:"):
-				idx = int(entity_action.split(":", 1)[1])
-				if 0 <= idx < len(self._controlled_entities):
-					removed = self._controlled_entities.pop(idx)
-					_LOGGER.debug("Removed entity from options: %s", removed)
-					return await self.async_step_manage_entities()
-
-			if primary_action == ACTION_ADD_ENTITY:
-				self._editing_index = None
-				self._selected_entity_id = None
-				self._current_entity_config = {}
-				return await self.async_step_select_entity()
-			if primary_action == ACTION_FINISH:
+			action = user_input.get(FIELD_LANDING_ACTION)
+			if action == ACTION_NO_ACTION:
 				if not self._controlled_entities:
 					self._errors = {"base": "no_controlled_entities"}
 				else:
 					return await self._finalize_and_reload()
+			elif action == ACTION_EDIT_ENTITY:
+				if not self._controlled_entities:
+					self._errors = {"base": "no_controlled_entities"}
+				else:
+					return await self.async_step_choose_edit_entity()
+			elif action == ACTION_DELETE_ENTITIES:
+				if not self._controlled_entities:
+					self._errors = {"base": "no_controlled_entities"}
+				else:
+					return await self.async_step_delete_entities()
+			elif action == ACTION_ADD_ENTITY:
+				self._editing_index = None
+				self._selected_entity_id = None
+				self._current_entity_config = {}
+				self._finalize_after_configure = True
+				return await self.async_step_select_entity()
 
-		entity_action_options: list[selector.SelectOptionDict] = []
-		for idx, entity in enumerate(self._controlled_entities):
-			label = self._format_entity_label(entity)
-			entity_action_options.append(
-				selector.SelectOptionDict(value=f"edit:{idx}", label=f"Edit {label}")
-			)
-			entity_action_options.append(
-				selector.SelectOptionDict(value=f"delete:{idx}", label=f"Delete {label}")
-			)
-
-		primary_action_options = [
-			selector.SelectOptionDict(value=ACTION_ADD_ENTITY, label="Add Entity"),
-			selector.SelectOptionDict(value=ACTION_FINISH, label="Submit Changes"),
+		options = [
+			selector.SelectOptionDict(value=ACTION_NO_ACTION, label="Submit pending changes"),
+			selector.SelectOptionDict(value=ACTION_ADD_ENTITY, label="Add entity"),
+			selector.SelectOptionDict(value=ACTION_EDIT_ENTITY, label="Edit an entity"),
+			selector.SelectOptionDict(value=ACTION_DELETE_ENTITIES, label="Delete entities"),
 		]
-
-		schema_fields: dict = {}
-		if entity_action_options:
-			schema_fields[
-				vol.Optional(FIELD_MANAGE_ACTION)
-			] = selector.SelectSelector(
-				selector.SelectSelectorConfig(
-					options=entity_action_options,
-					mode=selector.SelectSelectorMode.DROPDOWN,
-				)
-			)
-
-		schema_fields[
-			vol.Required(FIELD_PRIMARY_ACTION, default=ACTION_ADD_ENTITY)
-		] = selector.SelectSelector(
-			selector.SelectSelectorConfig(
-				options=primary_action_options,
-				mode=selector.SelectSelectorMode.DROPDOWN,
-			)
-		)
 
 		return self.async_show_form(
 			step_id=STEP_MANAGE_ENTITIES,
-			data_schema=vol.Schema(schema_fields),
+			data_schema=vol.Schema(
+				{
+					vol.Required(FIELD_LANDING_ACTION, default=ACTION_NO_ACTION): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=options,
+							mode=selector.SelectSelectorMode.DROPDOWN,
+						)
+					)
+				}
+			),
 			description_placeholders={
 				"room": self._base_data[CONF_ROOM_NAME],
+				"entity_cards": self._entity_cards_description(),
+				"entity_count": str(len(self._controlled_entities)),
+			},
+			errors=self._errors,
+		)
+
+	async def async_step_choose_edit_entity(self, user_input=None):
+		"""Let the user pick which entity to edit or add a new one."""
+		self._errors = {}
+		if not self._controlled_entities and not user_input:
+			self._errors = {"base": "no_controlled_entities"}
+			return await self.async_step_manage_entities()
+
+		if user_input is not None:
+			selection = user_input.get(FIELD_EDIT_ENTITY)
+			if selection == ACTION_ADD_ENTITY:
+				self._editing_index = None
+				self._selected_entity_id = None
+				self._current_entity_config = {}
+				self._finalize_after_configure = True
+				return await self.async_step_select_entity()
+			try:
+				idx = int(selection)
+			except (TypeError, ValueError):
+				self._errors = {FIELD_EDIT_ENTITY: "invalid_entity"}
+			else:
+				if 0 <= idx < len(self._controlled_entities):
+					self._editing_index = idx
+					self._current_entity_config = copy.deepcopy(self._controlled_entities[idx])
+					self._selected_entity_id = self._current_entity_config[CONF_ENTITY_ID]
+					self._finalize_after_configure = True
+					return await self.async_step_configure_entity()
+				self._errors = {FIELD_EDIT_ENTITY: "invalid_entity"}
+
+		options: list[selector.SelectOptionDict] = [
+			selector.SelectOptionDict(value=ACTION_ADD_ENTITY, label="Add a new entity"),
+		]
+		for idx, entity in enumerate(self._controlled_entities):
+			options.append(
+				selector.SelectOptionDict(value=str(idx), label=self._format_entity_label(entity))
+			)
+
+		return self.async_show_form(
+			step_id=STEP_CHOOSE_EDIT_ENTITY,
+			data_schema=vol.Schema(
+				{
+					vol.Required(FIELD_EDIT_ENTITY): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=options,
+							mode=selector.SelectSelectorMode.DROPDOWN,
+						)
+					)
+				}
+			),
+			description_placeholders={
+				"entity_cards": self._entity_cards_description(),
+				"entity_count": str(len(self._controlled_entities)),
+			},
+			errors=self._errors,
+		)
+
+	async def async_step_delete_entities(self, user_input=None):
+		"""Allow the user to select entities to delete."""
+		self._errors = {}
+		if not self._controlled_entities:
+			self._errors = {"base": "no_controlled_entities"}
+			return await self.async_step_manage_entities()
+
+		if user_input is not None:
+			selected = user_input.get(FIELD_DELETE_ENTITIES, []) or []
+			if not selected:
+				self._errors = {FIELD_DELETE_ENTITIES: "select_entities_to_delete"}
+			else:
+				indices: list[int] = []
+				for raw in selected:
+					try:
+						indices.append(int(raw))
+					except (TypeError, ValueError):
+						continue
+				if not indices:
+					self._errors = {FIELD_DELETE_ENTITIES: "select_entities_to_delete"}
+				else:
+					for idx in sorted(set(indices), reverse=True):
+						if 0 <= idx < len(self._controlled_entities):
+							removed = self._controlled_entities.pop(idx)
+							entity_id = removed.get(CONF_ENTITY_ID)
+							_LOGGER.debug("Removed entity %s during delete flow", removed)
+							self._cleanup_presence_switch(entity_id)
+					return await self._finalize_and_reload()
+
+		options = [
+			selector.SelectOptionDict(value=str(idx), label=self._format_entity_label(entity))
+			for idx, entity in enumerate(self._controlled_entities)
+		]
+
+		return self.async_show_form(
+			step_id=STEP_DELETE_ENTITIES,
+			data_schema=vol.Schema(
+				{
+					vol.Required(FIELD_DELETE_ENTITIES): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=options,
+							multiple=True,
+							mode=selector.SelectSelectorMode.LIST,
+						)
+					)
+				}
+			),
+			description_placeholders={
 				"entity_cards": self._entity_cards_description(),
 				"entity_count": str(len(self._controlled_entities)),
 			},
@@ -657,6 +800,9 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 			self._current_entity_config = {}
 			self._selected_entity_id = None
 			self._editing_index = None
+			if getattr(self, "_finalize_after_configure", False) and hasattr(self, "_finalize_and_reload"):
+				self._finalize_after_configure = False
+				return await self._finalize_and_reload()
 			return await self.async_step_manage_entities()
 
 		entity_id = self._selected_entity_id
