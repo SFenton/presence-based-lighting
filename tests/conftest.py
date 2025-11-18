@@ -432,6 +432,12 @@ class MockServices:
                 },
             },
         }
+        self._services = {
+            "light": {
+                "turn_on": {},
+                "turn_off": {},
+            },
+        }
         
     async def async_call(self, domain, service, service_data=None, blocking=False, context=None):
         """Call a service."""
@@ -447,9 +453,13 @@ class MockServices:
         """Clear service calls."""
         self.calls.clear()
 
-    def async_get_all_descriptions(self):
+    async def async_get_all_descriptions(self):
         """Return mocked service descriptions."""
         return self._descriptions
+
+    def async_services(self):
+        """Return registered services map."""
+        return self._services
 
 
 class MockConfigEntries:

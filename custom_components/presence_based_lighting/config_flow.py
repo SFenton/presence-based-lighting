@@ -95,23 +95,42 @@ def _get_entity_domain(entity_id: str) -> str:
 	return entity_id.split(".")[0] if "." in entity_id else ""
 
 
-def _get_services_for_entity(hass: HomeAssistant, entity_id: str) -> list[selector.SelectOptionDict]:
-	"""Build action dropdown options using HA service descriptions (plus No Action)."""
+async def _get_services_for_entity(hass: HomeAssistant, entity_id: str) -> list[selector.SelectOptionDict]:
+	"""Build action dropdown options using HA service metadata with fallback."""
 	domain = _get_entity_domain(entity_id)
 	options: list[selector.SelectOptionDict] = [
 		selector.SelectOptionDict(value=NO_ACTION, label="No Action")
 	]
 
-	services_desc: dict[str, dict] | None = None
-	if hass and getattr(hass, "services", None):
-		get_desc = getattr(hass.services, "async_get_all_descriptions", None)
-		if callable(get_desc):
-			services_desc = get_desc()
+	services_catalog: dict[str, dict] = {}
+	services_metadata: dict[str, dict] = {}
 
-	if services_desc and domain in services_desc:
-		domain_services = services_desc[domain]
-		for service_name, meta in sorted(domain_services.items()):
-			label = _format_action_option_label(service_name, meta)
+	if hass and getattr(hass, "services", None):
+		registry = hass.services
+		get_services = getattr(registry, "async_services", None)
+		if callable(get_services):
+			try:
+				services_catalog = get_services() or {}
+			except Exception as err:  # pragma: no cover - HA internals
+				_LOGGER.debug("Failed to enumerate services: %s", err)
+
+		get_desc = getattr(registry, "async_get_all_descriptions", None)
+		if callable(get_desc):
+			try:
+				services_metadata = await get_desc() or {}
+			except Exception as err:  # pragma: no cover - HA internals
+				_LOGGER.debug("Failed to fetch service descriptions: %s", err)
+
+	available_services: set[str] = set()
+	if domain in services_catalog:
+		available_services.update(services_catalog[domain].keys())
+	if domain in services_metadata:
+		available_services.update(services_metadata[domain].keys())
+
+	if available_services:
+		metadata_for_domain = services_metadata.get(domain, {})
+		for service_name in sorted(available_services):
+			label = _format_action_option_label(service_name, metadata_for_domain.get(service_name))
 			options.append(
 				selector.SelectOptionDict(
 					value=service_name,
@@ -120,7 +139,7 @@ def _get_services_for_entity(hass: HomeAssistant, entity_id: str) -> list[select
 			)
 		return options
 
-	# Fallback: use legacy hardcoded list if HA service metadata isn't available
+	# Fallback: use legacy hardcoded list if HA service metadata/catalog isn't available
 	for service in DOMAIN_SERVICES.get(domain, []):
 		options.append(
 			selector.SelectOptionDict(
@@ -306,7 +325,7 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 
 		entity_id = self._selected_entity_id
 		entity_name = _get_entity_name(self.hass, entity_id)
-		service_options = _get_services_for_entity(self.hass, entity_id)
+		service_options = await _get_services_for_entity(self.hass, entity_id)
 		state_options = _get_states_for_entity(entity_id)
 		defaults = {
 			CONF_PRESENCE_DETECTED_SERVICE: self._current_entity_config.get(
@@ -556,20 +575,14 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 		)
 
 	async def async_step_choose_edit_entity(self, user_input=None):
-		"""Let the user pick which entity to edit or add a new one."""
+		"""Let the user pick which entity to edit."""
 		self._errors = {}
-		if not self._controlled_entities and not user_input:
+		if not self._controlled_entities:
 			self._errors = {"base": "no_controlled_entities"}
 			return await self.async_step_manage_entities()
 
 		if user_input is not None:
 			selection = user_input.get(FIELD_EDIT_ENTITY)
-			if selection == ACTION_ADD_ENTITY:
-				self._editing_index = None
-				self._selected_entity_id = None
-				self._current_entity_config = {}
-				self._finalize_after_configure = True
-				return await self.async_step_select_entity()
 			try:
 				idx = int(selection)
 			except (TypeError, ValueError):
@@ -584,12 +597,9 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 				self._errors = {FIELD_EDIT_ENTITY: "invalid_entity"}
 
 		options: list[selector.SelectOptionDict] = [
-			selector.SelectOptionDict(value=ACTION_ADD_ENTITY, label="Add a new entity"),
+			selector.SelectOptionDict(value=str(idx), label=self._format_entity_label(entity))
+			for idx, entity in enumerate(self._controlled_entities)
 		]
-		for idx, entity in enumerate(self._controlled_entities):
-			options.append(
-				selector.SelectOptionDict(value=str(idx), label=self._format_entity_label(entity))
-			)
 
 		return self.async_show_form(
 			step_id=STEP_CHOOSE_EDIT_ENTITY,
@@ -807,7 +817,7 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 
 		entity_id = self._selected_entity_id
 		entity_name = _get_entity_name(self.hass, entity_id)
-		service_options = _get_services_for_entity(self.hass, entity_id)
+		service_options = await _get_services_for_entity(self.hass, entity_id)
 		state_options = _get_states_for_entity(entity_id)
 		defaults = {
 			CONF_PRESENCE_DETECTED_SERVICE: self._current_entity_config.get(

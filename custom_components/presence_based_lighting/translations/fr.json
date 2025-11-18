@@ -41,8 +41,8 @@
         }
       },
       "choose_edit_entity": {
-        "title": "Ajouter ou modifier une entité",
-        "description": "Sélectionnez une entité à modifier ou choisissez 'Ajouter une nouvelle entité'.\n{entity_cards}",
+    "title": "Modifier une entité",
+    "description": "Sélectionnez une entité à modifier.\n{entity_cards}",
         "data": {
           "entity_to_edit": "Entité à modifier"
         }

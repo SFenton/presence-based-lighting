@@ -134,6 +134,27 @@ async def test_choose_edit_entity_updates_existing_and_finalizes(mock_config_ent
 
 
 @pytest.mark.asyncio
+async def test_edit_step_only_lists_existing_entities(mock_config_entry):
+    """Edit step should not offer add-new option when triggered from manage view."""
+    handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
+    handler.hass = MagicMock()
+    handler.hass.states = MagicMock()
+    handler.hass.states.get = MagicMock(return_value=None)
+    handler.async_show_form = MagicMock(return_value="form")
+
+    result = await handler.async_step_choose_edit_entity()
+
+    assert result == "form"
+    assert handler.async_show_form.call_count == 1
+    form_kwargs = handler.async_show_form.call_args.kwargs
+    schema = form_kwargs["data_schema"]
+    required_field = next(iter(schema.schema))
+    selector_dict = schema.schema[required_field]["select"]
+    values = [opt["value"] for opt in selector_dict["options"]]
+    assert values == ["0"], "Only existing entity indices should appear"
+
+
+@pytest.mark.asyncio
 async def test_add_new_entity_from_landing(mock_config_entry):
     """Add flow should collect entity info and finalize with the new card."""
     handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
@@ -219,11 +240,12 @@ async def test_options_flow_preserves_entities_when_updating_base_settings(mock_
     assert result == "manage_entities_step"
 
 
-def test_get_services_for_entity_uses_service_descriptions():
+@pytest.mark.asyncio
+async def test_get_services_for_entity_uses_service_descriptions():
     """Action dropdown should leverage HA metadata including icon/title/description."""
 
     class DummyServices:
-        def async_get_all_descriptions(self):
+        async def async_get_all_descriptions(self):
             return {
                 "light": {
                     "pulse": {
@@ -234,10 +256,18 @@ def test_get_services_for_entity_uses_service_descriptions():
                 }
             }
 
+        def async_services(self):
+            return {
+                "light": {
+                    "pulse": {},
+                    "turn_on": {},
+                },
+            }
+
     hass = MagicMock()
     hass.services = DummyServices()
 
-    options = _get_services_for_entity(hass, "light.kitchen")
+    options = await _get_services_for_entity(hass, "light.kitchen")
 
     assert options[0]["value"] == NO_ACTION
     assert options[1]["value"] == "pulse"
