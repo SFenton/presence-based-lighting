@@ -16,6 +16,7 @@ from custom_components.presence_based_lighting.config_flow import (  # noqa: E40
     FIELD_LANDING_ACTION,
     NO_ACTION,
     PresenceBasedLightingOptionsFlowHandler,
+    ServiceOptionsUnavailable,
     _get_services_for_entity,
 )
 from custom_components.presence_based_lighting.const import (  # noqa: E402  # pylint: disable=wrong-import-position
@@ -101,8 +102,19 @@ async def test_landing_submit_finalizes_changes(mock_config_entry):
     assert result == {"type": "create_entry"}
 
 
+SERVICE_OPTION_FIXTURE = [
+    {"value": NO_ACTION, "label": "No Action"},
+    {"value": "turn_on", "label": "Turn on"},
+    {"value": "turn_off", "label": "Turn off"},
+]
+
+
 @pytest.mark.asyncio
-async def test_choose_edit_entity_updates_existing_and_finalizes(mock_config_entry):
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_choose_edit_entity_updates_existing_and_finalizes(_mock_services, mock_config_entry):
     """Edit flow should let the user update an entity and then finalize the entry."""
     handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
     handler.hass = MagicMock()
@@ -155,7 +167,11 @@ async def test_edit_step_only_lists_existing_entities(mock_config_entry):
 
 
 @pytest.mark.asyncio
-async def test_add_new_entity_from_landing(mock_config_entry):
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_add_new_entity_from_landing(_mock_services, mock_config_entry):
     """Add flow should collect entity info and finalize with the new card."""
     handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
     handler.hass = MagicMock()
@@ -275,3 +291,21 @@ async def test_get_services_for_entity_uses_service_descriptions():
     assert "[mdi:flash]" in label
     assert "Pulse" in label
     assert "Flash the entity briefly" in label
+
+
+@pytest.mark.asyncio
+async def test_get_services_for_entity_errors_without_metadata():
+    """Missing service metadata should raise and prevent fallback guessing."""
+
+    class EmptyServices:
+        async def async_get_all_descriptions(self):
+            return {}
+
+        def async_services(self):
+            return {}
+
+    hass = MagicMock()
+    hass.services = EmptyServices()
+
+    with pytest.raises(ServiceOptionsUnavailable):
+        await _get_services_for_entity(hass, "light.kitchen")

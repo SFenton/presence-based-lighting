@@ -227,5 +227,4 @@ Lights: light.living_room_all_lights
 ## Need Help?
 
 - 📖 See [README.md](README.md) for full documentation
-- 🔄 Migrating from blueprint? See [MIGRATION.md](MIGRATION.md)
-- 🐛 Found a bug? [Open an issue](https://github.com/sfenton/presence_based_lighting/issues)
+-  Found a bug? [Open an issue](https://github.com/sfenton/presence_based_lighting/issues)

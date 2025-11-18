@@ -14,9 +14,7 @@ from homeassistant.const import (
 	STATE_ON,
 )
 from homeassistant.core import Context, Event, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.helpers import restore_state as rs
 
 from .const import (
 	CONF_CONTROLLED_ENTITIES,
@@ -24,7 +22,6 @@ from .const import (
 	CONF_ENTITY_ID,
 	CONF_ENTITY_OFF_DELAY,
 	CONF_INITIAL_PRESENCE_ALLOWED,
-	CONF_LIGHT_ENTITIES,
 	CONF_OFF_DELAY,
 	CONF_PRESENCE_CLEARED_SERVICE,
 	CONF_PRESENCE_CLEARED_STATE,
@@ -86,54 +83,6 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 	"""YAML setup is not supported."""
 	return True
 
-
-async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-	"""Handle config entry migrations."""
-
-	if entry.version >= 2:
-		return True
-
-	_LOGGER.debug("Migrating Presence Based Lighting entry %s from v%s", entry.entry_id, entry.version)
-
-	last_state = None
-	entity_registry = er.async_get(hass)
-	old_unique_id = f"{entry.entry_id}_switch"
-	old_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, old_unique_id)
-	if old_entity_id:
-		restore_data = rs.async_get(hass)
-		if stored_state := restore_data.last_states.get(old_entity_id):
-			last_state = stored_state.state
-		entity_registry.async_remove(old_entity_id)
-
-	initial_allowed = True
-	if last_state is not None:
-		initial_allowed = last_state.state == STATE_ON
-
-	controlled_entities = []
-	for entity_id in entry.data.get(CONF_LIGHT_ENTITIES, []):
-		controlled_entities.append(
-			{
-				CONF_ENTITY_ID: entity_id,
-				CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
-				CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
-				CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
-				CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
-				CONF_RESPECTS_PRESENCE_ALLOWED: DEFAULT_RESPECTS_PRESENCE_ALLOWED,
-				CONF_DISABLE_ON_EXTERNAL_CONTROL: DEFAULT_DISABLE_ON_EXTERNAL,
-				CONF_INITIAL_PRESENCE_ALLOWED: initial_allowed,
-			}
-		)
-
-	new_data = {
-		CONF_ROOM_NAME: entry.data[CONF_ROOM_NAME],
-		CONF_PRESENCE_SENSORS: entry.data.get(CONF_PRESENCE_SENSORS, []),
-		CONF_OFF_DELAY: entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
-		CONF_CONTROLLED_ENTITIES: controlled_entities,
-	}
-
-	hass.config_entries.async_update_entry(entry, data=new_data, version=2)
-	_LOGGER.info("Migration of Presence Based Lighting entry %s to v2 complete", entry.entry_id)
-	return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

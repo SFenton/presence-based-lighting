@@ -1,7 +1,7 @@
 """Test configuration and fixtures for Presence Based Lighting."""
 import asyncio
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 import pytest
 import pytest_asyncio
 from aiohttp.resolver import ThreadedResolver
@@ -21,7 +21,6 @@ def event_loop():
 
 # Mock homeassistant before importing integration
 import sys
-from unittest.mock import MagicMock
 import types
 
 # Create base homeassistant module as a real module, not a MagicMock
@@ -474,7 +473,7 @@ class MockConfigEntries:
         return True
 
     def async_update_entry(self, entry, data=None, version=None):
-        """Update entry data/version for migration tests."""
+        """Update entry data or version for options flow tests."""
         if data is not None:
             entry.data = data
         if version is not None:

@@ -14,18 +14,19 @@
 [![Discord][discord-shield]][discord]
 [![Community Forum][forum-shield]][forum]
 
-**Intelligent presence-based lighting automation with manual override support for Home Assistant.**
+**Intelligent, metadata-driven presence automation with manual override support for Home Assistant.**
 
-Automates lights based on occupancy sensors while respecting manual control. When you manually turn lights off, the automation disables itself. When you turn them back on, automation resumes.
+Drive lights, fans, or any switchable entity directly from HA service metadata. Presence-based actions stay in sync with manual control, and each controlled entity gets its own "Presence Allowed" toggle.
 
 ## Features
 
-- ✨ **Automatic light control** based on presence sensors
-- 🎯 **Smart manual override** - respects your manual changes
-- 🏠 **Multi-room support** - configure as many rooms as needed
-- ⏱️ **Configurable delays** - set how long to wait before turning off
-- 🔧 **Easy configuration** - full UI-based setup
-- 📊 **Rich state attributes** - monitor occupancy and light status
+- ✨ **Automatic entity control** driven by presence sensors
+- ⚙️ **Per-entity actions** – choose exactly which services/states to call when presence appears or clears (with `No Action` option)
+- 🎯 **Smart manual override** – external control pauses automation until you re-enable it
+- 🏠 **Multi-room + multi-entity** – configure multiple rooms, each with any number of controlled entities
+- ⏱️ **Global or per-entity delays** – override turn-off timers per device when needed
+- 🔧 **Completely UI-based** – no YAML, selectors are built-in to the config flow
+- � **Presence Allowed switches** – each entity gets its own switch entity for dashboards or automations
 
 ## How It Works
 
@@ -37,7 +38,7 @@ Automates lights based on occupancy sensors while respecting manual control. Whe
 - Turn lights **OFF** manually → Automation disables itself
 - Turn lights **ON** manually → Automation re-enables itself
 
-Each room gets a switch entity (`switch.<room>_presence_automation`) to enable/disable automation.
+Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_presence_allowed`) so you can pause automation per device while keeping others running.
 
 ## Platforms
 
@@ -73,10 +74,15 @@ Each room gets a switch entity (`switch.<room>_presence_automation`) to enable/d
 2. Click **"+ Add Integration"**
 3. Search for **"Presence Based Lighting"**
 4. Configure your room:
-   - **Room Name**: e.g., "Living Room"
-   - **Lights to Control**: Select lights or groups
-   - **Presence Sensors**: Select occupancy sensors
-   - **Turn Off Delay**: Seconds to wait (default: 30)
+  - **Room Name**: e.g., "Living Room"
+  - **Presence Sensors**: Binary sensors that indicate occupancy
+  - **Global Turn-Off Delay**: Seconds to wait when presence clears
+5. Add entities to control. For each entity:
+  - Select the target entity
+  - Pick services/states for presence detected/cleared (or `No Action`)
+  - Decide whether the entity respects the toggle switch
+  - Decide if external control should pause automation
+  - Optionally set a per-entity off delay
 
 You can add multiple room configurations - each operates independently.
 
@@ -85,40 +91,35 @@ You can add multiple room configurations - each operates independently.
 ### Living Room Setup
 ```
 Room Name: Living Room
-Lights: light.living_room_ceiling, light.living_room_lamp
-Sensors: binary_sensor.living_room_motion
-Delay: 30 seconds
+Presence Sensors: binary_sensor.living_room_motion
+Entities:
+  - light.living_room_ceiling → `turn_on` / `turn_off`, 30s delay
+  - fan.living_room_ceiling → `turn_on` / `turn_off`, 120s delay
 ```
 
-This creates: `switch.living_room_presence_automation`
+This creates per-entity switches such as `switch.living_room_presence_light_living_room_ceiling_presence_allowed`.
 
-### State Attributes
+### Switch Attributes
 
-The switch entity exposes useful information:
+Each Presence Allowed switch includes:
 
-- `lights`: List of controlled lights
-- `sensors`: List of presence sensors  
-- `off_delay`: Configured delay in seconds
-- `any_occupied`: Current occupancy status
-- `any_light_on`: Current light status
+- `controlled_entity`: The HA entity ID being automated
+- `respect_presence_allowed`: Whether the entity honors the switch
+- `disable_on_external_control`: Whether external control pauses automation
 
 ### Use in Automations
 
 ```yaml
-# Disable during movie time
+# Disable automation for a single lamp during movie time
 - service: switch.turn_off
   target:
-    entity_id: switch.living_room_presence_automation
+    entity_id: switch.living_room_presence_light_living_room_lamp_presence_allowed
 
 # Re-enable after movie
 - service: switch.turn_on
   target:
-    entity_id: switch.living_room_presence_automation
+    entity_id: switch.living_room_presence_light_living_room_lamp_presence_allowed
 ```
-
-## Migration from Blueprint
-
-Previously using the presence.yaml blueprint? See [MIGRATION.md](MIGRATION.md) for upgrade instructions.
 
 ## Contributions
 

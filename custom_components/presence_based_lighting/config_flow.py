@@ -41,12 +41,9 @@ from .const import (
 STEP_USER = "user"
 STEP_SELECT_ENTITY = "select_entity"
 STEP_CONFIGURE_ENTITY = "configure_entity"
-STEP_CONTROLLED_ENTITIES = "controlled_entities"
 STEP_MANAGE_ENTITIES = "manage_entities"
 STEP_CHOOSE_EDIT_ENTITY = "choose_edit_entity"
 STEP_DELETE_ENTITIES = "delete_entities"
-FIELD_ADD_ANOTHER = "add_another"
-FIELD_SKIP_ENTITY = "skip_entity"
 FIELD_LANDING_ACTION = "landing_action"
 FIELD_EDIT_ENTITY = "entity_to_edit"
 FIELD_DELETE_ENTITIES = "entities_to_delete"
@@ -56,47 +53,21 @@ ACTION_NO_ACTION = "no_action"
 ACTION_EDIT_ENTITY = "edit"
 ACTION_DELETE_ENTITIES = "delete"
 
-# Common services by domain
-DOMAIN_SERVICES = {
-	"light": ["turn_on", "turn_off", "toggle"],
-	"switch": ["turn_on", "turn_off", "toggle"],
-	"fan": ["turn_on", "turn_off", "toggle"],
-	"climate": ["turn_on", "turn_off", "set_hvac_mode"],
-	"media_player": ["turn_on", "turn_off", "media_play", "media_pause"],
-	"cover": ["open_cover", "close_cover", "stop_cover"],
-	"lock": ["lock", "unlock"],
-	"scene": ["turn_on"],
-	"script": ["turn_on"],
-}
-
-# Common states by domain
-DOMAIN_STATES = {
-	"light": ["on", "off"],
-	"switch": ["on", "off"],
-	"fan": ["on", "off"],
-	"climate": ["heat", "cool", "heat_cool", "auto", "off"],
-	"media_player": ["playing", "paused", "idle", "off"],
-	"cover": ["open", "closed", "opening", "closing"],
-	"lock": ["locked", "unlocked"],
-	"scene": ["on"],
-	"script": ["on"],
-}
-
-
-def _required_field(key: str, default=None):
-	"""Helper to create required field with optional default."""
-	if default is None:
-		return vol.Required(key)
-	return vol.Required(key, default=default)
-
 
 def _get_entity_domain(entity_id: str) -> str:
 	"""Extract domain from entity_id."""
 	return entity_id.split(".")[0] if "." in entity_id else ""
 
 
+class ServiceOptionsUnavailable(Exception):
+	"""Raised when no HA service metadata is available for an entity."""
+
+
 async def _get_services_for_entity(hass: HomeAssistant, entity_id: str) -> list[selector.SelectOptionDict]:
-	"""Build action dropdown options using HA service metadata with fallback."""
+	"""Build action dropdown options using HA service metadata."""
+	if not hass or not getattr(hass, "services", None):
+		raise ServiceOptionsUnavailable(f"No service registry available for {entity_id}")
+
 	domain = _get_entity_domain(entity_id)
 	options: list[selector.SelectOptionDict] = [
 		selector.SelectOptionDict(value=NO_ACTION, label="No Action")
@@ -104,22 +75,21 @@ async def _get_services_for_entity(hass: HomeAssistant, entity_id: str) -> list[
 
 	services_catalog: dict[str, dict] = {}
 	services_metadata: dict[str, dict] = {}
+	registry = hass.services
 
-	if hass and getattr(hass, "services", None):
-		registry = hass.services
-		get_services = getattr(registry, "async_services", None)
-		if callable(get_services):
-			try:
-				services_catalog = get_services() or {}
-			except Exception as err:  # pragma: no cover - HA internals
-				_LOGGER.debug("Failed to enumerate services: %s", err)
+	get_services = getattr(registry, "async_services", None)
+	if callable(get_services):
+		try:
+			services_catalog = get_services() or {}
+		except Exception as err:  # pragma: no cover - HA internals
+			_LOGGER.debug("Failed to enumerate services: %s", err)
 
-		get_desc = getattr(registry, "async_get_all_descriptions", None)
-		if callable(get_desc):
-			try:
-				services_metadata = await get_desc() or {}
-			except Exception as err:  # pragma: no cover - HA internals
-				_LOGGER.debug("Failed to fetch service descriptions: %s", err)
+	get_desc = getattr(registry, "async_get_all_descriptions", None)
+	if callable(get_desc):
+		try:
+			services_metadata = await get_desc() or {}
+		except Exception as err:  # pragma: no cover - HA internals
+			_LOGGER.debug("Failed to fetch service descriptions: %s", err)
 
 	available_services: set[str] = set()
 	if domain in services_catalog:
@@ -127,24 +97,16 @@ async def _get_services_for_entity(hass: HomeAssistant, entity_id: str) -> list[
 	if domain in services_metadata:
 		available_services.update(services_metadata[domain].keys())
 
-	if available_services:
-		metadata_for_domain = services_metadata.get(domain, {})
-		for service_name in sorted(available_services):
-			label = _format_action_option_label(service_name, metadata_for_domain.get(service_name))
-			options.append(
-				selector.SelectOptionDict(
-					value=service_name,
-					label=label,
-				)
-			)
-		return options
+	if not available_services:
+		raise ServiceOptionsUnavailable(f"No services available for {entity_id}")
 
-	# Fallback: use legacy hardcoded list if HA service metadata/catalog isn't available
-	for service in DOMAIN_SERVICES.get(domain, []):
+	metadata_for_domain = services_metadata.get(domain, {})
+	for service_name in sorted(available_services):
+		label = _format_action_option_label(service_name, metadata_for_domain.get(service_name))
 		options.append(
 			selector.SelectOptionDict(
-				value=service,
-				label=service.replace("_", " ").title(),
+				value=service_name,
+				label=label,
 			)
 		)
 
@@ -165,30 +127,6 @@ def _format_action_option_label(service_name: str, metadata: dict | None) -> str
 	if description:
 		label = f"{label} – {description}"
 	return label
-
-
-def _get_states_for_entity(entity_id: str) -> list[selector.SelectOptionDict]:
-	"""Get available states for an entity."""
-	domain = _get_entity_domain(entity_id)
-	
-	options = []
-	if domain in DOMAIN_STATES:
-		for state in DOMAIN_STATES[domain]:
-			options.append(
-				selector.SelectOptionDict(
-					value=state,
-					label=state.replace("_", " ").title()
-				)
-			)
-	
-	# If no predefined states, provide common ones
-	if not options:
-		options = [
-			selector.SelectOptionDict(value="on", label="On"),
-			selector.SelectOptionDict(value="off", label="Off"),
-		]
-	
-	return options
 
 
 def _get_entity_name(hass: HomeAssistant, entity_id: str) -> str:
@@ -221,6 +159,8 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 		self._controlled_entities: list[dict] = []
 		self._selected_entity_id: str | None = None
 		self._current_entity_config: dict = {}
+		self._editing_index: int | None = None
+		self._finalize_after_configure: bool = False
 
 	async def async_step_user(self, user_input=None):
 		"""Handle the initial step configured by the user."""
@@ -325,8 +265,11 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 
 		entity_id = self._selected_entity_id
 		entity_name = _get_entity_name(self.hass, entity_id)
-		service_options = await _get_services_for_entity(self.hass, entity_id)
-		state_options = _get_states_for_entity(entity_id)
+		try:
+			service_options = await _get_services_for_entity(self.hass, entity_id)
+		except ServiceOptionsUnavailable:
+			self._errors = {"base": "no_services_available"}
+			return await self.async_step_select_entity()
 		defaults = {
 			CONF_PRESENCE_DETECTED_SERVICE: self._current_entity_config.get(
 				CONF_PRESENCE_DETECTED_SERVICE, DEFAULT_DETECTED_SERVICE
@@ -368,13 +311,7 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 					vol.Required(
 						CONF_PRESENCE_DETECTED_STATE,
 						default=defaults[CONF_PRESENCE_DETECTED_STATE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=state_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-							custom_value=True,
-						)
-					),
+					): str,
 					vol.Required(
 						CONF_PRESENCE_CLEARED_SERVICE,
 						default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
@@ -387,13 +324,7 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 					vol.Required(
 						CONF_PRESENCE_CLEARED_STATE,
 						default=defaults[CONF_PRESENCE_CLEARED_STATE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=state_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-							custom_value=True,
-						)
-					),
+					): str,
 					vol.Required(
 						CONF_RESPECTS_PRESENCE_ALLOWED,
 						default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
@@ -408,38 +339,6 @@ class PresenceBasedLightingFlowHandler(config_entries.ConfigFlow, domain=DOMAIN)
 			errors=self._errors,
 			description_placeholders={
 				"entity_name": entity_name,
-			},
-		)
-
-	async def async_step_add_another(self, user_input=None):
-		"""Ask if user wants to add another entity."""
-		if user_input is not None:
-			if user_input.get("add_another", False):
-				return await self.async_step_select_entity()
-			
-			# User is done adding entities
-			if not self._controlled_entities:
-				self._errors = {"base": "no_controlled_entities"}
-				return await self.async_step_select_entity()
-
-			data = {
-				**self._base_data,
-				CONF_CONTROLLED_ENTITIES: self._controlled_entities,
-			}
-			return self.async_create_entry(
-				title=self._base_data[CONF_ROOM_NAME],
-				data=data,
-			)
-
-		return self.async_show_form(
-			step_id="add_another",
-			data_schema=vol.Schema(
-				{
-					vol.Required("add_another", default=False): selector.BooleanSelector(),
-				}
-			),
-			description_placeholders={
-				"added": str(len(self._controlled_entities)),
 			},
 		)
 
@@ -817,8 +716,11 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 
 		entity_id = self._selected_entity_id
 		entity_name = _get_entity_name(self.hass, entity_id)
-		service_options = await _get_services_for_entity(self.hass, entity_id)
-		state_options = _get_states_for_entity(entity_id)
+		try:
+			service_options = await _get_services_for_entity(self.hass, entity_id)
+		except ServiceOptionsUnavailable:
+			self._errors = {"base": "no_services_available"}
+			return await self.async_step_select_entity()
 		defaults = {
 			CONF_PRESENCE_DETECTED_SERVICE: self._current_entity_config.get(
 				CONF_PRESENCE_DETECTED_SERVICE, DEFAULT_DETECTED_SERVICE
@@ -860,13 +762,7 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 					vol.Required(
 						CONF_PRESENCE_DETECTED_STATE,
 						default=defaults[CONF_PRESENCE_DETECTED_STATE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=state_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-							custom_value=True,
-						)
-					),
+					): str,
 					vol.Required(
 						CONF_PRESENCE_CLEARED_SERVICE,
 						default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
@@ -879,13 +775,7 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 					vol.Required(
 						CONF_PRESENCE_CLEARED_STATE,
 						default=defaults[CONF_PRESENCE_CLEARED_STATE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=state_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-							custom_value=True,
-						)
-					),
+					): str,
 					vol.Required(
 						CONF_RESPECTS_PRESENCE_ALLOWED,
 						default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
@@ -900,52 +790,5 @@ class PresenceBasedLightingOptionsFlowHandler(config_entries.OptionsFlow):
 			errors=self._errors,
 			description_placeholders={
 				"entity_name": entity_name,
-			},
-		)
-
-	async def async_step_add_another(self, user_input=None):
-		"""Ask if user wants to add another entity."""
-		_LOGGER.debug("async_step_add_another called with user_input: %s", user_input)
-		if user_input is not None:
-			if user_input.get("add_another", False):
-				_LOGGER.debug("User wants to add another entity")
-				return await self.async_step_select_entity()
-			
-			# User is done adding entities
-			_LOGGER.debug("User finished adding entities. Total entities: %d", len(self._controlled_entities))
-			if not self._controlled_entities:
-				_LOGGER.warning("No controlled entities found, showing error")
-				self._errors = {"base": "no_controlled_entities"}
-				return await self.async_step_select_entity()
-
-			_LOGGER.debug("Building new_data to update config entry")
-			_LOGGER.debug("  config_entry.data: %s", self.config_entry.data)
-			_LOGGER.debug("  _base_data: %s", self._base_data)
-			_LOGGER.debug("  _controlled_entities: %s", self._controlled_entities)
-			
-			new_data = {
-				**self.config_entry.data,
-				CONF_PRESENCE_SENSORS: self._base_data[CONF_PRESENCE_SENSORS],
-				CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
-				CONF_CONTROLLED_ENTITIES: self._controlled_entities,
-			}
-			_LOGGER.debug("new_data constructed: %s", new_data)
-			_LOGGER.debug("Calling async_update_entry...")
-			self.hass.config_entries.async_update_entry(
-				self.config_entry,
-				data=new_data,
-			)
-			_LOGGER.debug("async_update_entry completed, creating entry")
-			return self.async_create_entry(title="", data={})
-
-		return self.async_show_form(
-			step_id="add_another",
-			data_schema=vol.Schema(
-				{
-					vol.Required("add_another", default=False): selector.BooleanSelector(),
-				}
-			),
-			description_placeholders={
-				"added": str(len(self._controlled_entities)),
 			},
 		)

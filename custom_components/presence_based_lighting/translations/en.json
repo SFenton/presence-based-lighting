@@ -58,9 +58,7 @@
           "presence_cleared_state": "Expected State After Clear",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
           "disable_on_external_control": "Disable on Manual Control",
-          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
-          "skip_entity": "Skip This Entity",
-          "add_another": "Add Another Entity"
+          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
           "entity_id": "Select a light, switch, fan, or other entity to control based on presence",
@@ -70,9 +68,7 @@
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
-          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
-          "skip_entity": "Skip configuring this entity and move to the next",
-          "add_another": "Configure another entity after this one"
+          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       }
     },
@@ -173,9 +169,7 @@
           "presence_cleared_state": "Expected State After Clear",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
           "disable_on_external_control": "Disable on Manual Control",
-          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
-          "skip_entity": "Skip This Entity",
-          "add_another": "Add Another Entity"
+          "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
           "entity_id": "Select a light, switch, fan, or other entity to control based on presence",
@@ -185,9 +179,7 @@
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
-          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
-          "skip_entity": "Skip configuring this entity and move to the next",
-          "add_another": "Configure another entity after this one"
+          "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       }
     },
