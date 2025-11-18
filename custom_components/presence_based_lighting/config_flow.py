@@ -397,33 +397,27 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
 
-		detected_state_options = _build_state_option_dicts(
+		state_option_source = _build_state_option_dicts(
 			self.hass,
 			entity_id,
 			[
 				defaults[CONF_PRESENCE_DETECTED_STATE],
-			],
-		)
-		cleared_state_options = _build_state_option_dicts(
-			self.hass,
-			entity_id,
-			[
 				defaults[CONF_PRESENCE_CLEARED_STATE],
 			],
 		)
-		if detected_state_options.from_hass and detected_state_options.options:
+		if state_option_source.from_hass and state_option_source.options:
 			detected_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=detected_state_options.options,
+					options=state_option_source.options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)
 		else:
 			detected_state_field = str
-		if cleared_state_options.from_hass and cleared_state_options.options:
+		if state_option_source.from_hass and state_option_source.options:
 			cleared_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=cleared_state_options.options,
+					options=state_option_source.options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)
@@ -1003,33 +997,27 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
 
-		detected_state_options = _build_state_option_dicts(
+		state_option_source = _build_state_option_dicts(
 			self.hass,
 			entity_id,
 			[
 				defaults[CONF_PRESENCE_DETECTED_STATE],
-			],
-		)
-		cleared_state_options = _build_state_option_dicts(
-			self.hass,
-			entity_id,
-			[
 				defaults[CONF_PRESENCE_CLEARED_STATE],
 			],
 		)
-		if detected_state_options.from_hass and detected_state_options.options:
+		if state_option_source.from_hass and state_option_source.options:
 			detected_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=detected_state_options.options,
+					options=state_option_source.options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)
 		else:
 			detected_state_field = str
-		if cleared_state_options.from_hass and cleared_state_options.options:
+		if state_option_source.from_hass and state_option_source.options:
 			cleared_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=cleared_state_options.options,
+					options=state_option_source.options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)

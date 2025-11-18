@@ -240,3 +240,41 @@ async def test_configure_entity_falls_back_to_text_when_no_state_options(_mock_s
 
     assert schema.schema[detected_field] is str
     assert schema.schema[cleared_field] is str
+
+
+@pytest.mark.asyncio
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_state_dropdown_includes_defaults_for_both_fields(_mock_services):
+    """Dropdowns should expose both configured states even if HA only reports one."""
+    handler = PresenceBasedLightingFlowHandler()
+    handler.hass = MagicMock()
+    state_obj = MagicMock()
+    state_obj.attributes = {"friendly_name": "Porch Light"}
+    state_obj.state = "on"
+    handler.hass.states.get.return_value = state_obj
+    handler.async_show_form = MagicMock(return_value={"type": "form"})
+
+    await handler.async_step_user(
+        {
+            CONF_ROOM_NAME: "Porch",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.porch_motion"],
+            CONF_OFF_DELAY: DEFAULT_OFF_DELAY,
+        }
+    )
+    await handler.async_step_select_entity({CONF_ENTITY_ID: "light.porch"})
+
+    await handler.async_step_configure_entity()
+
+    schema = handler.async_show_form.call_args.kwargs["data_schema"]
+    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
+    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+
+    detected_selector = schema.schema[detected_field]
+    cleared_selector = schema.schema[cleared_field]
+
+    assert detected_selector == cleared_selector
+    values = [option["value"] for option in detected_selector["select"]["options"]]
+    assert values == [DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE]
