@@ -196,6 +196,10 @@ class _SelectSelectorMode:
     LIST = "list"
 
 
+class _TextSelectorType:
+    TEXT = "text"
+
+
 selector_module.SelectSelector = _make_selector("select")
 selector_module.SelectSelectorConfig = _SelectorConfig
 selector_module.SelectSelectorMode = _SelectSelectorMode
@@ -204,6 +208,9 @@ selector_module.EntitySelector = _make_selector("entity")
 selector_module.EntitySelectorConfig = _SelectorConfig
 selector_module.NumberSelector = _make_selector("number")
 selector_module.BooleanSelector = _make_selector("boolean")
+selector_module.TextSelector = _make_selector("text")
+selector_module.TextSelectorConfig = _SelectorConfig
+selector_module.TextSelectorType = _TextSelectorType
 sys.modules['homeassistant.helpers.selector'] = selector_module
 helpers_module.selector = selector_module
 

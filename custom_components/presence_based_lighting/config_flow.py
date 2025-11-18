@@ -51,11 +51,18 @@ STEP_DELETE_ENTITIES = "delete_entities"
 FIELD_LANDING_ACTION = "landing_action"
 FIELD_EDIT_ENTITY = "entity_to_edit"
 FIELD_DELETE_ENTITIES = "entities_to_delete"
+FIELD_PRESENCE_DETECTED_STATE_CUSTOM = "presence_detected_state_custom"
+FIELD_PRESENCE_CLEARED_STATE_CUSTOM = "presence_cleared_state_custom"
 
 ACTION_ADD_ENTITY = "add"
 ACTION_NO_ACTION = "no_action"
 ACTION_EDIT_ENTITY = "edit"
 ACTION_DELETE_ENTITIES = "delete"
+
+STATE_OPTION_CUSTOM = "__presence_based_lighting_custom_state__"
+CUSTOM_LABEL = "Custom"
+UI_CUSTOM_DETECTED_KEY = "_ui_detected_state_custom"
+UI_CUSTOM_CLEARED_KEY = "_ui_cleared_state_custom"
 
 RECORDER_LOOKBACK = timedelta(days=14)
 RECORDER_STATE_LIMIT = 25
@@ -159,6 +166,7 @@ class StateOptionResult(NamedTuple):
 
 	options: list[selector.SelectOptionDict]
 	from_hass: bool
+	ha_values: set[str]
 
 
 def _format_state_option_label(value: str) -> str:
@@ -276,7 +284,44 @@ async def _build_state_option_dicts(
 		selector.SelectOptionDict(value=value, label=_format_state_option_label(value))
 		for value in unique_states
 	]
-	return StateOptionResult(options=options, from_hass=bool(ha_candidates))
+	return StateOptionResult(options=options, from_hass=bool(ha_candidates), ha_values=set(ha_candidates))
+
+
+def _resolve_custom_state_selection(
+	selection: str,
+	custom_value: str | None,
+	*,
+	ui_state: dict[str, str | None],
+	ui_key: str,
+) -> tuple[str | None, bool]:
+	"""Return normalized state value and whether a custom entry is missing."""
+	selection = str(selection)
+	if selection != STATE_OPTION_CUSTOM:
+		ui_state.pop(ui_key, None)
+		return selection, False
+	custom_value = (custom_value or "").strip()
+	ui_state[ui_key] = custom_value
+	if not custom_value:
+		return None, True
+	return custom_value, False
+
+
+def _state_field_defaults(
+	stored_value: str,
+	*,
+	ha_values: set[str],
+	ui_state: dict[str, str | None],
+	ui_key: str,
+) -> tuple[str, str | None]:
+	"""Determine dropdown default and custom textbox default for a state field."""
+	use_custom = ui_key in ui_state
+	custom_default = ui_state.get(ui_key)
+	if not use_custom and stored_value and stored_value not in ha_values:
+		use_custom = True
+		custom_default = stored_value
+	if use_custom:
+		return STATE_OPTION_CUSTOM, custom_default or stored_value or ""
+	return stored_value, None
 
 
 class _EntityManagementMixin:
@@ -335,6 +380,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		self._current_entity_config: dict = {}
 		self._editing_index: int | None = None
 		self._finalize_after_configure: bool = False
+		self._custom_state_ui: dict[str, str | None] = {}
 
 	async def async_step_user(self, user_input=None):
 		"""Handle the initial step configured by the user."""
@@ -382,6 +428,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				entity_id = cv.entity_id(user_input[CONF_ENTITY_ID])
 				self._selected_entity_id = entity_id
 				self._current_entity_config = {CONF_ENTITY_ID: entity_id}
+				self._custom_state_ui = {}
 				return await self.async_step_configure_entity()
 			except vol.Invalid:
 				self._errors = {CONF_ENTITY_ID: "invalid_entity"}
@@ -405,37 +452,6 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		"""Step to configure the selected entity's services and behavior."""
 		self._errors = {}
 		editing = self._editing_index is not None
-
-		if user_input is not None:
-			updated_config = {
-				CONF_ENTITY_ID: self._selected_entity_id,
-				CONF_PRESENCE_DETECTED_SERVICE: user_input[CONF_PRESENCE_DETECTED_SERVICE],
-				CONF_PRESENCE_DETECTED_STATE: user_input[CONF_PRESENCE_DETECTED_STATE],
-				CONF_PRESENCE_CLEARED_SERVICE: user_input[CONF_PRESENCE_CLEARED_SERVICE],
-				CONF_PRESENCE_CLEARED_STATE: user_input[CONF_PRESENCE_CLEARED_STATE],
-				CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
-				CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-				CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
-			}
-
-			entity_off_delay = user_input.get(CONF_ENTITY_OFF_DELAY)
-			if entity_off_delay is not None:
-				updated_config[CONF_ENTITY_OFF_DELAY] = entity_off_delay
-			elif CONF_ENTITY_OFF_DELAY in self._current_entity_config:
-				updated_config.pop(CONF_ENTITY_OFF_DELAY, None)
-
-			if editing and self._editing_index is not None:
-				self._controlled_entities[self._editing_index] = updated_config
-			else:
-				self._controlled_entities.append(updated_config)
-
-			self._current_entity_config = {}
-			self._selected_entity_id = None
-			self._editing_index = None
-			if getattr(self, "_finalize_after_configure", False) and hasattr(self, "_finalize_and_reload"):
-				self._finalize_after_configure = False
-				return await self._finalize_and_reload()
-			return await self.async_step_manage_entities()
 
 		entity_id = self._selected_entity_id
 		entity_name = _get_entity_name(self.hass, entity_id)
@@ -477,66 +493,169 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				defaults[CONF_PRESENCE_CLEARED_STATE],
 			],
 		)
-		if state_option_source.from_hass and state_option_source.options:
+		use_dropdown = bool(state_option_source.from_hass and state_option_source.options)
+
+		if user_input is not None:
+			entity_off_delay = user_input.get(CONF_ENTITY_OFF_DELAY)
+			resolved_detected_state = str(user_input[CONF_PRESENCE_DETECTED_STATE]).strip()
+			resolved_cleared_state = str(user_input[CONF_PRESENCE_CLEARED_STATE]).strip()
+
+			if use_dropdown:
+				resolved_detected_state, detected_missing = _resolve_custom_state_selection(
+					resolved_detected_state,
+					user_input.get(FIELD_PRESENCE_DETECTED_STATE_CUSTOM),
+					ui_state=self._custom_state_ui,
+					ui_key=UI_CUSTOM_DETECTED_KEY,
+				)
+				resolved_cleared_state, cleared_missing = _resolve_custom_state_selection(
+					resolved_cleared_state,
+					user_input.get(FIELD_PRESENCE_CLEARED_STATE_CUSTOM),
+					ui_state=self._custom_state_ui,
+					ui_key=UI_CUSTOM_CLEARED_KEY,
+				)
+				if detected_missing:
+					self._errors[FIELD_PRESENCE_DETECTED_STATE_CUSTOM] = "custom_state_required"
+				if cleared_missing:
+					self._errors[FIELD_PRESENCE_CLEARED_STATE_CUSTOM] = "custom_state_required"
+			else:
+				self._custom_state_ui.pop(UI_CUSTOM_DETECTED_KEY, None)
+				self._custom_state_ui.pop(UI_CUSTOM_CLEARED_KEY, None)
+
+			if not self._errors:
+				updated_config = {
+					CONF_ENTITY_ID: self._selected_entity_id,
+					CONF_PRESENCE_DETECTED_SERVICE: user_input[CONF_PRESENCE_DETECTED_SERVICE],
+					CONF_PRESENCE_DETECTED_STATE: resolved_detected_state,
+					CONF_PRESENCE_CLEARED_SERVICE: user_input[CONF_PRESENCE_CLEARED_SERVICE],
+					CONF_PRESENCE_CLEARED_STATE: resolved_cleared_state,
+					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
+					CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+				}
+
+				if entity_off_delay is not None:
+					updated_config[CONF_ENTITY_OFF_DELAY] = entity_off_delay
+				elif CONF_ENTITY_OFF_DELAY in self._current_entity_config:
+					updated_config.pop(CONF_ENTITY_OFF_DELAY, None)
+
+				if editing and self._editing_index is not None:
+					self._controlled_entities[self._editing_index] = updated_config
+				else:
+					self._controlled_entities.append(updated_config)
+
+				self._current_entity_config = {}
+				self._selected_entity_id = None
+				self._editing_index = None
+				self._custom_state_ui = {}
+				if getattr(self, "_finalize_after_configure", False) and hasattr(self, "_finalize_and_reload"):
+					self._finalize_after_configure = False
+					return await self._finalize_and_reload()
+				return await self.async_step_manage_entities()
+
+		if use_dropdown:
+			state_options = list(state_option_source.options)
+			state_options.append(selector.SelectOptionDict(value=STATE_OPTION_CUSTOM, label=CUSTOM_LABEL))
+			detected_default, detected_custom_default = _state_field_defaults(
+				defaults[CONF_PRESENCE_DETECTED_STATE],
+				ha_values=state_option_source.ha_values,
+				ui_state=self._custom_state_ui,
+				ui_key=UI_CUSTOM_DETECTED_KEY,
+			)
+			cleared_default, cleared_custom_default = _state_field_defaults(
+				defaults[CONF_PRESENCE_CLEARED_STATE],
+				ha_values=state_option_source.ha_values,
+				ui_state=self._custom_state_ui,
+				ui_key=UI_CUSTOM_CLEARED_KEY,
+			)
 			detected_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=state_option_source.options,
+					options=state_options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)
-		else:
-			detected_state_field = str
-		if state_option_source.from_hass and state_option_source.options:
 			cleared_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=state_option_source.options,
+					options=state_options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)
+			detected_custom_selector = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
+				)
+			)
+			cleared_custom_selector = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
+				)
+			)
+			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
+			if detected_custom_default is not None:
+				detected_custom_field = vol.Optional(
+					FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
+					default=detected_custom_default,
+				)
+			cleared_custom_field = vol.Optional(FIELD_PRESENCE_CLEARED_STATE_CUSTOM)
+			if cleared_custom_default is not None:
+				cleared_custom_field = vol.Optional(
+					FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
+					default=cleared_custom_default,
+				)
 		else:
+			detected_state_field = str
 			cleared_state_field = str
+			detected_custom_selector = None
+			cleared_custom_selector = None
+			detected_default = defaults[CONF_PRESENCE_DETECTED_STATE]
+			cleared_default = defaults[CONF_PRESENCE_CLEARED_STATE]
+
+		schema_fields: dict = {
+			vol.Required(
+				CONF_PRESENCE_DETECTED_SERVICE,
+				default=defaults[CONF_PRESENCE_DETECTED_SERVICE],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=service_options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			),
+			vol.Required(
+				CONF_PRESENCE_DETECTED_STATE,
+				default=detected_default,
+			): detected_state_field,
+			vol.Required(
+				CONF_PRESENCE_CLEARED_SERVICE,
+				default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=service_options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			),
+			vol.Required(
+				CONF_PRESENCE_CLEARED_STATE,
+				default=cleared_default,
+			): cleared_state_field,
+			vol.Required(
+				CONF_RESPECTS_PRESENCE_ALLOWED,
+				default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
+			): selector.BooleanSelector(),
+			vol.Required(
+				CONF_DISABLE_ON_EXTERNAL_CONTROL,
+				default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+			): selector.BooleanSelector(),
+			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
+		}
+
+		if use_dropdown and detected_custom_selector is not None and cleared_custom_selector is not None:
+			schema_fields[detected_custom_field] = detected_custom_selector
+			schema_fields[cleared_custom_field] = cleared_custom_selector
 
 		return self.async_show_form(
 			step_id=STEP_CONFIGURE_ENTITY,
-			data_schema=vol.Schema(
-				{
-					vol.Required(
-						CONF_PRESENCE_DETECTED_SERVICE,
-						default=defaults[CONF_PRESENCE_DETECTED_SERVICE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=service_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-						)
-					),
-					vol.Required(
-						CONF_PRESENCE_DETECTED_STATE,
-						default=defaults[CONF_PRESENCE_DETECTED_STATE],
-					): detected_state_field,
-					vol.Required(
-						CONF_PRESENCE_CLEARED_SERVICE,
-						default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=service_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-						)
-					),
-					vol.Required(
-						CONF_PRESENCE_CLEARED_STATE,
-						default=defaults[CONF_PRESENCE_CLEARED_STATE],
-					): cleared_state_field,
-					vol.Required(
-						CONF_RESPECTS_PRESENCE_ALLOWED,
-						default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
-					): selector.BooleanSelector(),
-					vol.Required(
-						CONF_DISABLE_ON_EXTERNAL_CONTROL,
-						default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-					): selector.BooleanSelector(),
-					delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
-				}
-			),
+			data_schema=vol.Schema(schema_fields),
 			errors=self._errors,
 			description_placeholders={
 				"entity_name": entity_name,
@@ -631,6 +750,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					self._editing_index = idx
 					self._current_entity_config = copy.deepcopy(self._controlled_entities[idx])
 					self._selected_entity_id = self._current_entity_config[CONF_ENTITY_ID]
+					self._custom_state_ui = {}
 					return await self.async_step_configure_entity()
 				self._errors = {FIELD_EDIT_ENTITY: "invalid_entity"}
 
@@ -740,6 +860,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		self._current_entity_config: dict = {}
 		self._editing_index: int | None = None
 		self._finalize_after_configure: bool = False
+		self._custom_state_ui: dict[str, str | None] = {}
 		_LOGGER.debug("OptionsFlow.__init__ complete. Loaded %d entities", len(self._controlled_entities))
 	
 	@property
@@ -852,6 +973,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					self._current_entity_config = copy.deepcopy(self._controlled_entities[idx])
 					self._selected_entity_id = self._current_entity_config[CONF_ENTITY_ID]
 					self._finalize_after_configure = True
+					self._custom_state_ui = {}
 					return await self.async_step_configure_entity()
 				self._errors = {FIELD_EDIT_ENTITY: "invalid_entity"}
 
@@ -982,6 +1104,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				entity_id = cv.entity_id(user_input[CONF_ENTITY_ID])
 				self._selected_entity_id = entity_id
 				self._current_entity_config = {CONF_ENTITY_ID: entity_id}
+				self._custom_state_ui = {}
 				return await self.async_step_configure_entity()
 			except vol.Invalid:
 				self._errors = {CONF_ENTITY_ID: "invalid_entity"}
@@ -1005,37 +1128,6 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		"""Step to configure the selected entity's services and behavior."""
 		self._errors = {}
 		editing = self._editing_index is not None
-
-		if user_input is not None:
-			updated_config = {
-				CONF_ENTITY_ID: self._selected_entity_id,
-				CONF_PRESENCE_DETECTED_SERVICE: user_input[CONF_PRESENCE_DETECTED_SERVICE],
-				CONF_PRESENCE_DETECTED_STATE: user_input[CONF_PRESENCE_DETECTED_STATE],
-				CONF_PRESENCE_CLEARED_SERVICE: user_input[CONF_PRESENCE_CLEARED_SERVICE],
-				CONF_PRESENCE_CLEARED_STATE: user_input[CONF_PRESENCE_CLEARED_STATE],
-				CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
-				CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-				CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
-			}
-
-			entity_off_delay = user_input.get(CONF_ENTITY_OFF_DELAY)
-			if entity_off_delay is not None:
-				updated_config[CONF_ENTITY_OFF_DELAY] = entity_off_delay
-			elif CONF_ENTITY_OFF_DELAY in self._current_entity_config:
-				updated_config.pop(CONF_ENTITY_OFF_DELAY, None)
-
-			if editing and self._editing_index is not None:
-				self._controlled_entities[self._editing_index] = updated_config
-			else:
-				self._controlled_entities.append(updated_config)
-
-			self._current_entity_config = {}
-			self._selected_entity_id = None
-			self._editing_index = None
-			if getattr(self, "_finalize_after_configure", False) and hasattr(self, "_finalize_and_reload"):
-				self._finalize_after_configure = False
-				return await self._finalize_and_reload()
-			return await self.async_step_manage_entities()
 
 		entity_id = self._selected_entity_id
 		entity_name = _get_entity_name(self.hass, entity_id)
@@ -1077,66 +1169,169 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				defaults[CONF_PRESENCE_CLEARED_STATE],
 			],
 		)
-		if state_option_source.from_hass and state_option_source.options:
+		use_dropdown = bool(state_option_source.from_hass and state_option_source.options)
+
+		if user_input is not None:
+			entity_off_delay = user_input.get(CONF_ENTITY_OFF_DELAY)
+			resolved_detected_state = str(user_input[CONF_PRESENCE_DETECTED_STATE]).strip()
+			resolved_cleared_state = str(user_input[CONF_PRESENCE_CLEARED_STATE]).strip()
+
+			if use_dropdown:
+				resolved_detected_state, detected_missing = _resolve_custom_state_selection(
+					resolved_detected_state,
+					user_input.get(FIELD_PRESENCE_DETECTED_STATE_CUSTOM),
+					ui_state=self._custom_state_ui,
+					ui_key=UI_CUSTOM_DETECTED_KEY,
+				)
+				resolved_cleared_state, cleared_missing = _resolve_custom_state_selection(
+					resolved_cleared_state,
+					user_input.get(FIELD_PRESENCE_CLEARED_STATE_CUSTOM),
+					ui_state=self._custom_state_ui,
+					ui_key=UI_CUSTOM_CLEARED_KEY,
+				)
+				if detected_missing:
+					self._errors[FIELD_PRESENCE_DETECTED_STATE_CUSTOM] = "custom_state_required"
+				if cleared_missing:
+					self._errors[FIELD_PRESENCE_CLEARED_STATE_CUSTOM] = "custom_state_required"
+			else:
+				self._custom_state_ui.pop(UI_CUSTOM_DETECTED_KEY, None)
+				self._custom_state_ui.pop(UI_CUSTOM_CLEARED_KEY, None)
+
+			if not self._errors:
+				updated_config = {
+					CONF_ENTITY_ID: self._selected_entity_id,
+					CONF_PRESENCE_DETECTED_SERVICE: user_input[CONF_PRESENCE_DETECTED_SERVICE],
+					CONF_PRESENCE_DETECTED_STATE: resolved_detected_state,
+					CONF_PRESENCE_CLEARED_SERVICE: user_input[CONF_PRESENCE_CLEARED_SERVICE],
+					CONF_PRESENCE_CLEARED_STATE: resolved_cleared_state,
+					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
+					CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+				}
+
+				if entity_off_delay is not None:
+					updated_config[CONF_ENTITY_OFF_DELAY] = entity_off_delay
+				elif CONF_ENTITY_OFF_DELAY in self._current_entity_config:
+					updated_config.pop(CONF_ENTITY_OFF_DELAY, None)
+
+				if editing and self._editing_index is not None:
+					self._controlled_entities[self._editing_index] = updated_config
+				else:
+					self._controlled_entities.append(updated_config)
+
+				self._current_entity_config = {}
+				self._selected_entity_id = None
+				self._editing_index = None
+				self._custom_state_ui = {}
+				if getattr(self, "_finalize_after_configure", False) and hasattr(self, "_finalize_and_reload"):
+					self._finalize_after_configure = False
+					return await self._finalize_and_reload()
+				return await self.async_step_manage_entities()
+
+		if use_dropdown:
+			state_options = list(state_option_source.options)
+			state_options.append(selector.SelectOptionDict(value=STATE_OPTION_CUSTOM, label=CUSTOM_LABEL))
+			detected_default, detected_custom_default = _state_field_defaults(
+				defaults[CONF_PRESENCE_DETECTED_STATE],
+				ha_values=state_option_source.ha_values,
+				ui_state=self._custom_state_ui,
+				ui_key=UI_CUSTOM_DETECTED_KEY,
+			)
+			cleared_default, cleared_custom_default = _state_field_defaults(
+				defaults[CONF_PRESENCE_CLEARED_STATE],
+				ha_values=state_option_source.ha_values,
+				ui_state=self._custom_state_ui,
+				ui_key=UI_CUSTOM_CLEARED_KEY,
+			)
 			detected_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=state_option_source.options,
+					options=state_options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)
-		else:
-			detected_state_field = str
-		if state_option_source.from_hass and state_option_source.options:
 			cleared_state_field = selector.SelectSelector(
 				selector.SelectSelectorConfig(
-					options=state_option_source.options,
+					options=state_options,
 					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			)
+			detected_custom_selector = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
+				)
+			)
+			cleared_custom_selector = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
+				)
+			)
+			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
+			if detected_custom_default is not None:
+				detected_custom_field = vol.Optional(
+					FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
+					default=detected_custom_default,
+				)
+			cleared_custom_field = vol.Optional(FIELD_PRESENCE_CLEARED_STATE_CUSTOM)
+			if cleared_custom_default is not None:
+				cleared_custom_field = vol.Optional(
+					FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
+					default=cleared_custom_default,
+				)
 		else:
+			detected_state_field = str
 			cleared_state_field = str
+			detected_custom_selector = None
+			cleared_custom_selector = None
+			detected_default = defaults[CONF_PRESENCE_DETECTED_STATE]
+			cleared_default = defaults[CONF_PRESENCE_CLEARED_STATE]
+
+		schema_fields: dict = {
+			vol.Required(
+				CONF_PRESENCE_DETECTED_SERVICE,
+				default=defaults[CONF_PRESENCE_DETECTED_SERVICE],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=service_options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			),
+			vol.Required(
+				CONF_PRESENCE_DETECTED_STATE,
+				default=detected_default,
+			): detected_state_field,
+			vol.Required(
+				CONF_PRESENCE_CLEARED_SERVICE,
+				default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=service_options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			),
+			vol.Required(
+				CONF_PRESENCE_CLEARED_STATE,
+				default=cleared_default,
+			): cleared_state_field,
+			vol.Required(
+				CONF_RESPECTS_PRESENCE_ALLOWED,
+				default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
+			): selector.BooleanSelector(),
+			vol.Required(
+				CONF_DISABLE_ON_EXTERNAL_CONTROL,
+				default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+			): selector.BooleanSelector(),
+			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
+		}
+
+		if use_dropdown and detected_custom_selector is not None and cleared_custom_selector is not None:
+			schema_fields[detected_custom_field] = detected_custom_selector
+			schema_fields[cleared_custom_field] = cleared_custom_selector
 
 		return self.async_show_form(
 			step_id=STEP_CONFIGURE_ENTITY,
-			data_schema=vol.Schema(
-				{
-					vol.Required(
-						CONF_PRESENCE_DETECTED_SERVICE,
-						default=defaults[CONF_PRESENCE_DETECTED_SERVICE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=service_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-						)
-					),
-					vol.Required(
-						CONF_PRESENCE_DETECTED_STATE,
-						default=defaults[CONF_PRESENCE_DETECTED_STATE],
-					): detected_state_field,
-					vol.Required(
-						CONF_PRESENCE_CLEARED_SERVICE,
-						default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
-					): selector.SelectSelector(
-						selector.SelectSelectorConfig(
-							options=service_options,
-							mode=selector.SelectSelectorMode.DROPDOWN,
-						)
-					),
-					vol.Required(
-						CONF_PRESENCE_CLEARED_STATE,
-						default=defaults[CONF_PRESENCE_CLEARED_STATE],
-					): cleared_state_field,
-					vol.Required(
-						CONF_RESPECTS_PRESENCE_ALLOWED,
-						default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
-					): selector.BooleanSelector(),
-					vol.Required(
-						CONF_DISABLE_ON_EXTERNAL_CONTROL,
-						default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-					): selector.BooleanSelector(),
-					delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
-				}
-			),
+			data_schema=vol.Schema(schema_fields),
 			errors=self._errors,
 			description_placeholders={
 				"entity_name": entity_name,

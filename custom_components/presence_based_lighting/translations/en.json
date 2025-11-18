@@ -31,8 +31,10 @@
         "data": {
           "presence_detected_service": "Action When Presence Detected",
           "presence_detected_state": "Expected State After Detection",
+          "presence_detected_state_custom": "Custom State",
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
+          "presence_cleared_state_custom": "Custom State",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
           "disable_on_external_control": "Disable on Manual Control",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
@@ -40,8 +42,10 @@
         "data_description": {
           "presence_detected_service": "Service to call when presence is detected (e.g., turn_on). Select 'No Action' to do nothing.",
           "presence_detected_state": "The state the entity should be in after the detection service is called",
+          "presence_detected_state_custom": "Only used when selecting Custom above. Enter the state you expect after detection when it's missing from the dropdown.",
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off). Select 'No Action' to do nothing.",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
+          "presence_cleared_state_custom": "Only used when selecting Custom above. Enter the state you expect after presence clears when it's missing from the dropdown.",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
@@ -76,7 +80,8 @@
       "already_configured": "This room is already configured",
       "invalid_entity": "Invalid entity ID",
       "no_controlled_entities": "You must add at least one entity to control",
-      "no_services_available": "No compatible services found for this entity"
+      "no_services_available": "No compatible services found for this entity",
+      "custom_state_required": "Enter a custom state when selecting the Custom option."
     },
     "abort": {
       "already_configured": "This room is already configured"
@@ -112,8 +117,10 @@
         "data": {
           "presence_detected_service": "Action When Presence Detected",
           "presence_detected_state": "Expected State After Detection",
+          "presence_detected_state_custom": "Custom State",
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
+          "presence_cleared_state_custom": "Custom State",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
           "disable_on_external_control": "Disable on Manual Control",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
@@ -121,8 +128,10 @@
         "data_description": {
           "presence_detected_service": "Service to call when presence is detected (e.g., turn_on). Select 'No Action' to do nothing.",
           "presence_detected_state": "The state the entity should be in after the detection service is called",
+          "presence_detected_state_custom": "Only used when selecting Custom above. Enter the state you expect after detection when it's missing from the dropdown.",
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off). Select 'No Action' to do nothing.",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
+          "presence_cleared_state_custom": "Only used when selecting Custom above. Enter the state you expect after presence clears when it's missing from the dropdown.",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch)",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
@@ -187,7 +196,8 @@
       "invalid_entity": "Invalid entity ID",
       "no_controlled_entities": "You must add at least one entity to control",
       "no_services_available": "No compatible services found for this entity",
-      "select_entities_to_delete": "Select at least one entity to delete"
+      "select_entities_to_delete": "Select at least one entity to delete",
+      "custom_state_required": "Enter a custom state when selecting the Custom option."
     }
   },
   "entity_component": {

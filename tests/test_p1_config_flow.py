@@ -15,8 +15,11 @@ from custom_components.presence_based_lighting.config_flow import (
     ACTION_EDIT_ENTITY,
     ACTION_NO_ACTION,
     FIELD_LANDING_ACTION,
+    FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
+    FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
     NO_ACTION,
     PresenceBasedLightingFlowHandler,
+    STATE_OPTION_CUSTOM,
     STEP_CHOOSE_EDIT_ENTITY,
     STEP_DELETE_ENTITIES,
     STEP_SELECT_ENTITY,
@@ -211,7 +214,18 @@ async def test_configure_entity_uses_state_dropdown_when_options_available(_mock
 
     assert "select" in detected_selector
     assert detected_selector["select"]["options"][0]["value"] == "auto"
+    option_values = [option["value"] for option in detected_selector["select"]["options"]]
+    assert option_values[-1] == STATE_OPTION_CUSTOM
     assert "select" in cleared_selector
+
+    detected_custom_field = next(
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+    )
+    cleared_custom_field = next(
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+    )
+    assert "text" in schema.schema[detected_custom_field]
+    assert "text" in schema.schema[cleared_custom_field]
 
 
 @pytest.mark.asyncio
@@ -283,7 +297,13 @@ async def test_history_states_populate_dropdown_when_live_state_missing(_mock_se
 
     assert detected_selector == cleared_selector
     option_values = [option["value"] for option in detected_selector["select"]["options"]]
-    assert option_values == ["occupied", "vacant", DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE]
+    assert option_values == [
+        "occupied",
+        "vacant",
+        DEFAULT_DETECTED_STATE,
+        DEFAULT_CLEARED_STATE,
+        STATE_OPTION_CUSTOM,
+    ]
 
 
 @pytest.mark.asyncio
@@ -321,4 +341,81 @@ async def test_state_dropdown_includes_defaults_for_both_fields(_mock_services):
 
     assert detected_selector == cleared_selector
     values = [option["value"] for option in detected_selector["select"]["options"]]
-    assert values == [DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE]
+    assert values == [DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE, STATE_OPTION_CUSTOM]
+
+
+@pytest.mark.asyncio
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_configure_entity_saves_custom_state_when_selected(_mock_services):
+    """Selecting Custom should persist the provided manual state."""
+    handler = PresenceBasedLightingFlowHandler()
+    handler.hass = MagicMock()
+    state_obj = MagicMock()
+    state_obj.attributes = {"friendly_name": "Office Lamp", "options": ["auto", "manual"]}
+    state_obj.state = "auto"
+    handler.hass.states.get.return_value = state_obj
+    handler.async_show_form = MagicMock(return_value={"type": "form"})
+
+    async def mock_manage():
+        return "manage_step"
+
+    handler.async_step_manage_entities = mock_manage
+
+    await handler.async_step_user(
+        {
+            CONF_ROOM_NAME: "Office",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.office_motion"],
+            CONF_OFF_DELAY: DEFAULT_OFF_DELAY,
+        }
+    )
+    await handler.async_step_select_entity({CONF_ENTITY_ID: "light.office"})
+
+    custom_input = _default_configure_input()
+    custom_input[CONF_PRESENCE_DETECTED_STATE] = STATE_OPTION_CUSTOM
+    custom_input[FIELD_PRESENCE_DETECTED_STATE_CUSTOM] = "dimmed"
+
+    result = await handler.async_step_configure_entity(custom_input)
+
+    assert result == "manage_step"
+    saved = handler._controlled_entities[0]
+    assert saved[CONF_PRESENCE_DETECTED_STATE] == "dimmed"
+    assert saved[CONF_PRESENCE_CLEARED_STATE] == DEFAULT_CLEARED_STATE
+
+
+@pytest.mark.asyncio
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_configure_entity_requires_custom_text_when_option_selected(_mock_services):
+    """Custom selection without text should surface a validation error."""
+    handler = PresenceBasedLightingFlowHandler()
+    handler.hass = MagicMock()
+    state_obj = MagicMock()
+    state_obj.attributes = {"friendly_name": "Den Light", "options": ["auto", "manual"]}
+    state_obj.state = "auto"
+    handler.hass.states.get.return_value = state_obj
+    handler.async_show_form = MagicMock(return_value={"type": "form"})
+
+    await handler.async_step_user(
+        {
+            CONF_ROOM_NAME: "Den",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.den_motion"],
+            CONF_OFF_DELAY: DEFAULT_OFF_DELAY,
+        }
+    )
+    await handler.async_step_select_entity({CONF_ENTITY_ID: "light.den"})
+
+    custom_input = _default_configure_input()
+    custom_input[CONF_PRESENCE_DETECTED_STATE] = STATE_OPTION_CUSTOM
+
+    result = await handler.async_step_configure_entity(custom_input)
+
+    assert result == {"type": "form"}
+    assert handler._errors == {FIELD_PRESENCE_DETECTED_STATE_CUSTOM: "custom_state_required"}
+    schema = handler.async_show_form.call_args.kwargs["data_schema"]
+    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
+    assert schema.schema[detected_field]["select"]["options"][-1]["value"] == STATE_OPTION_CUSTOM
