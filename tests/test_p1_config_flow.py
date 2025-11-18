@@ -81,7 +81,10 @@ async def test_configure_entity_transitions_back_to_manage(_mock_services):
     """Completing entity configuration should return the manage view."""
     handler = PresenceBasedLightingFlowHandler()
     handler.hass = MagicMock()
-    handler.hass.states.get.return_value = MagicMock(attributes={"friendly_name": "Kitchen Light"})
+    state_obj = MagicMock()
+    state_obj.attributes = {"friendly_name": "Kitchen Light", "options": ["on", "off"]}
+    state_obj.state = "off"
+    handler.hass.states.get.return_value = state_obj
     handler.async_show_form = MagicMock(return_value={"type": "form"})
 
     async def mock_manage():
@@ -165,3 +168,75 @@ async def test_manage_entities_routes_to_edit_delete_and_add():
     assert handler.async_show_form.call_args.kwargs["step_id"] == STEP_SELECT_ENTITY
     assert handler._selected_entity_id is None  # type: ignore[attr-defined]
     assert handler._current_entity_config == {}  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_configure_entity_uses_state_dropdown_when_options_available(_mock_services):
+    """State fields should render dropdown selectors when HA exposes options."""
+    handler = PresenceBasedLightingFlowHandler()
+    handler.hass = MagicMock()
+    state_obj = MagicMock()
+    state_obj.attributes = {
+        "friendly_name": "Hallway Light",
+        "options": ["auto", "manual"],
+    }
+    state_obj.state = "auto"
+    handler.hass.states.get.return_value = state_obj
+    handler.async_show_form = MagicMock(return_value={"type": "form"})
+
+    await handler.async_step_user(
+        {
+            CONF_ROOM_NAME: "Hallway",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.hallway_motion"],
+            CONF_OFF_DELAY: DEFAULT_OFF_DELAY,
+        }
+    )
+    await handler.async_step_select_entity({CONF_ENTITY_ID: "light.hallway"})
+
+    await handler.async_step_configure_entity()
+
+    schema = handler.async_show_form.call_args.kwargs["data_schema"]
+    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
+    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+
+    detected_selector = schema.schema[detected_field]
+    cleared_selector = schema.schema[cleared_field]
+
+    assert "select" in detected_selector
+    assert detected_selector["select"]["options"][0]["value"] == "auto"
+    assert "select" in cleared_selector
+
+
+@pytest.mark.asyncio
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_configure_entity_falls_back_to_text_when_no_state_options(_mock_services):
+    """State inputs should fall back to text fields when HA provides no options."""
+    handler = PresenceBasedLightingFlowHandler()
+    handler.hass = MagicMock()
+    handler.hass.states.get.return_value = None
+    handler.async_show_form = MagicMock(return_value={"type": "form"})
+
+    await handler.async_step_user(
+        {
+            CONF_ROOM_NAME: "Hallway",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.hallway_motion"],
+            CONF_OFF_DELAY: DEFAULT_OFF_DELAY,
+        }
+    )
+    await handler.async_step_select_entity({CONF_ENTITY_ID: "light.hallway"})
+
+    await handler.async_step_configure_entity()
+
+    schema = handler.async_show_form.call_args.kwargs["data_schema"]
+    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
+    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+
+    assert schema.schema[detected_field] is str
+    assert schema.schema[cleared_field] is str

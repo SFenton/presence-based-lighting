@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import logging
+from typing import NamedTuple
+
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback, HomeAssistant
@@ -145,6 +147,64 @@ def _presence_switch_unique_id(entry_id: str | None, entity_id: str | None) -> s
 	if not sanitized:
 		sanitized = object_id.replace(".", "_")
 	return f"{entry_id}_{sanitized}_presence_allowed"
+
+
+class StateOptionResult(NamedTuple):
+	"""State dropdown metadata including provenance."""
+
+	options: list[selector.SelectOptionDict]
+	from_hass: bool
+
+
+def _format_state_option_label(value: str) -> str:
+	"""Build a human friendly label for a state value."""
+	if not value:
+		return "(empty)"
+	pretty = value.replace("_", " ").replace("-", " ").strip()
+	return pretty.title() if pretty else value
+
+
+
+def _build_state_option_dicts(
+	hass: HomeAssistant | None,
+	entity_id: str | None,
+	ensure_values: list[str],
+) -> StateOptionResult:
+	"""Return state option metadata sourced from Home Assistant when available."""
+	if not entity_id:
+		entity_id = ""
+	state_candidates: list[str] = []
+	ha_candidates: list[str] = []
+	state_obj = None
+	if hass and entity_id:
+		state_obj = hass.states.get(entity_id)
+	if state_obj:
+		attr_options = state_obj.attributes.get("options")
+		if isinstance(attr_options, (list, tuple, set)):
+			for option in attr_options:
+				option_str = str(option)
+				if option_str:
+					state_candidates.append(option_str)
+					ha_candidates.append(option_str)
+		state_value = getattr(state_obj, "state", None)
+		if isinstance(state_value, str) and state_value:
+			state_candidates.append(state_value)
+			ha_candidates.append(state_value)
+	for required in ensure_values:
+		if required:
+			state_candidates.append(str(required))
+	unique_states: list[str] = []
+	for candidate in state_candidates:
+		candidate = str(candidate).strip()
+		if not candidate:
+			continue
+		if candidate not in unique_states:
+			unique_states.append(candidate)
+	options = [
+		selector.SelectOptionDict(value=value, label=_format_state_option_label(value))
+		for value in unique_states
+	]
+	return StateOptionResult(options=options, from_hass=bool(ha_candidates))
 
 
 class _EntityManagementMixin:
@@ -337,6 +397,39 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
 
+		detected_state_options = _build_state_option_dicts(
+			self.hass,
+			entity_id,
+			[
+				defaults[CONF_PRESENCE_DETECTED_STATE],
+			],
+		)
+		cleared_state_options = _build_state_option_dicts(
+			self.hass,
+			entity_id,
+			[
+				defaults[CONF_PRESENCE_CLEARED_STATE],
+			],
+		)
+		if detected_state_options.from_hass and detected_state_options.options:
+			detected_state_field = selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=detected_state_options.options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			)
+		else:
+			detected_state_field = str
+		if cleared_state_options.from_hass and cleared_state_options.options:
+			cleared_state_field = selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=cleared_state_options.options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			)
+		else:
+			cleared_state_field = str
+
 		return self.async_show_form(
 			step_id=STEP_CONFIGURE_ENTITY,
 			data_schema=vol.Schema(
@@ -353,7 +446,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Required(
 						CONF_PRESENCE_DETECTED_STATE,
 						default=defaults[CONF_PRESENCE_DETECTED_STATE],
-					): str,
+					): detected_state_field,
 					vol.Required(
 						CONF_PRESENCE_CLEARED_SERVICE,
 						default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
@@ -366,7 +459,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Required(
 						CONF_PRESENCE_CLEARED_STATE,
 						default=defaults[CONF_PRESENCE_CLEARED_STATE],
-					): str,
+					): cleared_state_field,
 					vol.Required(
 						CONF_RESPECTS_PRESENCE_ALLOWED,
 						default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
@@ -910,6 +1003,39 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
 
+		detected_state_options = _build_state_option_dicts(
+			self.hass,
+			entity_id,
+			[
+				defaults[CONF_PRESENCE_DETECTED_STATE],
+			],
+		)
+		cleared_state_options = _build_state_option_dicts(
+			self.hass,
+			entity_id,
+			[
+				defaults[CONF_PRESENCE_CLEARED_STATE],
+			],
+		)
+		if detected_state_options.from_hass and detected_state_options.options:
+			detected_state_field = selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=detected_state_options.options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			)
+		else:
+			detected_state_field = str
+		if cleared_state_options.from_hass and cleared_state_options.options:
+			cleared_state_field = selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=cleared_state_options.options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			)
+		else:
+			cleared_state_field = str
+
 		return self.async_show_form(
 			step_id=STEP_CONFIGURE_ENTITY,
 			data_schema=vol.Schema(
@@ -926,7 +1052,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					vol.Required(
 						CONF_PRESENCE_DETECTED_STATE,
 						default=defaults[CONF_PRESENCE_DETECTED_STATE],
-					): str,
+					): detected_state_field,
 					vol.Required(
 						CONF_PRESENCE_CLEARED_SERVICE,
 						default=defaults[CONF_PRESENCE_CLEARED_SERVICE],
@@ -939,7 +1065,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					vol.Required(
 						CONF_PRESENCE_CLEARED_STATE,
 						default=defaults[CONF_PRESENCE_CLEARED_STATE],
-					): str,
+					): cleared_state_field,
 					vol.Required(
 						CONF_RESPECTS_PRESENCE_ALLOWED,
 						default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
