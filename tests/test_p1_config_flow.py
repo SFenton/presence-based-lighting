@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+# Ensure HA stubs defined before importing the config flow
+import tests.conftest  # noqa: F401
 
 import pytest
 
@@ -240,6 +243,47 @@ async def test_configure_entity_falls_back_to_text_when_no_state_options(_mock_s
 
     assert schema.schema[detected_field] is str
     assert schema.schema[cleared_field] is str
+
+
+@pytest.mark.asyncio
+@patch(
+    "custom_components.presence_based_lighting.config_flow._async_get_history_states",
+    new_callable=AsyncMock,
+)
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
+async def test_history_states_populate_dropdown_when_live_state_missing(_mock_services, mock_history):
+    """Recorder history should seed dropdowns when present."""
+    mock_history.return_value = ["occupied", "vacant"]
+
+    handler = PresenceBasedLightingFlowHandler()
+    handler.hass = MagicMock()
+    handler.hass.states.get.return_value = None
+    handler.async_show_form = MagicMock(return_value={"type": "form"})
+
+    await handler.async_step_user(
+        {
+            CONF_ROOM_NAME: "Bedroom",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.bed_motion"],
+            CONF_OFF_DELAY: DEFAULT_OFF_DELAY,
+        }
+    )
+    await handler.async_step_select_entity({CONF_ENTITY_ID: "light.bedroom"})
+
+    await handler.async_step_configure_entity()
+
+    schema = handler.async_show_form.call_args.kwargs["data_schema"]
+    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
+    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+
+    detected_selector = schema.schema[detected_field]
+    cleared_selector = schema.schema[cleared_field]
+
+    assert detected_selector == cleared_selector
+    option_values = [option["value"] for option in detected_selector["select"]["options"]]
+    assert option_values == ["occupied", "vacant", DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE]
 
 
 @pytest.mark.asyncio

@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import copy
 import logging
+from datetime import timedelta
 from typing import NamedTuple
 
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback, HomeAssistant
 import homeassistant.helpers.config_validation as cv
+from homeassistant.components.recorder import history
 from homeassistant.helpers import selector, entity_registry as er
-from homeassistant.util import slugify
+from homeassistant.util import dt as dt_util, slugify
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +56,9 @@ ACTION_ADD_ENTITY = "add"
 ACTION_NO_ACTION = "no_action"
 ACTION_EDIT_ENTITY = "edit"
 ACTION_DELETE_ENTITIES = "delete"
+
+RECORDER_LOOKBACK = timedelta(days=14)
+RECORDER_STATE_LIMIT = 25
 
 
 def _get_entity_domain(entity_id: str) -> str:
@@ -164,8 +169,70 @@ def _format_state_option_label(value: str) -> str:
 	return pretty.title() if pretty else value
 
 
+async def _async_get_history_states(
+	hass: HomeAssistant | None,
+	entity_id: str | None,
+	*,
+	lookback: timedelta = RECORDER_LOOKBACK,
+	max_states: int = RECORDER_STATE_LIMIT,
+) -> list[str]:
+	"""Fetch prior recorder states for an entity, ordered by newest first."""
+	if not hass or not entity_id:
+		return []
+	async_executor = getattr(hass, "async_add_executor_job", None)
+	if async_executor is None:
+		return []
+	end_time = dt_util.utcnow()
+	start_time = end_time - lookback
 
-def _build_state_option_dicts(
+	def _fetch_history() -> list[str]:  # pragma: no cover - executed in executor
+		try:
+			history_dict = history.get_significant_states(
+				hass,
+				start_time,
+				end_time=end_time,
+				entity_ids=[entity_id],
+				include_start_time_state=True,
+				significant_changes_only=False,
+				minimal_response=True,
+			)
+		except Exception as err:
+			_LOGGER.debug("Recorder history lookup failed for %s: %s", entity_id, err)
+			return []
+		states = history_dict.get(entity_id, [])
+		values: list[str] = []
+		for state in states:
+			value = getattr(state, "state", None)
+			if isinstance(value, str) and value:
+				values.append(value)
+		return values
+
+	try:
+		executor_job = async_executor(_fetch_history)
+	except Exception as err:
+		_LOGGER.debug("Recorder executor scheduling failed for %s: %s", entity_id, err)
+		return []
+	if not hasattr(executor_job, "__await__"):
+		return []
+	try:
+		history_values = await executor_job
+	except Exception as err:
+		_LOGGER.debug("Recorder executor job failed for %s: %s", entity_id, err)
+		return []
+
+	unique: list[str] = []
+	for value in history_values:
+		normalized = str(value).strip()
+		if not normalized or normalized in unique:
+			continue
+		unique.append(normalized)
+		if len(unique) >= max_states:
+			break
+	return unique
+
+
+
+async def _build_state_option_dicts(
 	hass: HomeAssistant | None,
 	entity_id: str | None,
 	ensure_values: list[str],
@@ -190,6 +257,11 @@ def _build_state_option_dicts(
 		if isinstance(state_value, str) and state_value:
 			state_candidates.append(state_value)
 			ha_candidates.append(state_value)
+	if hass and entity_id:
+		history_states = await _async_get_history_states(hass, entity_id)
+		for hist_state in history_states:
+			state_candidates.append(hist_state)
+			ha_candidates.append(hist_state)
 	for required in ensure_values:
 		if required:
 			state_candidates.append(str(required))
@@ -397,7 +469,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
 
-		state_option_source = _build_state_option_dicts(
+		state_option_source = await _build_state_option_dicts(
 			self.hass,
 			entity_id,
 			[
@@ -997,7 +1069,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
 
-		state_option_source = _build_state_option_dicts(
+		state_option_source = await _build_state_option_dicts(
 			self.hass,
 			entity_id,
 			[

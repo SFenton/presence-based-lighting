@@ -36,6 +36,23 @@ const_module = types.ModuleType('homeassistant.const')
 sys.modules['homeassistant.const'] = const_module
 homeassistant_module.const = const_module
 
+components_module = types.ModuleType('homeassistant.components')
+sys.modules['homeassistant.components'] = components_module
+homeassistant_module.components = components_module
+
+recorder_module = types.ModuleType('homeassistant.components.recorder')
+sys.modules['homeassistant.components.recorder'] = recorder_module
+components_module.recorder = recorder_module
+
+recorder_history_module = types.ModuleType('homeassistant.components.recorder.history')
+
+def _recorder_get_significant_states(*_args, **_kwargs):
+    return {}
+
+recorder_history_module.get_significant_states = _recorder_get_significant_states
+sys.modules['homeassistant.components.recorder.history'] = recorder_history_module
+recorder_module.history = recorder_history_module
+
 config_entries_module = types.ModuleType('homeassistant.config_entries')
 
 # Create base flow classes with async methods
@@ -120,6 +137,17 @@ def _slugify(value: str) -> str:
 
 
 util_module.slugify = _slugify
+
+dt_module = types.ModuleType('homeassistant.util.dt')
+
+from datetime import datetime, timezone
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+dt_module.utcnow = _utcnow
+sys.modules['homeassistant.util.dt'] = dt_module
+util_module.dt = dt_module
 
 
 @pytest_asyncio.fixture(autouse=True, scope="session")
