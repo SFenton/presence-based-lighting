@@ -217,15 +217,14 @@ async def test_configure_entity_uses_state_dropdown_when_options_available(_mock
     option_values = [option["value"] for option in detected_selector["select"]["options"]]
     assert option_values[-1] == STATE_OPTION_CUSTOM
     assert "select" in cleared_selector
-
-    detected_custom_field = next(
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+    assert all(
+        getattr(field, "schema", None) != FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+        for field in schema.schema
     )
-    cleared_custom_field = next(
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+    assert all(
+        getattr(field, "schema", None) != FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+        for field in schema.schema
     )
-    assert "text" in schema.schema[detected_custom_field]
-    assert "text" in schema.schema[cleared_custom_field]
 
 
 @pytest.mark.asyncio
@@ -342,6 +341,14 @@ async def test_state_dropdown_includes_defaults_for_both_fields(_mock_services):
     assert detected_selector == cleared_selector
     values = [option["value"] for option in detected_selector["select"]["options"]]
     assert values == [DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE, STATE_OPTION_CUSTOM]
+    assert all(
+        getattr(field, "schema", None) != FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+        for field in schema.schema
+    )
+    assert all(
+        getattr(field, "schema", None) != FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+        for field in schema.schema
+    )
 
 
 @pytest.mark.asyncio
@@ -390,6 +397,47 @@ async def test_configure_entity_saves_custom_state_when_selected(_mock_services)
     "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
     return_value=SERVICE_OPTION_FIXTURE,
 )
+async def test_existing_custom_state_shows_text_field(_mock_services):
+    """Editing an entity with an unknown state should display the custom input."""
+    handler = PresenceBasedLightingFlowHandler()
+    handler.hass = MagicMock()
+    state_obj = MagicMock()
+    state_obj.attributes = {"friendly_name": "Office Lamp", "options": ["on", "off"]}
+    state_obj.state = "on"
+    handler.hass.states.get.return_value = state_obj
+    handler.async_show_form = MagicMock(return_value={"type": "form"})
+
+    handler._current_entity_config = {  # type: ignore[attr-defined]
+        CONF_ENTITY_ID: "light.office",
+        CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+        CONF_PRESENCE_DETECTED_STATE: "dimmed",
+        CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+        CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+        CONF_RESPECTS_PRESENCE_ALLOWED: DEFAULT_RESPECTS_PRESENCE_ALLOWED,
+        CONF_DISABLE_ON_EXTERNAL_CONTROL: False,
+    }
+    handler._selected_entity_id = "light.office"  # type: ignore[attr-defined]
+
+    await handler.async_step_configure_entity()
+
+    schema = handler.async_show_form.call_args.kwargs["data_schema"]
+    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
+    assert schema.schema[detected_field]["select"]["options"][-1]["value"] == STATE_OPTION_CUSTOM
+    custom_field = next(
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+    )
+    assert schema.schema[custom_field]["text"]["multiline"] is False
+    assert all(
+        getattr(field, "schema", None) != FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+        for field in schema.schema
+    )
+
+
+@pytest.mark.asyncio
+@patch(
+    "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
+    return_value=SERVICE_OPTION_FIXTURE,
+)
 async def test_configure_entity_requires_custom_text_when_option_selected(_mock_services):
     """Custom selection without text should surface a validation error."""
     handler = PresenceBasedLightingFlowHandler()
@@ -419,3 +467,7 @@ async def test_configure_entity_requires_custom_text_when_option_selected(_mock_
     schema = handler.async_show_form.call_args.kwargs["data_schema"]
     detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
     assert schema.schema[detected_field]["select"]["options"][-1]["value"] == STATE_OPTION_CUSTOM
+    custom_field = next(
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+    )
+    assert "text" in schema.schema[custom_field]
