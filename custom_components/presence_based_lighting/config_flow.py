@@ -174,7 +174,6 @@ class StateFieldDefaults(NamedTuple):
 
 	selector_default: str
 	custom_default: str | None
-	show_custom_input: bool
 
 
 def _format_state_option_label(value: str) -> str:
@@ -331,8 +330,11 @@ def _state_field_defaults(
 			use_custom = True
 			custom_default = stored_value
 	if use_custom:
-		return StateFieldDefaults(STATE_OPTION_CUSTOM, custom_default or stored_value or "", True)
-	return StateFieldDefaults(stored_value, None, False)
+		return StateFieldDefaults(
+			STATE_OPTION_CUSTOM,
+			custom_default if custom_default is not None else (stored_value or ""),
+		)
+	return StateFieldDefaults(stored_value, None)
 
 
 class _EntityManagementMixin:
@@ -584,8 +586,8 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		else:
 			detected_state_field = str
 			cleared_state_field = str
-			detected_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_DETECTED_STATE], None, False)
-			cleared_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_CLEARED_STATE], None, False)
+			detected_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_DETECTED_STATE], None)
+			cleared_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_CLEARED_STATE], None)
 			detected_default = detected_defaults.selector_default
 			cleared_default = cleared_defaults.selector_default
 
@@ -628,32 +630,30 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		}
 
 		if use_dropdown:
-			if detected_defaults.show_custom_input:
-				detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
-				if detected_defaults.custom_default is not None:
-					detected_custom_field = vol.Optional(
-						FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
-						default=detected_defaults.custom_default,
-					)
-				schema_fields[detected_custom_field] = selector.TextSelector(
-					selector.TextSelectorConfig(
-						type=selector.TextSelectorType.TEXT,
-						multiline=False,
-					)
+			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
+			if detected_defaults.custom_default is not None:
+				detected_custom_field = vol.Optional(
+					FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
+					default=detected_defaults.custom_default,
 				)
-			if cleared_defaults.show_custom_input:
-				cleared_custom_field = vol.Optional(FIELD_PRESENCE_CLEARED_STATE_CUSTOM)
-				if cleared_defaults.custom_default is not None:
-					cleared_custom_field = vol.Optional(
-						FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
-						default=cleared_defaults.custom_default,
-					)
-				schema_fields[cleared_custom_field] = selector.TextSelector(
-					selector.TextSelectorConfig(
-						type=selector.TextSelectorType.TEXT,
-						multiline=False,
-					)
+			schema_fields[detected_custom_field] = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
 				)
+			)
+			cleared_custom_field = vol.Optional(FIELD_PRESENCE_CLEARED_STATE_CUSTOM)
+			if cleared_defaults.custom_default is not None:
+				cleared_custom_field = vol.Optional(
+					FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
+					default=cleared_defaults.custom_default,
+				)
+			schema_fields[cleared_custom_field] = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
+				)
+			)
 
 		return self.async_show_form(
 			step_id=STEP_CONFIGURE_ENTITY,
@@ -1264,8 +1264,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		else:
 			detected_state_field = str
 			cleared_state_field = str
-			detected_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_DETECTED_STATE], None, False)
-			cleared_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_CLEARED_STATE], None, False)
+			detected_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_DETECTED_STATE], None)
+			cleared_defaults = StateFieldDefaults(defaults[CONF_PRESENCE_CLEARED_STATE], None)
 			detected_default = detected_defaults.selector_default
 			cleared_default = cleared_defaults.selector_default
 
@@ -1308,32 +1308,30 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		}
 
 		if use_dropdown:
-			if detected_defaults.show_custom_input:
-				detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
-				if detected_defaults.custom_default is not None:
-					detected_custom_field = vol.Optional(
-						FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
-						default=detected_defaults.custom_default,
-					)
-				schema_fields[detected_custom_field] = selector.TextSelector(
-					selector.TextSelectorConfig(
-						type=selector.TextSelectorType.TEXT,
-						multiline=False,
-					)
+			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
+			if detected_defaults.custom_default is not None:
+				detected_custom_field = vol.Optional(
+					FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
+					default=detected_defaults.custom_default,
 				)
-			if cleared_defaults.show_custom_input:
-				cleared_custom_field = vol.Optional(FIELD_PRESENCE_CLEARED_STATE_CUSTOM)
-				if cleared_defaults.custom_default is not None:
-					cleared_custom_field = vol.Optional(
-						FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
-						default=cleared_defaults.custom_default,
-					)
-				schema_fields[cleared_custom_field] = selector.TextSelector(
-					selector.TextSelectorConfig(
-						type=selector.TextSelectorType.TEXT,
-						multiline=False,
-					)
+			schema_fields[detected_custom_field] = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
 				)
+			)
+			cleared_custom_field = vol.Optional(FIELD_PRESENCE_CLEARED_STATE_CUSTOM)
+			if cleared_defaults.custom_default is not None:
+				cleared_custom_field = vol.Optional(
+					FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
+					default=cleared_defaults.custom_default,
+				)
+			schema_fields[cleared_custom_field] = selector.TextSelector(
+				selector.TextSelectorConfig(
+					type=selector.TextSelectorType.TEXT,
+					multiline=False,
+				)
+			)
 
 		return self.async_show_form(
 			step_id=STEP_CONFIGURE_ENTITY,

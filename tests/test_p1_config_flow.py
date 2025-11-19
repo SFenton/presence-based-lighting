@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from voluptuous.schema_builder import UNDEFINED
+
 # Ensure HA stubs defined before importing the config flow
 import tests.conftest  # noqa: F401
 
@@ -217,14 +219,20 @@ async def test_configure_entity_uses_state_dropdown_when_options_available(_mock
     option_values = [option["value"] for option in detected_selector["select"]["options"]]
     assert option_values[-1] == STATE_OPTION_CUSTOM
     assert "select" in cleared_selector
-    assert all(
-        getattr(field, "schema", None) != FIELD_PRESENCE_DETECTED_STATE_CUSTOM
-        for field in schema.schema
-    )
-    assert all(
-        getattr(field, "schema", None) != FIELD_PRESENCE_CLEARED_STATE_CUSTOM
-        for field in schema.schema
-    )
+
+    detected_custom_field = [
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+    ]
+    assert len(detected_custom_field) == 1
+    assert schema.schema[detected_custom_field[0]]["text"]["multiline"] is False
+    assert detected_custom_field[0].default is UNDEFINED
+
+    cleared_custom_field = [
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+    ]
+    assert len(cleared_custom_field) == 1
+    assert schema.schema[cleared_custom_field[0]]["text"]["multiline"] is False
+    assert cleared_custom_field[0].default is UNDEFINED
 
 
 @pytest.mark.asyncio
@@ -341,14 +349,18 @@ async def test_state_dropdown_includes_defaults_for_both_fields(_mock_services):
     assert detected_selector == cleared_selector
     values = [option["value"] for option in detected_selector["select"]["options"]]
     assert values == [DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE, STATE_OPTION_CUSTOM]
-    assert all(
-        getattr(field, "schema", None) != FIELD_PRESENCE_DETECTED_STATE_CUSTOM
-        for field in schema.schema
-    )
-    assert all(
-        getattr(field, "schema", None) != FIELD_PRESENCE_CLEARED_STATE_CUSTOM
-        for field in schema.schema
-    )
+
+    detected_custom_field = [
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+    ]
+    assert len(detected_custom_field) == 1
+    assert detected_custom_field[0].default is UNDEFINED
+
+    cleared_custom_field = [
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+    ]
+    assert len(cleared_custom_field) == 1
+    assert cleared_custom_field[0].default is UNDEFINED
 
 
 @pytest.mark.asyncio
@@ -427,10 +439,12 @@ async def test_existing_custom_state_shows_text_field(_mock_services):
         field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
     )
     assert schema.schema[custom_field]["text"]["multiline"] is False
-    assert all(
-        getattr(field, "schema", None) != FIELD_PRESENCE_CLEARED_STATE_CUSTOM
-        for field in schema.schema
+    assert callable(custom_field.default)
+    assert custom_field.default() == "dimmed"
+    cleared_custom_field = next(
+        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
     )
+    assert cleared_custom_field.default is UNDEFINED
 
 
 @pytest.mark.asyncio
