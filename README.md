@@ -81,7 +81,7 @@ Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_pre
   - Select the target entity
   - Pick services/states for presence detected/cleared (or `No Action`)
   - Decide whether the entity respects the toggle switch
-  - Decide if external control should pause automation
+  - Decide if external control should pause automation (manual turn-offs always pause actions until the entity is turned back on, even if the Presence Allowed switch is hidden)
   - Optionally set a per-entity off delay
 
 You can add multiple room configurations - each operates independently.
@@ -105,7 +105,7 @@ Each Presence Allowed switch includes:
 
 - `controlled_entity`: The HA entity ID being automated
 - `respect_presence_allowed`: Whether the entity honors the switch
-- `disable_on_external_control`: Whether external control pauses automation
+- `disable_on_external_control`: Whether external control pauses automation. Manual turn-offs always pause actions until you manually turn the entity back on, even if the Presence Allowed switch is hidden.
 
 ### Use in Automations
 

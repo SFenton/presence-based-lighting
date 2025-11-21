@@ -320,6 +320,34 @@ class PresenceBasedLightingCoordinator:
 		for callback_fn in list(self._entity_states[entity_id]["callbacks"]):
 			callback_fn()
 
+	def _expand_service_targets(self, targets: list[str]) -> set[str]:
+		"""Expand service targets to include controlled entities inside groups."""
+		resolved: set[str] = set()
+		stack: list[str] = list(targets)
+		seen: set[str] = set()
+		while stack:
+			target = stack.pop()
+			if target in seen:
+				continue
+			seen.add(target)
+			if target in self._entity_states:
+				resolved.add(target)
+				continue
+			state = self.hass.states.get(target) if self.hass else None
+			if not state:
+				continue
+			members = state.attributes.get("entity_id")
+			if not members:
+				continue
+			if isinstance(members, str):
+				stack.append(members)
+				continue
+			try:
+				stack.extend(list(members))
+			except TypeError:
+				continue
+		return resolved
+
 	async def _handle_service_call(self, event: Event) -> None:
 		try:
 			service_data = event.data.get("service_data") or {}
@@ -328,9 +356,10 @@ class PresenceBasedLightingCoordinator:
 				return
 
 			target_entities = target if isinstance(target, list) else [target]
+			expanded_entities = self._expand_service_targets(target_entities)
 			service = event.data.get("service")
 
-			for entity_id in target_entities:
+			for entity_id in expanded_entities:
 				if entity_id not in self._entity_states:
 					continue
 				if self._is_context_ours(entity_id, event.context):
@@ -505,6 +534,8 @@ class PresenceBasedLightingCoordinator:
 
 	def _should_follow_presence(self, entity_state: dict) -> bool:
 		config = entity_state["config"]
+		if config[CONF_DISABLE_ON_EXTERNAL_CONTROL] and not entity_state["presence_allowed"]:
+			return False
 		if not config[CONF_RESPECTS_PRESENCE_ALLOWED]:
 			return True
 		return entity_state["presence_allowed"]
