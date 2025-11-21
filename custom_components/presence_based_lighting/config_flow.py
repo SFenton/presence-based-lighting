@@ -29,6 +29,8 @@ from .const import (
 	CONF_PRESENCE_DETECTED_STATE,
 	CONF_PRESENCE_SENSORS,
 	CONF_RESPECTS_PRESENCE_ALLOWED,
+	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+	CONF_REQUIRE_VACANCY_FOR_CLEARED,
 	CONF_ROOM_NAME,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
@@ -38,6 +40,8 @@ from .const import (
 	DEFAULT_INITIAL_PRESENCE_ALLOWED,
 	DEFAULT_OFF_DELAY,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
+	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 	DOMAIN,
 	NO_ACTION,
 )
@@ -361,6 +365,8 @@ class _EntityManagementMixin:
 			cleared_state = entity.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
 			respects_toggle = entity.get(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 			disable_on_manual = entity.get(CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL)
+			require_occ = entity.get(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
+			require_vac = entity.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
 			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
 
 			lines = [
@@ -372,6 +378,10 @@ class _EntityManagementMixin:
 				lines.append("   ↳ Presence toggle disabled")
 			if disable_on_manual:
 				lines.append("   ↳ Disables when manually controlled")
+			if require_occ:
+				lines.append("   ↳ Blocks detected action while unoccupied")
+			if require_vac:
+				lines.append("   ↳ Blocks cleared action while occupied")
 			if entity_off_delay is not None:
 				lines.append(f"   ↳ Uses {entity_off_delay}s off delay")
 			cards.append("\n".join(lines))
@@ -480,6 +490,8 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		defaults.setdefault(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
 		defaults.setdefault(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 		defaults.setdefault(CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL)
+		defaults.setdefault(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
+		defaults.setdefault(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
@@ -530,6 +542,8 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_PRESENCE_CLEARED_STATE: resolved_cleared_state,
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: user_input[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
+					CONF_REQUIRE_VACANCY_FOR_CLEARED: user_input[CONF_REQUIRE_VACANCY_FOR_CLEARED],
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 
@@ -625,6 +639,14 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			vol.Required(
 				CONF_DISABLE_ON_EXTERNAL_CONTROL,
 				default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+			): selector.BooleanSelector(),
+			vol.Required(
+				CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+				default=defaults[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
+			): selector.BooleanSelector(),
+			vol.Required(
+				CONF_REQUIRE_VACANCY_FOR_CLEARED,
+				default=defaults[CONF_REQUIRE_VACANCY_FOR_CLEARED],
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
@@ -1157,6 +1179,12 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_DISABLE_ON_EXTERNAL_CONTROL: self._current_entity_config.get(
 				CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL
 			),
+			CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: self._current_entity_config.get(
+				CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED
+			),
+			CONF_REQUIRE_VACANCY_FOR_CLEARED: self._current_entity_config.get(
+				CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED
+			),
 		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
@@ -1208,6 +1236,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_PRESENCE_CLEARED_STATE: resolved_cleared_state,
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: user_input[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
+					CONF_REQUIRE_VACANCY_FOR_CLEARED: user_input[CONF_REQUIRE_VACANCY_FOR_CLEARED],
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 
@@ -1303,6 +1333,14 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			vol.Required(
 				CONF_DISABLE_ON_EXTERNAL_CONTROL,
 				default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+			): selector.BooleanSelector(),
+			vol.Required(
+				CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+				default=defaults[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
+			): selector.BooleanSelector(),
+			vol.Required(
+				CONF_REQUIRE_VACANCY_FOR_CLEARED,
+				default=defaults[CONF_REQUIRE_VACANCY_FOR_CLEARED],
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}

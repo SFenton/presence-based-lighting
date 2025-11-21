@@ -25,6 +25,8 @@ CONF_PRESENCE_CLEARED_SERVICE = "presence_cleared_service"
 CONF_PRESENCE_CLEARED_STATE = "presence_cleared_state"
 CONF_RESPECTS_PRESENCE_ALLOWED = "respect_presence_allowed"
 CONF_DISABLE_ON_EXTERNAL_CONTROL = "disable_on_external_control"
+CONF_REQUIRE_OCCUPANCY_FOR_DETECTED = "require_occupancy_for_detected"
+CONF_REQUIRE_VACANCY_FOR_CLEARED = "require_vacancy_for_cleared"
 CONF_INITIAL_PRESENCE_ALLOWED = "initial_presence_allowed"
 CONF_ENTITY_OFF_DELAY = "entity_off_delay"
 
@@ -40,6 +42,8 @@ DEFAULT_CLEARED_STATE = "off"
 DEFAULT_RESPECTS_PRESENCE_ALLOWED = True
 DEFAULT_DISABLE_ON_EXTERNAL = True
 DEFAULT_INITIAL_PRESENCE_ALLOWED = True
+DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED = False
+DEFAULT_REQUIRE_VACANCY_FOR_CLEARED = False
 
 # State attributes
 
