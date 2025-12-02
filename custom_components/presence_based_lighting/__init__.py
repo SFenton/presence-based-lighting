@@ -29,8 +29,6 @@ from .const import (
 	CONF_PRESENCE_DETECTED_STATE,
 	CONF_PRESENCE_SENSORS,
 	CONF_RESPECTS_PRESENCE_ALLOWED,
-	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-	CONF_REQUIRE_VACANCY_FOR_CLEARED,
 	CONF_ROOM_NAME,
 	NO_ACTION,
 	DEFAULT_CLEARED_SERVICE,
@@ -41,8 +39,6 @@ from .const import (
 	DEFAULT_INITIAL_PRESENCE_ALLOWED,
 	DEFAULT_OFF_DELAY,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
-	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 	DOMAIN,
 	PLATFORMS,
 	STARTUP_MESSAGE,
@@ -189,8 +185,6 @@ class PresenceBasedLightingCoordinator:
 				
 				seen_entities.add(entity_id)
 				_LOGGER.debug("Configuring entity %d: %s with config: %s", idx, entity_id, entity)
-				entity.setdefault(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
-				entity.setdefault(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
 				
 				self._entity_states[entity_id] = {
 					"config": entity,
@@ -320,34 +314,6 @@ class PresenceBasedLightingCoordinator:
 		for callback_fn in list(self._entity_states[entity_id]["callbacks"]):
 			callback_fn()
 
-	def _expand_service_targets(self, targets: list[str]) -> set[str]:
-		"""Expand service targets to include controlled entities inside groups."""
-		resolved: set[str] = set()
-		stack: list[str] = list(targets)
-		seen: set[str] = set()
-		while stack:
-			target = stack.pop()
-			if target in seen:
-				continue
-			seen.add(target)
-			if target in self._entity_states:
-				resolved.add(target)
-				continue
-			state = self.hass.states.get(target) if self.hass else None
-			if not state:
-				continue
-			members = state.attributes.get("entity_id")
-			if not members:
-				continue
-			if isinstance(members, str):
-				stack.append(members)
-				continue
-			try:
-				stack.extend(list(members))
-			except TypeError:
-				continue
-		return resolved
-
 	async def _handle_service_call(self, event: Event) -> None:
 		try:
 			service_data = event.data.get("service_data") or {}
@@ -356,16 +322,12 @@ class PresenceBasedLightingCoordinator:
 				return
 
 			target_entities = target if isinstance(target, list) else [target]
-			expanded_entities = self._expand_service_targets(target_entities)
 			service = event.data.get("service")
 
-			for entity_id in expanded_entities:
+			for entity_id in target_entities:
 				if entity_id not in self._entity_states:
 					continue
 				if self._is_context_ours(entity_id, event.context):
-					continue
-				entity_state = self._entity_states[entity_id]
-				if await self._enforce_presence_lock_from_service(entity_state, service):
 					continue
 				await self._handle_external_action(entity_id, service)
 		except Exception as err:
@@ -385,10 +347,7 @@ class PresenceBasedLightingCoordinator:
 			if self._is_context_ours(entity_id, new_state.context):
 				return
 
-			entity_state = self._entity_states[entity_id]
-			if await self._enforce_presence_lock_from_state(entity_state, new_state.state):
-				return
-			cfg = entity_state["config"]
+			cfg = self._entity_states[entity_id]["config"]
 			if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
 				return
 
@@ -484,58 +443,8 @@ class PresenceBasedLightingCoordinator:
 							 entity_state.get("domain"), config.get(service_key), 
 							 config.get(CONF_ENTITY_ID), err)
 
-	async def _handle_detected_lock(self, entity_state: dict) -> bool:
-		config = entity_state["config"]
-		if not config.get(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED):
-			return False
-		if self._is_any_occupied():
-			return False
-		entity_id = config.get(CONF_ENTITY_ID, "unknown")
-		_LOGGER.debug(
-			"Blocking detected action for %s because room is unoccupied",
-			entity_id,
-		)
-		await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
-		return True
-
-	async def _handle_cleared_lock(self, entity_state: dict) -> bool:
-		config = entity_state["config"]
-		if not config.get(CONF_REQUIRE_VACANCY_FOR_CLEARED):
-			return False
-		if not self._is_any_occupied():
-			return False
-		entity_id = config.get(CONF_ENTITY_ID, "unknown")
-		_LOGGER.debug(
-			"Blocking cleared action for %s because room is still occupied",
-			entity_id,
-		)
-		await self._apply_action_to_entity(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
-		return True
-
-	async def _enforce_presence_lock_from_service(self, entity_state: dict, service: str | None) -> bool:
-		if not service:
-			return False
-		config = entity_state["config"]
-		if service == config.get(CONF_PRESENCE_DETECTED_SERVICE):
-			return await self._handle_detected_lock(entity_state)
-		if service == config.get(CONF_PRESENCE_CLEARED_SERVICE):
-			return await self._handle_cleared_lock(entity_state)
-		return False
-
-	async def _enforce_presence_lock_from_state(self, entity_state: dict, state: str | None) -> bool:
-		if not state:
-			return False
-		config = entity_state["config"]
-		if state == config.get(CONF_PRESENCE_DETECTED_STATE):
-			return await self._handle_detected_lock(entity_state)
-		if state == config.get(CONF_PRESENCE_CLEARED_STATE):
-			return await self._handle_cleared_lock(entity_state)
-		return False
-
 	def _should_follow_presence(self, entity_state: dict) -> bool:
 		config = entity_state["config"]
-		if config[CONF_DISABLE_ON_EXTERNAL_CONTROL] and not entity_state["presence_allowed"]:
-			return False
 		if not config[CONF_RESPECTS_PRESENCE_ALLOWED]:
 			return True
 		return entity_state["presence_allowed"]

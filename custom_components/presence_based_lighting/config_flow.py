@@ -430,7 +430,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Required(CONF_PRESENCE_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain="binary_sensor",
-							device_class="occupancy",
+							device_class=["occupancy", "motion"],
 							multiple=True,
 						)
 					),
