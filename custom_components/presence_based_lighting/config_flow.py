@@ -1105,7 +1105,6 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain="binary_sensor",
-							device_class="occupancy",
 							multiple=True,
 						)
 					),
