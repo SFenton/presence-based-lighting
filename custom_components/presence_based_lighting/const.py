@@ -16,6 +16,7 @@ PLATFORMS = [SWITCH]
 # Configuration keys
 CONF_ROOM_NAME = "room_name"
 CONF_PRESENCE_SENSORS = "presence_sensors"
+CONF_CLEARING_SENSORS = "clearing_sensors"
 CONF_OFF_DELAY = "off_delay"
 CONF_CONTROLLED_ENTITIES = "controlled_entities"
 CONF_ENTITY_ID = "entity_id"

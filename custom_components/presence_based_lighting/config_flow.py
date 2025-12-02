@@ -22,6 +22,7 @@ from .const import (
 	CONF_ENTITY_ID,
 	CONF_ENTITY_OFF_DELAY,
 	CONF_INITIAL_PRESENCE_ALLOWED,
+	CONF_CLEARING_SENSORS,
 	CONF_OFF_DELAY,
 	CONF_PRESENCE_CLEARED_SERVICE,
 	CONF_PRESENCE_CLEARED_STATE,
@@ -416,6 +417,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			self._base_data = {
 				CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
 				CONF_PRESENCE_SENSORS: user_input[CONF_PRESENCE_SENSORS],
+				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
 			}
 			self._controlled_entities = []
@@ -428,6 +430,12 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				{
 					vol.Required(CONF_ROOM_NAME): str,
 					vol.Required(CONF_PRESENCE_SENSORS): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain="binary_sensor",
+							multiple=True,
+						)
+					),
+					vol.Optional(CONF_CLEARING_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain="binary_sensor",
 							multiple=True,
@@ -695,6 +703,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		return {
 			CONF_ROOM_NAME: self._base_data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: self._base_data.get(CONF_PRESENCE_SENSORS, []),
+			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
 			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 		}
@@ -873,6 +882,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		self._base_data = {
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
+			CONF_CLEARING_SENSORS: config_entry.data.get(CONF_CLEARING_SENSORS, []),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 		}
 		# Load existing entities from config entry
@@ -914,6 +924,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		new_data = {
 			**self.config_entry.data,
 			CONF_PRESENCE_SENSORS: self._base_data[CONF_PRESENCE_SENSORS],
+			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
 			CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 		}
@@ -1087,6 +1098,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		if user_input is not None:
 			_LOGGER.debug("Processing user input, updating base_data")
 			self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
+			self._base_data[CONF_CLEARING_SENSORS] = user_input.get(CONF_CLEARING_SENSORS, [])
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
 			self._selected_entity_id = None
 			_LOGGER.debug(
@@ -1102,6 +1114,15 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					vol.Required(
 						CONF_PRESENCE_SENSORS,
 						default=self._base_data[CONF_PRESENCE_SENSORS],
+					): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain="binary_sensor",
+							multiple=True,
+						)
+					),
+					vol.Optional(
+						CONF_CLEARING_SENSORS,
+						default=self._base_data.get(CONF_CLEARING_SENSORS, []),
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain="binary_sensor",

@@ -6,12 +6,14 @@
         "description": "Configure a room with presence-based automation. You'll add entities in the next step.",
         "data": {
           "room_name": "Room Name",
-          "presence_sensors": "Presence Sensors",
+          "presence_sensors": "Trigger Sensors",
+          "clearing_sensors": "Clearing Sensors (optional)",
           "off_delay": "Global Turn Off Delay (seconds)"
         },
         "data_description": {
           "room_name": "Friendly name for this room (e.g., 'Living Room', 'Kitchen')",
-          "presence_sensors": "Binary sensors that detect occupancy in this room",
+          "presence_sensors": "Binary sensors that trigger the 'detected' action when any turns on",
+          "clearing_sensors": "Binary sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
           "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)"
         }
       },
@@ -101,11 +103,13 @@
         "title": "Update Presence Settings for {room}",
         "description": "Update global settings for this room. Entity configuration will follow.",
         "data": {
-          "presence_sensors": "Presence Sensors",
+          "presence_sensors": "Trigger Sensors",
+          "clearing_sensors": "Clearing Sensors (optional)",
           "off_delay": "Global Turn Off Delay (seconds)"
         },
         "data_description": {
-          "presence_sensors": "Binary sensors that detect occupancy in this room",
+          "presence_sensors": "Binary sensors that trigger the 'detected' action when any turns on",
+          "clearing_sensors": "Binary sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
           "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)"
         }
       },

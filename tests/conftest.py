@@ -261,6 +261,7 @@ const_module.EVENT_STATE_CHANGED = EVENT_STATE_CHANGED
 const_module.EVENT_CALL_SERVICE = EVENT_CALL_SERVICE
 
 from custom_components.presence_based_lighting.const import (
+    CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
@@ -390,6 +391,39 @@ def mock_config_entry_zero_delay():
     }
     entry.entry_id = "test_entry_id_bathroom"
     entry.unique_id = "Bathroom"
+    entry.async_on_unload = MagicMock()
+    entry.add_update_listener = MagicMock()
+    return entry
+
+
+@pytest.fixture
+def mock_config_entry_separate_clearing():
+    """Return a mock config entry with separate trigger and clearing sensors."""
+    entry = MagicMock()
+    entry.domain = DOMAIN
+    entry.version = 2
+    entry.data = {
+        CONF_ROOM_NAME: "Office",
+        CONF_PRESENCE_SENSORS: ["binary_sensor.office_pir"],
+        CONF_CLEARING_SENSORS: ["binary_sensor.office_occupancy"],
+        CONF_OFF_DELAY: 1,
+        CONF_CONTROLLED_ENTITIES: [
+            {
+                CONF_ENTITY_ID: "light.office",
+                CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+                CONF_REQUIRE_VACANCY_FOR_CLEARED: DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+                CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+            }
+        ],
+    }
+    entry.entry_id = "test_entry_id_office"
+    entry.unique_id = "Office"
     entry.async_on_unload = MagicMock()
     entry.add_update_listener = MagicMock()
     return entry

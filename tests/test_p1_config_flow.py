@@ -27,6 +27,7 @@ from custom_components.presence_based_lighting.config_flow import (
     STEP_SELECT_ENTITY,
 )
 from custom_components.presence_based_lighting.const import (
+    CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
@@ -37,6 +38,8 @@ from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_SERVICE,
     CONF_PRESENCE_DETECTED_STATE,
     CONF_PRESENCE_SENSORS,
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+    CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
     DEFAULT_CLEARED_SERVICE,
@@ -45,6 +48,8 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_DETECTED_STATE,
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
     DEFAULT_OFF_DELAY,
+    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
     DEFAULT_RESPECTS_PRESENCE_ALLOWED,
 )
 
@@ -64,6 +69,8 @@ def _default_configure_input() -> dict:
         CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
         CONF_RESPECTS_PRESENCE_ALLOWED: DEFAULT_RESPECTS_PRESENCE_ALLOWED,
         CONF_DISABLE_ON_EXTERNAL_CONTROL: False,
+        CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+        CONF_REQUIRE_VACANCY_FOR_CLEARED: DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
     }
 
 
@@ -135,6 +142,7 @@ async def test_manage_entities_creates_entry_when_ready():
     expected_payload = {
         CONF_ROOM_NAME: "Office",
         CONF_PRESENCE_SENSORS: ["binary_sensor.office_motion"],
+        CONF_CLEARING_SENSORS: [],
         CONF_OFF_DELAY: 15,
         CONF_CONTROLLED_ENTITIES: handler._controlled_entities,  # type: ignore[attr-defined]
     }
