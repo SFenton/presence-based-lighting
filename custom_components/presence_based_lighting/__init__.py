@@ -680,12 +680,22 @@ class PresenceBasedLightingCoordinator:
 			is_rlc = is_real_last_changed_entity(entity_id)
 			
 			if is_rlc:
-				# For RLC sensors, any state change means the source entity changed
-				# Get the current occupancy state from the attribute
-				currently_on = is_entity_on(self.hass, entity_id)
-				currently_off = is_entity_off(self.hass, entity_id)
-				_LOGGER.debug("RLC sensor %s changed, previous_valid_state: on=%s, off=%s", 
-							 entity_id, currently_on, currently_off)
+				# For RLC sensors, compare the previous_valid_state attribute
+				# The state itself is a timestamp, so we look at the attribute
+				from .real_last_changed import ATTR_PREVIOUS_VALID_STATE
+				old_effective = old_state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
+				new_effective = new_state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
+				
+				# Skip if the effective state didn't actually change
+				if old_effective == new_effective:
+					_LOGGER.debug("RLC sensor %s timestamp changed but previous_valid_state unchanged (%s)", 
+								 entity_id, new_effective)
+					return
+				
+				_LOGGER.debug("RLC sensor %s previous_valid_state changed: %s -> %s", 
+							 entity_id, old_effective, new_effective)
+				currently_on = new_effective == "on"
+				currently_off = new_effective == "off"
 			else:
 				# For regular sensors, check if state actually changed
 				if new_state.state == old_state.state:
@@ -714,8 +724,6 @@ class PresenceBasedLightingCoordinator:
 				if entity_id in effective_clearing and self._are_clearing_sensors_clear():
 					_LOGGER.debug("Presence cleared, starting off timer")
 					await self._start_off_timer()
-		except Exception as err:
-			_LOGGER.exception("Error handling presence change: %s", err)
 		except Exception as err:
 			_LOGGER.exception("Error handling presence change: %s", err)
 
