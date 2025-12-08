@@ -470,6 +470,10 @@ class PresenceBasedLightingCoordinator:
 			# Expand groups and collect all target entity IDs
 			expanded_entities = []
 			for entity_id in target_entities:
+				# Skip if entity_id is not a string (could be a set or other type)
+				if not isinstance(entity_id, str):
+					_LOGGER.debug("Skipping non-string entity_id: %s (type: %s)", entity_id, type(entity_id))
+					continue
 				if entity_id in self._entity_states:
 					expanded_entities.append(entity_id)
 				else:
@@ -477,8 +481,9 @@ class PresenceBasedLightingCoordinator:
 					state = self.hass.states.get(entity_id)
 					if state and state.attributes.get("entity_id"):
 						group_members = state.attributes.get("entity_id", [])
+						# group_members could be a list, set, or tuple - iterate safely
 						for member in group_members:
-							if member in self._entity_states:
+							if isinstance(member, str) and member in self._entity_states:
 								expanded_entities.append(member)
 
 			for entity_id in expanded_entities:
