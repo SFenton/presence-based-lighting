@@ -9,11 +9,11 @@ from custom_components.presence_based_lighting import PresenceBasedLightingCoord
 from tests.conftest import assert_service_called, setup_entity_states
 
 
-def _state(state):
-    return type("State", (), {"state": state, "context": type("Ctx", (), {"id": "ctx", "parent_id": None})()})()
+def _state(state, attributes=None):
+    return type("State", (), {"state": state, "attributes": attributes or {}, "context": type("Ctx", (), {"id": "ctx", "parent_id": None})()})()
 
 
-def _event(mock_hass, entity_id, old_state, new_state):
+def _event(mock_hass, entity_id, old_state, new_state, old_attrs=None, new_attrs=None):
     mock_hass.states.set(entity_id, new_state)
     return type(
         "Event",
@@ -21,8 +21,8 @@ def _event(mock_hass, entity_id, old_state, new_state):
         {
             "data": {
                 "entity_id": entity_id,
-                "old_state": _state(old_state),
-                "new_state": _state(new_state),
+                "old_state": _state(old_state, old_attrs),
+                "new_state": _state(new_state, new_attrs),
             }
         },
     )()

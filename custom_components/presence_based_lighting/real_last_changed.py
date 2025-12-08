@@ -22,16 +22,19 @@ REAL_LAST_CHANGED_SUFFIX = "_real_last_changed"
 ATTR_PREVIOUS_VALID_STATE = "previous_valid_state"
 
 
-def is_real_last_changed_entity(entity_id: str) -> bool:
+def is_real_last_changed_entity(entity_id: str | None, state: "State | None" = None) -> bool:
     """Check if an entity is a real_last_changed sensor.
     
     Real last changed entities are sensors that track when another entity
     last changed state, persisting through HA restarts.
     
-    Pattern: sensor.{name}_real_last_changed
+    Detection methods (in order):
+    1. If state is provided, check for previous_valid_state attribute
+    2. Check if entity_id is a sensor (not binary_sensor)
     
     Args:
         entity_id: The entity ID to check
+        state: Optional state object to check for attributes
         
     Returns:
         True if this is a real_last_changed sensor, False otherwise
@@ -39,11 +42,13 @@ def is_real_last_changed_entity(entity_id: str) -> bool:
     if not entity_id:
         return False
     
-    # Real last changed entities are always sensors with _real_last_changed suffix
-    return (
-        entity_id.startswith("sensor.") and 
-        entity_id.endswith(REAL_LAST_CHANGED_SUFFIX)
-    )
+    # If we have the state object, check for the previous_valid_state attribute
+    if state is not None:
+        return ATTR_PREVIOUS_VALID_STATE in state.attributes
+    
+    # Fallback: Real last changed entities are sensors (not binary_sensors)
+    # This is a heuristic - sensor.* entities that report timestamps are likely RLC
+    return entity_id.startswith("sensor.") and not entity_id.startswith("sensor.binary_")
 
 
 def get_effective_state(hass: "HomeAssistant", entity_id: str) -> str | None:
@@ -63,7 +68,7 @@ def get_effective_state(hass: "HomeAssistant", entity_id: str) -> str | None:
     if state is None:
         return None
     
-    if is_real_last_changed_entity(entity_id):
+    if is_real_last_changed_entity(entity_id, state):
         # For RLC sensors, use the previous_valid_state attribute
         return state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
     else:

@@ -21,12 +21,12 @@ def _event(mock_hass, entity_id, old_state, new_state, context=None):
             "data": {
                 "entity_id": entity_id,
                 "old_state": type(
-                    "State", (), {"state": old_state, "context": context}
+                    "State", (), {"state": old_state, "attributes": {}, "context": context}
                 )()
                 if old_state is not None
                 else None,
                 "new_state": type(
-                    "State", (), {"state": new_state, "context": context}
+                    "State", (), {"state": new_state, "attributes": {}, "context": context}
                 )()
                 if new_state is not None
                 else None,

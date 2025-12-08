@@ -682,7 +682,8 @@ class PresenceBasedLightingCoordinator:
 
 			# For real_last_changed sensors, the "state" is a timestamp
 			# We need to check previous_valid_state attribute for actual on/off
-			is_rlc = is_real_last_changed_entity(entity_id)
+			# Pass the state object so we can detect RLC by attribute presence
+			is_rlc = is_real_last_changed_entity(entity_id, new_state)
 			
 			if is_rlc:
 				# For RLC sensors, compare the previous_valid_state attribute

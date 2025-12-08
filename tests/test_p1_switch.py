@@ -22,8 +22,8 @@ def _presence_event(mock_hass, old_state, new_state, entity_id="binary_sensor.li
         {
             "data": {
                 "entity_id": entity_id,
-                "old_state": type("State", (), {"state": old_state, "context": None})(),
-                "new_state": type("State", (), {"state": new_state, "context": None})(),
+                "old_state": type("State", (), {"state": old_state, "attributes": {}, "context": None})(),
+                "new_state": type("State", (), {"state": new_state, "attributes": {}, "context": None})(),
             }
         },
     )()

@@ -17,7 +17,7 @@ from custom_components.presence_based_lighting.const import (
 from tests.conftest import assert_service_called, setup_entity_states
 
 
-def _entity_event(mock_hass, entity_id, old_state, new_state):
+def _entity_event(mock_hass, entity_id, old_state, new_state, old_attrs=None, new_attrs=None):
     """Create a mock entity state change event."""
     mock_hass.states.set(entity_id, new_state)
     return type(
@@ -29,13 +29,14 @@ def _entity_event(mock_hass, entity_id, old_state, new_state):
                 "old_state": type(
                     "State",
                     (),
-                    {"state": old_state, "context": type("Ctx", (), {"id": "old", "parent_id": None})()},
+                    {"state": old_state, "attributes": old_attrs or {}, "context": type("Ctx", (), {"id": "old", "parent_id": None})()},
                 )(),
                 "new_state": type(
                     "State",
                     (),
                     {
                         "state": new_state,
+                        "attributes": new_attrs or {},
                         "context": type("Ctx", (), {"id": "manual", "parent_id": None})(),
                     },
                 )(),

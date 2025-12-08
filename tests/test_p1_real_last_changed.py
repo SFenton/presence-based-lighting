@@ -35,27 +35,45 @@ from custom_components.presence_based_lighting.const import (
 class TestIsRealLastChangedEntity:
     """Tests for is_real_last_changed_entity helper."""
 
-    def test_identifies_rlc_sensors(self):
-        """Should identify sensors with _real_last_changed suffix."""
-        assert is_real_last_changed_entity("sensor.motion_real_last_changed")
-        assert is_real_last_changed_entity("sensor.bedroom_pir_real_last_changed")
-        assert is_real_last_changed_entity("sensor.a_real_last_changed")
+    def test_identifies_rlc_sensors_by_attribute(self):
+        """Should identify sensors with previous_valid_state attribute."""
+        state_obj = MagicMock()
+        state_obj.attributes = {ATTR_PREVIOUS_VALID_STATE: "on"}
+        
+        assert is_real_last_changed_entity("sensor.motion", state_obj)
+        assert is_real_last_changed_entity("sensor.dining_room_presence_sensor_pir", state_obj)
+        assert is_real_last_changed_entity("sensor.any_sensor_name", state_obj)
 
     def test_rejects_regular_sensors(self):
-        """Should reject regular binary sensors and sensors."""
-        assert not is_real_last_changed_entity("binary_sensor.motion")
-        assert not is_real_last_changed_entity("sensor.temperature")
-        assert not is_real_last_changed_entity("light.bedroom")
+        """Should reject sensors without previous_valid_state attribute."""
+        state_obj = MagicMock()
+        state_obj.attributes = {}  # No previous_valid_state
+        
+        assert not is_real_last_changed_entity("binary_sensor.motion", state_obj)
+        assert not is_real_last_changed_entity("sensor.temperature", state_obj)
+        assert not is_real_last_changed_entity("light.bedroom", state_obj)
 
     def test_rejects_partial_matches(self):
-        """Should reject entities that don't have exact suffix."""
-        assert not is_real_last_changed_entity("sensor.motion_real_last_changed_extra")
-        assert not is_real_last_changed_entity("binary_sensor.motion_real_last_changed")
+        """Should reject entities without the attribute even if name looks like RLC."""
+        state_obj = MagicMock()
+        state_obj.attributes = {"other_attr": "value"}  # No previous_valid_state
+        
+        assert not is_real_last_changed_entity("sensor.motion_real_last_changed", state_obj)
+        assert not is_real_last_changed_entity("binary_sensor.motion", state_obj)
 
     def test_handles_none_and_empty(self):
         """Should handle None and empty strings."""
         assert not is_real_last_changed_entity(None)
         assert not is_real_last_changed_entity("")
+        
+    def test_heuristic_without_state(self):
+        """Without state object, falls back to sensor.* heuristic."""
+        # Without state, sensor.* (not binary_sensor) returns True as heuristic
+        assert is_real_last_changed_entity("sensor.motion")
+        # binary_sensor returns False
+        assert not is_real_last_changed_entity("binary_sensor.motion")
+        # Other domains return False
+        assert not is_real_last_changed_entity("light.bedroom")
 
 
 class TestGetEffectiveState:
@@ -95,17 +113,18 @@ class TestGetEffectiveState:
         
         assert result is None
 
-    def test_returns_none_for_missing_attribute(self):
-        """Should return None if RLC sensor has no previous_valid_state attribute."""
+    def test_returns_state_for_sensor_without_attribute(self):
+        """Sensor without previous_valid_state is treated as regular sensor, returns state."""
         hass = MagicMock()
         state_obj = MagicMock()
         state_obj.state = "2024-01-01T12:00:00+00:00"
-        state_obj.attributes = {}  # No previous_valid_state
+        state_obj.attributes = {}  # No previous_valid_state - not an RLC sensor
         hass.states.get.return_value = state_obj
 
+        # Without the attribute, it's treated as a regular sensor, so state is returned
         result = get_effective_state(hass, "sensor.motion_real_last_changed")
         
-        assert result is None
+        assert result == "2024-01-01T12:00:00+00:00"
 
 
 class TestIsEntityOn:
