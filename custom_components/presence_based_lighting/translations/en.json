@@ -38,9 +38,8 @@
           "presence_cleared_state": "Expected State After Clear",
           "presence_cleared_state_custom": "Custom Clear State",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
-          "disable_on_external_control": "Disable on Manual Control",
-          "require_occupancy_for_detected": "Require Occupancy for Detected Action",
-          "require_vacancy_for_cleared": "Require Vacancy for Cleared Action",
+          "automation_mode": "Automation Mode",
+          "use_interceptor": "Use Interceptor for Presence Lock",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
@@ -51,9 +50,8 @@
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
           "presence_cleared_state_custom": "Enter the exact state you expect once presence clears. Only used when 'Custom' is selected above.",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
-          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch). Presence actions remain paused until the entity is manually turned on again, even if the Presence Allowed switch is hidden.",
-          "require_occupancy_for_detected": "Block external calls that match the presence-detected action (e.g., turn on, open, arm) unless a presence sensor currently reports this room as occupied",
-          "require_vacancy_for_cleared": "Block external calls that match the presence-cleared action (e.g., turn off, close, disarm) until every presence sensor in this room reports empty",
+          "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
+          "use_interceptor": "When enabled and hass-interceptor is installed, this entity will proactively block conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       },
@@ -67,9 +65,7 @@
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
-          "disable_on_external_control": "Disable on Manual Control",
-          "require_occupancy_for_detected": "Require Occupancy for Detected Action",
-          "require_vacancy_for_cleared": "Require Vacancy for Cleared Action",
+          "automation_mode": "Automation Mode",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
@@ -79,9 +75,7 @@
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off, 'none' for no action)",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
-          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch). Presence actions remain paused until the entity is manually turned on again, even if the Presence Allowed switch is hidden.",
-          "require_occupancy_for_detected": "Block external calls that match the presence-detected action (e.g., turn on, open, arm) unless a presence sensor currently reports this room as occupied",
-          "require_vacancy_for_cleared": "Block external calls that match the presence-cleared action (e.g., turn off, close, disarm) until every presence sensor in this room reports empty",
+          "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       }
@@ -134,9 +128,8 @@
           "presence_cleared_state": "Expected State After Clear",
           "presence_cleared_state_custom": "Custom Clear State",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
-          "disable_on_external_control": "Disable on Manual Control",
-          "require_occupancy_for_detected": "Require Occupancy for Detected Action",
-          "require_vacancy_for_cleared": "Require Vacancy for Cleared Action",
+          "automation_mode": "Automation Mode",
+          "use_interceptor": "Use Interceptor for Presence Lock",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
@@ -147,9 +140,8 @@
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
           "presence_cleared_state_custom": "Enter the exact state you expect once presence clears. Only used when 'Custom' is selected above.",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
-          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch). Presence actions remain paused until the entity is manually turned on again, even if the Presence Allowed switch is hidden.",
-          "require_occupancy_for_detected": "Block external calls that match the presence-detected action (e.g., turn on, open, arm) unless a presence sensor currently reports this room as occupied",
-          "require_vacancy_for_cleared": "Block external calls that match the presence-cleared action (e.g., turn off, close, disarm) until every presence sensor in this room reports empty",
+          "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
+          "use_interceptor": "When enabled and hass-interceptor is installed, this entity will proactively block conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       },
@@ -193,9 +185,7 @@
           "presence_cleared_service": "Action When Presence Cleared",
           "presence_cleared_state": "Expected State After Clear",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
-          "disable_on_external_control": "Disable on Manual Control",
-          "require_occupancy_for_detected": "Require Occupancy for Detected Action",
-          "require_vacancy_for_cleared": "Require Vacancy for Cleared Action",
+          "automation_mode": "Automation Mode",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)"
         },
         "data_description": {
@@ -205,9 +195,7 @@
           "presence_cleared_service": "Service to call when presence clears (e.g., turn_off, 'none' for no action)",
           "presence_cleared_state": "The state the entity should be in after the clear service is called",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
-          "disable_on_external_control": "Temporarily disable presence automation when entity is manually controlled outside this automation (e.g., turned off by voice, app, or physical switch). Presence actions remain paused until the entity is manually turned on again, even if the Presence Allowed switch is hidden.",
-          "require_occupancy_for_detected": "Block external calls that match the presence-detected action (e.g., turn on, open, arm) unless a presence sensor currently reports this room as occupied",
-          "require_vacancy_for_cleared": "Block external calls that match the presence-cleared action (e.g., turn off, close, disarm) until every presence sensor in this room reports empty",
+          "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
       }
@@ -227,6 +215,14 @@
           "name": "Respects Presence Toggle",
           "description": "Indicates if this entity honors the per-entity Presence Allowed switch"
         }
+      }
+    }
+  },
+  "selector": {
+    "automation_mode": {
+      "options": {
+        "automatic": "Automatic",
+        "presence_lock": "Presence Lock"
       }
     }
   }

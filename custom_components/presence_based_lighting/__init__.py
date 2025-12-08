@@ -17,6 +17,9 @@ from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
+	AUTOMATION_MODE_AUTOMATIC,
+	AUTOMATION_MODE_PRESENCE_LOCK,
+	CONF_AUTOMATION_MODE,
 	CONF_CLEARING_SENSORS,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -33,6 +36,7 @@ from .const import (
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
 	CONF_RESPECTS_PRESENCE_ALLOWED,
 	CONF_ROOM_NAME,
+	DEFAULT_AUTOMATION_MODE,
 	NO_ACTION,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
@@ -48,6 +52,7 @@ from .const import (
 	PLATFORMS,
 	STARTUP_MESSAGE,
 )
+from .interceptor import PresenceLockInterceptor, is_interceptor_available
 
 _LOGGER = logging.getLogger(__package__)
 
@@ -88,6 +93,63 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 	"""YAML setup is not supported."""
 	return True
 
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+	"""Migrate old entry to new version.
+	
+	Version 2 -> 3: Add automation_mode derived from legacy boolean toggles.
+	"""
+	_LOGGER.debug(
+		"Migrating config entry %s from version %s",
+		config_entry.entry_id,
+		config_entry.version,
+	)
+
+	if config_entry.version == 2:
+		# Version 2 -> 3: Add automation_mode to each controlled entity
+		new_data = {**config_entry.data}
+		controlled_entities = new_data.get(CONF_CONTROLLED_ENTITIES, [])
+		updated_entities = []
+
+		for entity_config in controlled_entities:
+			updated_config = {**entity_config}
+			
+			# Only add automation_mode if not already present
+			if CONF_AUTOMATION_MODE not in updated_config:
+				# Derive automation_mode from legacy boolean fields
+				require_occupancy = updated_config.get(
+					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, False
+				)
+				require_vacancy = updated_config.get(
+					CONF_REQUIRE_VACANCY_FOR_CLEARED, False
+				)
+				
+				# If either presence lock toggle was enabled, use presence_lock mode
+				if require_occupancy or require_vacancy:
+					updated_config[CONF_AUTOMATION_MODE] = AUTOMATION_MODE_PRESENCE_LOCK
+				else:
+					updated_config[CONF_AUTOMATION_MODE] = AUTOMATION_MODE_AUTOMATIC
+				
+				# Normalize the legacy booleans based on the mode
+				is_automatic = updated_config[CONF_AUTOMATION_MODE] == AUTOMATION_MODE_AUTOMATIC
+				is_presence_lock = updated_config[CONF_AUTOMATION_MODE] == AUTOMATION_MODE_PRESENCE_LOCK
+				updated_config[CONF_DISABLE_ON_EXTERNAL_CONTROL] = is_automatic
+				updated_config[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = is_presence_lock
+				updated_config[CONF_REQUIRE_VACANCY_FOR_CLEARED] = is_presence_lock
+
+			updated_entities.append(updated_config)
+
+		new_data[CONF_CONTROLLED_ENTITIES] = updated_entities
+
+		hass.config_entries.async_update_entry(
+			config_entry, data=new_data, version=3
+		)
+		_LOGGER.info(
+			"Migration of entry %s from version 2 to 3 successful",
+			config_entry.entry_id,
+		)
+
+	return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -167,8 +229,9 @@ class PresenceBasedLightingCoordinator:
 		self.hass = hass
 		self.entry = entry
 		self._listeners: list[Callable[[], None]] = []
-		self._pending_off_task: asyncio.Task | None = None
 		self._entity_states: Dict[str, dict] = {}
+		self._interceptor: PresenceLockInterceptor | None = None
+		self._using_interceptor: bool = False
 
 		try:
 			_LOGGER.debug("Initializing coordinator for entry: %s", entry.entry_id)
@@ -212,6 +275,27 @@ class PresenceBasedLightingCoordinator:
 		
 		try:
 			_LOGGER.debug("Starting coordinator for entry: %s", self.entry.entry_id)
+			
+			# Set up hass-interceptor for Presence Lock mode (if available)
+			self._interceptor = PresenceLockInterceptor(
+				self.hass,
+				self.entry,
+				self._is_any_occupied,
+			)
+			self._using_interceptor = self._interceptor.setup()
+			
+			if self._using_interceptor:
+				_LOGGER.info(
+					"Using hass-interceptor for Presence Lock mode (proactive blocking)"
+				)
+			elif is_interceptor_available():
+				_LOGGER.debug(
+					"hass-interceptor available but no presence-lock entities configured"
+				)
+			else:
+				_LOGGER.debug(
+					"hass-interceptor not installed, using fallback (reactive reversion)"
+				)
 			
 			controlled_ids = list(self._entity_states.keys())
 			presence_sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
@@ -263,10 +347,11 @@ class PresenceBasedLightingCoordinator:
 		try:
 			_LOGGER.debug("Stopping coordinator for entry: %s", self.entry.entry_id)
 
-			if self._pending_off_task:
-				self._pending_off_task.cancel()
-				self._pending_off_task = None
-				_LOGGER.debug("Cancelled pending off task")
+			# Clean up hass-interceptor registrations
+			if self._interceptor:
+				self._interceptor.teardown()
+				self._interceptor = None
+				self._using_interceptor = False
 
 			# Cancel all per-entity timers
 			cancelled_count = 0
@@ -417,7 +502,15 @@ class PresenceBasedLightingCoordinator:
 		"""Check presence lock conditions and revert state if needed.
 		
 		Returns True if a presence lock was triggered and the state was reverted.
+		
+		When hass-interceptor is active, this is a fallback that should rarely
+		trigger (interceptor blocks proactively). When not active, this is the
+		primary mechanism that reverts state reactively after it changes.
 		"""
+		# Skip if using interceptor - it handles blocking proactively
+		if self._using_interceptor:
+			return False
+		
 		cfg = entity_state["config"]
 		entity_id = cfg[CONF_ENTITY_ID]
 		
@@ -426,14 +519,14 @@ class PresenceBasedLightingCoordinator:
 		
 		# If entity is being turned ON (detected state) but room is empty and lock is enabled
 		if new_state == cfg[CONF_PRESENCE_DETECTED_STATE] and require_occ and not self._is_any_occupied():
-			_LOGGER.debug("Presence lock: reverting %s to cleared state (room is empty)", entity_id)
+			_LOGGER.debug("Presence lock (fallback): reverting %s to cleared state (room is empty)", entity_id)
 			# Force the reversion without checking current state (since the triggering action may still be in progress)
 			await self._force_apply_action(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
 			return True
 		
 		# If entity is being turned OFF (cleared state) but room is occupied and lock is enabled
 		if new_state == cfg[CONF_PRESENCE_CLEARED_STATE] and require_vac and self._is_any_occupied():
-			_LOGGER.debug("Presence lock: reverting %s to detected state (room is occupied)", entity_id)
+			_LOGGER.debug("Presence lock (fallback): reverting %s to detected state (room is occupied)", entity_id)
 			# Force the reversion without checking current state (since the triggering action may still be in progress)
 			await self._force_apply_action(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
 			return True
@@ -485,9 +578,6 @@ class PresenceBasedLightingCoordinator:
 			# Trigger detected action if a presence sensor turns on
 			if new_state.state == STATE_ON and entity_id in presence_sensors:
 				_LOGGER.debug("Presence detected, cancelling timers")
-				if self._pending_off_task:
-					self._pending_off_task.cancel()
-					self._pending_off_task = None
 				# Cancel all per-entity timers when presence detected
 				for entity_state in self._entity_states.values():
 					if entity_state["off_timer"]:
@@ -495,9 +585,12 @@ class PresenceBasedLightingCoordinator:
 						entity_state["off_timer"] = None
 				await self._apply_presence_action(CONF_PRESENCE_DETECTED_SERVICE)
 			# Trigger cleared action if a clearing sensor turns off AND all clearing sensors are clear
-			elif new_state.state == STATE_OFF and self._are_clearing_sensors_clear():
-				_LOGGER.debug("Presence cleared, starting off timer")
-				await self._start_off_timer()
+			# Only trigger if the sensor that changed is actually in the clearing sensors list
+			else:
+				effective_clearing = clearing_sensors if clearing_sensors else presence_sensors
+				if new_state.state == STATE_OFF and entity_id in effective_clearing and self._are_clearing_sensors_clear():
+					_LOGGER.debug("Presence cleared, starting off timer")
+					await self._start_off_timer()
 		except Exception as err:
 			_LOGGER.exception("Error handling presence change: %s", err)
 
@@ -525,9 +618,14 @@ class PresenceBasedLightingCoordinator:
 			)
 			target_state = config[target_state_key]
 			current_state = self.hass.states.get(entity_id)
-			if current_state and current_state.state == target_state:
-				_LOGGER.debug("Entity %s already in target state %s", entity_id, target_state)
-				return
+			
+			# For turn_on (detected), always send the command to interrupt any transition
+			# This fixes the bug where re-entering during light fade-off wouldn't turn lights back on
+			# For turn_off (cleared), we can skip if already off since there's no transition to interrupt
+			if service_key == CONF_PRESENCE_CLEARED_SERVICE:
+				if current_state and current_state.state == target_state:
+					_LOGGER.debug("Entity %s already in target state %s", entity_id, target_state)
+					return
 
 			context = Context()
 			entity_state["contexts"].append(context.id)
@@ -576,10 +674,6 @@ class PresenceBasedLightingCoordinator:
 
 	async def _start_off_timer(self) -> None:
 		"""Start per-entity off timers when presence clears."""
-		if self._pending_off_task:
-			self._pending_off_task.cancel()
-			self._pending_off_task = None
-
 		# Start individual timers for each entity
 		for entity_state in self._entity_states.values():
 			if entity_state["off_timer"]:

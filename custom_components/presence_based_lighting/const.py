@@ -30,6 +30,12 @@ CONF_REQUIRE_OCCUPANCY_FOR_DETECTED = "require_occupancy_for_detected"
 CONF_REQUIRE_VACANCY_FOR_CLEARED = "require_vacancy_for_cleared"
 CONF_INITIAL_PRESENCE_ALLOWED = "initial_presence_allowed"
 CONF_ENTITY_OFF_DELAY = "entity_off_delay"
+CONF_AUTOMATION_MODE = "automation_mode"
+CONF_USE_INTERCEPTOR = "use_interceptor"
+
+# Automation mode values
+AUTOMATION_MODE_AUTOMATIC = "automatic"
+AUTOMATION_MODE_PRESENCE_LOCK = "presence_lock"
 
 # Special value for no action
 NO_ACTION = "none"
@@ -45,6 +51,8 @@ DEFAULT_DISABLE_ON_EXTERNAL = True
 DEFAULT_INITIAL_PRESENCE_ALLOWED = True
 DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED = False
 DEFAULT_REQUIRE_VACANCY_FOR_CLEARED = False
+DEFAULT_AUTOMATION_MODE = AUTOMATION_MODE_AUTOMATIC
+DEFAULT_USE_INTERCEPTOR = True  # Default to using interceptor when available
 
 # State attributes
 

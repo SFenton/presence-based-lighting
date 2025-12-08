@@ -68,5 +68,13 @@
         }
       }
     }
+  },
+  "selector": {
+    "automation_mode": {
+      "options": {
+        "automatic": "Automatique",
+        "presence_lock": "Verrouillage présence"
+      }
+    }
   }
 }

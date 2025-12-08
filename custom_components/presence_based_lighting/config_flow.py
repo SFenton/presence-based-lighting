@@ -17,6 +17,9 @@ from homeassistant.util import dt as dt_util, slugify
 _LOGGER = logging.getLogger(__name__)
 
 from .const import (
+	AUTOMATION_MODE_AUTOMATIC,
+	AUTOMATION_MODE_PRESENCE_LOCK,
+	CONF_AUTOMATION_MODE,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
 	CONF_ENTITY_ID,
@@ -33,6 +36,8 @@ from .const import (
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
 	CONF_ROOM_NAME,
+	CONF_USE_INTERCEPTOR,
+	DEFAULT_AUTOMATION_MODE,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
 	DEFAULT_DETECTED_SERVICE,
@@ -43,9 +48,11 @@ from .const import (
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+	DEFAULT_USE_INTERCEPTOR,
 	DOMAIN,
 	NO_ACTION,
 )
+from .interceptor import is_interceptor_available
 
 STEP_USER = "user"
 STEP_SELECT_ENTITY = "select_entity"
@@ -365,9 +372,7 @@ class _EntityManagementMixin:
 			cleared_service = entity.get(CONF_PRESENCE_CLEARED_SERVICE, DEFAULT_CLEARED_SERVICE)
 			cleared_state = entity.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
 			respects_toggle = entity.get(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
-			disable_on_manual = entity.get(CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL)
-			require_occ = entity.get(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
-			require_vac = entity.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
+			automation_mode = entity.get(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
 			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
 
 			lines = [
@@ -377,12 +382,10 @@ class _EntityManagementMixin:
 			]
 			if not respects_toggle:
 				lines.append("   ↳ Presence toggle disabled")
-			if disable_on_manual:
-				lines.append("   ↳ Disables when manually controlled")
-			if require_occ:
-				lines.append("   ↳ Blocks detected action while unoccupied")
-			if require_vac:
-				lines.append("   ↳ Blocks cleared action while occupied")
+			if automation_mode == AUTOMATION_MODE_AUTOMATIC:
+				lines.append("   ↳ Mode: Automatic (pauses on manual control)")
+			elif automation_mode == AUTOMATION_MODE_PRESENCE_LOCK:
+				lines.append("   ↳ Mode: Presence Lock (blocks conflicting calls)")
 			if entity_off_delay is not None:
 				lines.append(f"   ↳ Uses {entity_off_delay}s off delay")
 			cards.append("\n".join(lines))
@@ -393,7 +396,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 2
+	VERSION = 3
 
 	def __init__(self):
 		"""Initialize."""
@@ -496,9 +499,8 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		defaults.setdefault(CONF_PRESENCE_CLEARED_SERVICE, DEFAULT_CLEARED_SERVICE)
 		defaults.setdefault(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
 		defaults.setdefault(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
-		defaults.setdefault(CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL)
-		defaults.setdefault(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
-		defaults.setdefault(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
+		defaults.setdefault(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
+		defaults.setdefault(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
@@ -541,6 +543,15 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				self._custom_state_ui.pop(UI_CUSTOM_CLEARED_KEY, None)
 
 			if not self._errors:
+				# Derive legacy boolean fields from automation_mode for coordinator compatibility
+				automation_mode = user_input[CONF_AUTOMATION_MODE]
+				disable_on_external = automation_mode == AUTOMATION_MODE_AUTOMATIC
+				require_occupancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
+				require_vacancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
+				
+				# Get use_interceptor - only relevant for presence_lock mode
+				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+
 				updated_config = {
 					CONF_ENTITY_ID: self._selected_entity_id,
 					CONF_PRESENCE_DETECTED_SERVICE: user_input[CONF_PRESENCE_DETECTED_SERVICE],
@@ -548,9 +559,12 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_PRESENCE_CLEARED_SERVICE: user_input[CONF_PRESENCE_CLEARED_SERVICE],
 					CONF_PRESENCE_CLEARED_STATE: resolved_cleared_state,
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
-					CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: user_input[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
-					CONF_REQUIRE_VACANCY_FOR_CLEARED: user_input[CONF_REQUIRE_VACANCY_FOR_CLEARED],
+					CONF_AUTOMATION_MODE: automation_mode,
+					CONF_USE_INTERCEPTOR: use_interceptor,
+					# Legacy fields for coordinator compatibility
+					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
+					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: require_occupancy,
+					CONF_REQUIRE_VACANCY_FOR_CLEARED: require_vacancy,
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 
@@ -644,16 +658,27 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
 			): selector.BooleanSelector(),
 			vol.Required(
-				CONF_DISABLE_ON_EXTERNAL_CONTROL,
-				default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-			): selector.BooleanSelector(),
-			vol.Required(
-				CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-				default=defaults[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
-			): selector.BooleanSelector(),
-			vol.Required(
-				CONF_REQUIRE_VACANCY_FOR_CLEARED,
-				default=defaults[CONF_REQUIRE_VACANCY_FOR_CLEARED],
+				CONF_AUTOMATION_MODE,
+				default=defaults[CONF_AUTOMATION_MODE],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=[
+						selector.SelectOptionDict(
+							value=AUTOMATION_MODE_AUTOMATIC,
+							label="Automatic",
+						),
+						selector.SelectOptionDict(
+							value=AUTOMATION_MODE_PRESENCE_LOCK,
+							label="Presence Lock",
+						),
+					],
+					mode=selector.SelectSelectorMode.DROPDOWN,
+					translation_key="automation_mode",
+				)
+			),
+			vol.Optional(
+				CONF_USE_INTERCEPTOR,
+				default=defaults[CONF_USE_INTERCEPTOR],
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
@@ -1195,14 +1220,11 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_RESPECTS_PRESENCE_ALLOWED: self._current_entity_config.get(
 				CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED
 			),
-			CONF_DISABLE_ON_EXTERNAL_CONTROL: self._current_entity_config.get(
-				CONF_DISABLE_ON_EXTERNAL_CONTROL, DEFAULT_DISABLE_ON_EXTERNAL
+			CONF_AUTOMATION_MODE: self._current_entity_config.get(
+				CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE
 			),
-			CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: self._current_entity_config.get(
-				CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED
-			),
-			CONF_REQUIRE_VACANCY_FOR_CLEARED: self._current_entity_config.get(
-				CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED
+			CONF_USE_INTERCEPTOR: self._current_entity_config.get(
+				CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR
 			),
 		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
@@ -1247,6 +1269,15 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				self._custom_state_ui.pop(UI_CUSTOM_CLEARED_KEY, None)
 
 			if not self._errors:
+				# Derive legacy boolean fields from automation_mode for coordinator compatibility
+				automation_mode = user_input[CONF_AUTOMATION_MODE]
+				disable_on_external = automation_mode == AUTOMATION_MODE_AUTOMATIC
+				require_occupancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
+				require_vacancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
+				
+				# Get use_interceptor - only relevant for presence_lock mode
+				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+
 				updated_config = {
 					CONF_ENTITY_ID: self._selected_entity_id,
 					CONF_PRESENCE_DETECTED_SERVICE: user_input[CONF_PRESENCE_DETECTED_SERVICE],
@@ -1254,9 +1285,12 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_PRESENCE_CLEARED_SERVICE: user_input[CONF_PRESENCE_CLEARED_SERVICE],
 					CONF_PRESENCE_CLEARED_STATE: resolved_cleared_state,
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
-					CONF_DISABLE_ON_EXTERNAL_CONTROL: user_input[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: user_input[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
-					CONF_REQUIRE_VACANCY_FOR_CLEARED: user_input[CONF_REQUIRE_VACANCY_FOR_CLEARED],
+					CONF_AUTOMATION_MODE: automation_mode,
+					CONF_USE_INTERCEPTOR: use_interceptor,
+					# Legacy fields for coordinator compatibility
+					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
+					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: require_occupancy,
+					CONF_REQUIRE_VACANCY_FOR_CLEARED: require_vacancy,
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 
@@ -1350,16 +1384,27 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				default=defaults[CONF_RESPECTS_PRESENCE_ALLOWED],
 			): selector.BooleanSelector(),
 			vol.Required(
-				CONF_DISABLE_ON_EXTERNAL_CONTROL,
-				default=defaults[CONF_DISABLE_ON_EXTERNAL_CONTROL],
-			): selector.BooleanSelector(),
-			vol.Required(
-				CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-				default=defaults[CONF_REQUIRE_OCCUPANCY_FOR_DETECTED],
-			): selector.BooleanSelector(),
-			vol.Required(
-				CONF_REQUIRE_VACANCY_FOR_CLEARED,
-				default=defaults[CONF_REQUIRE_VACANCY_FOR_CLEARED],
+				CONF_AUTOMATION_MODE,
+				default=defaults[CONF_AUTOMATION_MODE],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=[
+						selector.SelectOptionDict(
+							value=AUTOMATION_MODE_AUTOMATIC,
+							label="Automatic",
+						),
+						selector.SelectOptionDict(
+							value=AUTOMATION_MODE_PRESENCE_LOCK,
+							label="Presence Lock",
+						),
+					],
+					mode=selector.SelectSelectorMode.DROPDOWN,
+					translation_key="automation_mode",
+				)
+			),
+			vol.Optional(
+				CONF_USE_INTERCEPTOR,
+				default=defaults[CONF_USE_INTERCEPTOR],
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}

@@ -68,5 +68,13 @@
         }
       }
     }
+  },
+  "selector": {
+    "automation_mode": {
+      "options": {
+        "automatic": "Automatisk",
+        "presence_lock": "Tilstedeværelseslås"
+      }
+    }
   }
 }

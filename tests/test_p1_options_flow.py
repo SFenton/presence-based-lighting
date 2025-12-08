@@ -20,6 +20,8 @@ from custom_components.presence_based_lighting.config_flow import (  # noqa: E40
     _get_services_for_entity,
 )
 from custom_components.presence_based_lighting.const import (  # noqa: E402  # pylint: disable=wrong-import-position
+    AUTOMATION_MODE_AUTOMATIC,
+    CONF_AUTOMATION_MODE,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
     CONF_OFF_DELAY,
@@ -31,6 +33,7 @@ from custom_components.presence_based_lighting.const import (  # noqa: E402  # p
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_RESPECTS_PRESENCE_ALLOWED,
+    DEFAULT_AUTOMATION_MODE,
     DEFAULT_CLEARED_SERVICE,
     DEFAULT_CLEARED_STATE,
     DEFAULT_DETECTED_SERVICE,
@@ -47,9 +50,7 @@ def _default_configure_input():
         CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
         CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
         CONF_RESPECTS_PRESENCE_ALLOWED: True,
-        CONF_DISABLE_ON_EXTERNAL_CONTROL: False,
-        CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-        CONF_REQUIRE_VACANCY_FOR_CLEARED: DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+        CONF_AUTOMATION_MODE: DEFAULT_AUTOMATION_MODE,
     }
 
 
@@ -139,9 +140,7 @@ async def test_choose_edit_entity_updates_existing_and_finalizes(_mock_services,
         CONF_PRESENCE_DETECTED_STATE: "on",
         CONF_PRESENCE_CLEARED_STATE: "off",
         CONF_RESPECTS_PRESENCE_ALLOWED: False,
-        CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
-        CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-        CONF_REQUIRE_VACANCY_FOR_CLEARED: DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+        CONF_AUTOMATION_MODE: AUTOMATION_MODE_AUTOMATIC,
     }
 
     result = await handler.async_step_configure_entity(configure_input)
