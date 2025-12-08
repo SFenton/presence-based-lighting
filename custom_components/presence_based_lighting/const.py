@@ -32,6 +32,7 @@ CONF_INITIAL_PRESENCE_ALLOWED = "initial_presence_allowed"
 CONF_ENTITY_OFF_DELAY = "entity_off_delay"
 CONF_AUTOMATION_MODE = "automation_mode"
 CONF_USE_INTERCEPTOR = "use_interceptor"
+CONF_MANUAL_DISABLE_STATES = "manual_disable_states"
 
 # Automation mode values
 AUTOMATION_MODE_AUTOMATIC = "automatic"
@@ -53,6 +54,7 @@ DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED = False
 DEFAULT_REQUIRE_VACANCY_FOR_CLEARED = False
 DEFAULT_AUTOMATION_MODE = AUTOMATION_MODE_AUTOMATIC
 DEFAULT_USE_INTERCEPTOR = True  # Default to using interceptor when available
+DEFAULT_MANUAL_DISABLE_STATES = []  # Empty list means no states disable automation by default
 
 # State attributes
 

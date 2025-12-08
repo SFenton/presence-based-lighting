@@ -5,9 +5,24 @@ from unittest.mock import MagicMock, patch
 import pytest
 import pytest_asyncio
 from aiohttp.resolver import ThreadedResolver
+from pytest_socket import enable_socket
 
+# Force WindowsSelectorEventLoopPolicy and prevent HA from overriding it
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# Stub homeassistant.runner before it can be imported to prevent it from
+# overriding our event loop policy with a proactor-based one
+import types
+runner_module = types.ModuleType('homeassistant.runner')
+sys.modules['homeassistant.runner'] = runner_module
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):
+    """Enable sockets after pytest-socket disables them (required for Windows asyncio)."""
+    yield  # Let pytest-socket disable sockets first
+    enable_socket()  # Then re-enable them
 
 
 @pytest_asyncio.fixture

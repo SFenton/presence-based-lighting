@@ -26,6 +26,7 @@ from .const import (
 	CONF_ENTITY_ID,
 	CONF_ENTITY_OFF_DELAY,
 	CONF_INITIAL_PRESENCE_ALLOWED,
+	CONF_MANUAL_DISABLE_STATES,
 	CONF_OFF_DELAY,
 	CONF_PRESENCE_CLEARED_SERVICE,
 	CONF_PRESENCE_CLEARED_STATE,
@@ -98,6 +99,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 	"""Migrate old entry to new version.
 	
 	Version 2 -> 3: Add automation_mode derived from legacy boolean toggles.
+	Version 3 -> 4: Add manual_disable_states for automatic mode.
 	"""
 	_LOGGER.debug(
 		"Migrating config entry %s from version %s",
@@ -146,6 +148,31 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 		)
 		_LOGGER.info(
 			"Migration of entry %s from version 2 to 3 successful",
+			config_entry.entry_id,
+		)
+
+	if config_entry.version == 3:
+		# Version 3 -> 4: Add manual_disable_states to each controlled entity
+		new_data = {**config_entry.data}
+		controlled_entities = new_data.get(CONF_CONTROLLED_ENTITIES, [])
+		updated_entities = []
+
+		for entity_config in controlled_entities:
+			updated_config = {**entity_config}
+			
+			# Add empty manual_disable_states if not present
+			if CONF_MANUAL_DISABLE_STATES not in updated_config:
+				updated_config[CONF_MANUAL_DISABLE_STATES] = []
+
+			updated_entities.append(updated_config)
+
+		new_data[CONF_CONTROLLED_ENTITIES] = updated_entities
+
+		hass.config_entries.async_update_entry(
+			config_entry, data=new_data, version=4
+		)
+		_LOGGER.info(
+			"Migration of entry %s from version 3 to 4 successful",
 			config_entry.entry_id,
 		)
 
@@ -464,12 +491,37 @@ class PresenceBasedLightingCoordinator:
 			if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
 				return
 
-			if new_state.state == cfg[CONF_PRESENCE_CLEARED_STATE]:
-				await self.async_set_presence_allowed(entity_id, False)
-			elif new_state.state == cfg[CONF_PRESENCE_DETECTED_STATE]:
-				await self.async_set_presence_allowed(entity_id, True)
-				if not self._is_any_occupied():
-					await self._start_off_timer()
+			# Use manual_disable_states for automatic mode behavior
+			# If the new state is in manual_disable_states, disable automation
+			# If the new state is NOT in manual_disable_states, re-enable automation
+			# If the key exists (even empty), use new behavior. If missing, use legacy.
+			if CONF_MANUAL_DISABLE_STATES in cfg:
+				manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
+				# New behavior: use configured manual_disable_states list
+				# Empty list = no states disable automation
+				if new_state.state in manual_disable_states:
+					_LOGGER.debug(
+						"Manual control: %s set to %s (in disable list), pausing automation",
+						entity_id, new_state.state
+					)
+					await self.async_set_presence_allowed(entity_id, False)
+				else:
+					_LOGGER.debug(
+						"Manual control: %s set to %s (not in disable list), resuming automation",
+						entity_id, new_state.state
+					)
+					await self.async_set_presence_allowed(entity_id, True)
+					if not self._is_any_occupied():
+						await self._start_off_timer()
+			else:
+				# Legacy behavior: no manual_disable_states configured
+				# Any manual change disables automation (backward compatible, but problematic)
+				if new_state.state == cfg[CONF_PRESENCE_CLEARED_STATE]:
+					await self.async_set_presence_allowed(entity_id, False)
+				elif new_state.state == cfg[CONF_PRESENCE_DETECTED_STATE]:
+					await self.async_set_presence_allowed(entity_id, True)
+					if not self._is_any_occupied():
+						await self._start_off_timer()
 		except Exception as err:
 			_LOGGER.exception("Error handling controlled entity change for %s: %s", event.data.get("entity_id"), err)
 
@@ -491,12 +543,36 @@ class PresenceBasedLightingCoordinator:
 		if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
 			return
 
-		if service == cfg[CONF_PRESENCE_CLEARED_SERVICE]:
-			await self.async_set_presence_allowed(entity_id, False)
-		elif service == cfg[CONF_PRESENCE_DETECTED_SERVICE]:
-			await self.async_set_presence_allowed(entity_id, True)
-			if not self._is_any_occupied():
-				await self._start_off_timer()
+		# Use manual_disable_states for automatic mode behavior
+		# If the target state is in manual_disable_states, disable automation
+		# If the target state is NOT in manual_disable_states, re-enable automation
+		# If the key exists (even empty), use new behavior. If missing, use legacy.
+		if CONF_MANUAL_DISABLE_STATES in cfg:
+			manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
+			# New behavior: use configured manual_disable_states list
+			# Empty list = no states disable automation
+			if target_state and target_state in manual_disable_states:
+				_LOGGER.debug(
+					"Manual action: %s targeting %s (in disable list), pausing automation",
+					entity_id, target_state
+				)
+				await self.async_set_presence_allowed(entity_id, False)
+			elif target_state:
+				_LOGGER.debug(
+					"Manual action: %s targeting %s (not in disable list), resuming automation",
+					entity_id, target_state
+				)
+				await self.async_set_presence_allowed(entity_id, True)
+				if not self._is_any_occupied():
+					await self._start_off_timer()
+		else:
+			# Legacy behavior: based on service type
+			if service == cfg[CONF_PRESENCE_CLEARED_SERVICE]:
+				await self.async_set_presence_allowed(entity_id, False)
+			elif service == cfg[CONF_PRESENCE_DETECTED_SERVICE]:
+				await self.async_set_presence_allowed(entity_id, True)
+				if not self._is_any_occupied():
+					await self._start_off_timer()
 
 	async def _check_and_apply_presence_lock(self, entity_state: dict, new_state: str) -> bool:
 		"""Check presence lock conditions and revert state if needed.

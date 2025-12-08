@@ -26,6 +26,7 @@ from .const import (
 	CONF_ENTITY_OFF_DELAY,
 	CONF_INITIAL_PRESENCE_ALLOWED,
 	CONF_CLEARING_SENSORS,
+	CONF_MANUAL_DISABLE_STATES,
 	CONF_OFF_DELAY,
 	CONF_PRESENCE_CLEARED_SERVICE,
 	CONF_PRESENCE_CLEARED_STATE,
@@ -373,6 +374,7 @@ class _EntityManagementMixin:
 			cleared_state = entity.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
 			respects_toggle = entity.get(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 			automation_mode = entity.get(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
+			manual_disable_states = entity.get(CONF_MANUAL_DISABLE_STATES, [])
 			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
 
 			lines = [
@@ -383,7 +385,11 @@ class _EntityManagementMixin:
 			if not respects_toggle:
 				lines.append("   ↳ Presence toggle disabled")
 			if automation_mode == AUTOMATION_MODE_AUTOMATIC:
-				lines.append("   ↳ Mode: Automatic (pauses on manual control)")
+				if manual_disable_states:
+					states_str = ", ".join(manual_disable_states)
+					lines.append(f"   ↳ Mode: Automatic (pauses on: {states_str})")
+				else:
+					lines.append("   ↳ Mode: Automatic (pauses on manual control)")
 			elif automation_mode == AUTOMATION_MODE_PRESENCE_LOCK:
 				lines.append("   ↳ Mode: Presence Lock (blocks conflicting calls)")
 			if entity_off_delay is not None:
@@ -396,7 +402,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 3
+	VERSION = 4
 
 	def __init__(self):
 		"""Initialize."""
@@ -501,6 +507,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		defaults.setdefault(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 		defaults.setdefault(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
 		defaults.setdefault(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+		defaults.setdefault(CONF_MANUAL_DISABLE_STATES, [])
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
@@ -551,6 +558,9 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				
 				# Get use_interceptor - only relevant for presence_lock mode
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+				
+				# Get manual_disable_states - only relevant for automatic mode
+				manual_disable_states = user_input.get(CONF_MANUAL_DISABLE_STATES, [])
 
 				updated_config = {
 					CONF_ENTITY_ID: self._selected_entity_id,
@@ -561,6 +571,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
 					CONF_AUTOMATION_MODE: automation_mode,
 					CONF_USE_INTERCEPTOR: use_interceptor,
+					CONF_MANUAL_DISABLE_STATES: manual_disable_states,
 					# Legacy fields for coordinator compatibility
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
 					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: require_occupancy,
@@ -682,6 +693,22 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
+
+		# Add manual_disable_states multi-select (only relevant for automatic mode)
+		# Uses the same state options as detected/cleared state fields
+		if use_dropdown and state_option_source.options:
+			disable_state_options = list(state_option_source.options)
+			schema_fields[vol.Optional(
+				CONF_MANUAL_DISABLE_STATES,
+				default=defaults[CONF_MANUAL_DISABLE_STATES],
+			)] = selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=disable_state_options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+					multiple=True,
+					translation_key="manual_disable_states",
+				)
+			)
 
 		if use_dropdown:
 			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
@@ -1226,6 +1253,9 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_USE_INTERCEPTOR: self._current_entity_config.get(
 				CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR
 			),
+			CONF_MANUAL_DISABLE_STATES: self._current_entity_config.get(
+				CONF_MANUAL_DISABLE_STATES, []
+			),
 		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
@@ -1277,6 +1307,9 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				
 				# Get use_interceptor - only relevant for presence_lock mode
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+				
+				# Get manual_disable_states - only relevant for automatic mode
+				manual_disable_states = user_input.get(CONF_MANUAL_DISABLE_STATES, [])
 
 				updated_config = {
 					CONF_ENTITY_ID: self._selected_entity_id,
@@ -1287,6 +1320,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
 					CONF_AUTOMATION_MODE: automation_mode,
 					CONF_USE_INTERCEPTOR: use_interceptor,
+					CONF_MANUAL_DISABLE_STATES: manual_disable_states,
 					# Legacy fields for coordinator compatibility
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
 					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: require_occupancy,
@@ -1408,6 +1442,22 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
+
+		# Add manual_disable_states multi-select (only relevant for automatic mode)
+		# Uses the same state options as detected/cleared state fields
+		if use_dropdown and state_option_source.options:
+			disable_state_options = list(state_option_source.options)
+			schema_fields[vol.Optional(
+				CONF_MANUAL_DISABLE_STATES,
+				default=defaults[CONF_MANUAL_DISABLE_STATES],
+			)] = selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=disable_state_options,
+					mode=selector.SelectSelectorMode.DROPDOWN,
+					multiple=True,
+					translation_key="manual_disable_states",
+				)
+			)
 
 		if use_dropdown:
 			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
