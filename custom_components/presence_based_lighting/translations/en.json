@@ -82,8 +82,8 @@
         }
       },
       "sensor_mappings": {
-        "title": "Configure Sensor Mappings",
-        "description": "Map presence sensors to their source entities for state tracking. This is useful when using real_last_changed sensors. Auto-detected mappings are shown as defaults. Leave empty to use the selected sensor directly.",
+        "title": "Configure Sensor Source Mappings",
+        "description": "When using sensors from the Real Last Changed integration (or similar), you can map them to their source binary sensors for state tracking. The detected mappings are shown as defaults.\n\nConfigured sensors:\n{sensor_list}",
         "data": {},
         "data_description": {}
       }
@@ -116,8 +116,8 @@
         }
       },
       "sensor_mappings": {
-        "title": "Configure Sensor Mappings",
-        "description": "Map presence sensors to their source entities for state tracking. This is useful when using real_last_changed sensors. Auto-detected mappings are shown as defaults. Leave empty to use the selected sensor directly.",
+        "title": "Configure Sensor Source Mappings",
+        "description": "When using sensors from the Real Last Changed integration (or similar), you can map them to their source binary sensors for state tracking. The detected mappings are shown as defaults.\n\nConfigured sensors:\n{sensor_list}",
         "data": {},
         "data_description": {}
       },
