@@ -20,7 +20,6 @@ from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_AUTOMATION_MODE,
-	CONF_CLEARING_SENSOR_MAPPINGS,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
 	CONF_ENTITY_ID,
@@ -34,7 +33,6 @@ from .const import (
 	CONF_PRESENCE_DETECTED_SERVICE,
 	CONF_PRESENCE_DETECTED_STATE,
 	CONF_PRESENCE_SENSORS,
-	CONF_PRESENCE_SENSOR_MAPPINGS,
 	CONF_RESPECTS_PRESENCE_ALLOWED,
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
@@ -56,14 +54,9 @@ from .const import (
 	NO_ACTION,
 )
 from .interceptor import is_interceptor_available
-from .real_last_changed import (
-	is_real_last_changed_entity,
-	get_source_entity,
-	get_all_real_last_changed_mappings,
-)
+from .real_last_changed import is_real_last_changed_entity
 
 STEP_USER = "user"
-STEP_SENSOR_MAPPINGS = "sensor_mappings"
 STEP_SELECT_ENTITY = "select_entity"
 STEP_CONFIGURE_ENTITY = "configure_entity"
 STEP_MANAGE_ENTITIES = "manage_entities"
@@ -74,7 +67,6 @@ FIELD_EDIT_ENTITY = "entity_to_edit"
 FIELD_DELETE_ENTITIES = "entities_to_delete"
 FIELD_PRESENCE_DETECTED_STATE_CUSTOM = "presence_detected_state_custom"
 FIELD_PRESENCE_CLEARED_STATE_CUSTOM = "presence_cleared_state_custom"
-FIELD_SOURCE_ENTITY_PREFIX = "source_entity_"  # Prefix for source entity mapping fields
 
 ACTION_ADD_ENTITY = "add"
 ACTION_NO_ACTION = "no_action"
@@ -437,12 +429,11 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_PRESENCE_SENSORS: user_input[CONF_PRESENCE_SENSORS],
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
-				CONF_PRESENCE_SENSOR_MAPPINGS: {},  # Will be populated in sensor_mappings step
-				CONF_CLEARING_SENSOR_MAPPINGS: {},  # Will be populated in sensor_mappings step
 			}
 			self._controlled_entities = []
 			self._selected_entity_id = None
-			return await self.async_step_sensor_mappings()
+			# Go directly to select_entity - RLC sensors are handled via previous_valid_state attribute
+			return await self.async_step_select_entity()
 
 		return self.async_show_form(
 			step_id=STEP_USER,
@@ -467,108 +458,6 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				}
 			),
 			errors=self._errors,
-		)
-
-	async def async_step_sensor_mappings(self, user_input=None):
-		"""Step to configure source entity mappings for Real Last Changed sensors.
-		
-		This step only appears when Real Last Changed sensors are selected.
-		Regular binary sensors are auto-resolved and don't need mapping.
-		"""
-		self._errors = {}
-		presence_sensors = self._base_data.get(CONF_PRESENCE_SENSORS, [])
-		clearing_sensors = self._base_data.get(CONF_CLEARING_SENSORS, [])
-		
-		# Combine all sensors (deduplicated)
-		all_sensors = list(dict.fromkeys(presence_sensors + clearing_sensors))
-		
-		# Filter to only Real Last Changed entities - regular sensors don't need mapping
-		rlc_sensors = [s for s in all_sensors if is_real_last_changed_entity(s)]
-		
-		# If no Real Last Changed sensors, skip this step entirely
-		if not rlc_sensors:
-			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = {}
-			self._base_data[CONF_CLEARING_SENSOR_MAPPINGS] = {}
-			return await self.async_step_select_entity()
-		
-		if user_input is not None:
-			# Process user input for mappings
-			presence_mappings = {}
-			clearing_mappings = {}
-			
-			for sensor in rlc_sensors:
-				# Create a safe key for the form field
-				field_key = f"source_{sensor.replace('.', '_')}"
-				source_entity = None
-				
-				if field_key in user_input and user_input[field_key]:
-					# User provided a mapping
-					source_entity = user_input[field_key]
-				else:
-					# Try auto-detection for real_last_changed sensors
-					source = get_source_entity(self.hass, sensor)
-					if source:
-						source_entity = source
-				
-				# Add to appropriate mapping dict
-				if source_entity:
-					if sensor in presence_sensors:
-						presence_mappings[sensor] = source_entity
-					if sensor in clearing_sensors:
-						clearing_mappings[sensor] = source_entity
-			
-			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = presence_mappings
-			self._base_data[CONF_CLEARING_SENSOR_MAPPINGS] = clearing_mappings
-			return await self.async_step_select_entity()
-		
-		# Build the schema with a field for each Real Last Changed sensor only
-		schema_dict = {}
-		
-		for sensor in rlc_sensors:
-			# Get friendly name for the sensor
-			friendly_name = _get_entity_name(self.hass, sensor)
-			
-			# Try auto-detection for source entity
-			auto_detected_source = get_source_entity(self.hass, sensor)
-			
-			# Create a safe key for the form field
-			field_key = f"source_{sensor.replace('.', '_')}"
-			
-			# Use vol.Optional with description to show friendly name
-			# The field key is used internally, but we'll use data labels in translations
-			if auto_detected_source:
-				schema_dict[vol.Optional(field_key, default=auto_detected_source, description={"suggested_value": auto_detected_source})] = selector.EntitySelector(
-					selector.EntitySelectorConfig(
-						domain="binary_sensor",
-						multiple=False,
-					)
-				)
-			else:
-				schema_dict[vol.Optional(field_key)] = selector.EntitySelector(
-					selector.EntitySelectorConfig(
-						domain="binary_sensor",
-						multiple=False,
-					)
-				)
-		
-		# Build sensor descriptions for the form (only RLC sensors)
-		sensor_descriptions = []
-		for sensor in rlc_sensors:
-			friendly_name = _get_entity_name(self.hass, sensor)
-			sensor_types = []
-			if sensor in presence_sensors:
-				sensor_types.append("trigger")
-			if sensor in clearing_sensors:
-				sensor_types.append("clearing")
-			sensor_descriptions.append(f"• {friendly_name} ({', '.join(sensor_types)})")
-		
-		return self.async_show_form(
-			step_id=STEP_SENSOR_MAPPINGS,
-			data_schema=vol.Schema(schema_dict),
-			errors=self._errors,
-			description_placeholders={
-				"sensor_list": "\n".join(sensor_descriptions),
-			},
 		)
 
 	async def async_step_select_entity(self, user_input=None):
@@ -1267,10 +1156,11 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
 			self._selected_entity_id = None
 			_LOGGER.debug(
-				"Transitioning to sensor_mappings step. Current entities: %d",
+				"Transitioning to manage_entities step. Current entities: %d",
 				len(self._controlled_entities),
 			)
-			return await self.async_step_sensor_mappings()
+			# Go directly to manage_entities - RLC sensors are handled via previous_valid_state attribute
+			return await self.async_step_manage_entities()
 
 		return self.async_show_form(
 			step_id="init",
@@ -1301,115 +1191,6 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				}
 			),
 			description_placeholders={"room": self._base_data[CONF_ROOM_NAME]},
-		)
-
-	async def async_step_sensor_mappings(self, user_input=None):
-		"""Step to configure source entity mappings for Real Last Changed sensors.
-		
-		This step only appears when Real Last Changed sensors are selected.
-		Regular binary sensors are auto-resolved and don't need mapping.
-		"""
-		self._errors = {}
-		presence_sensors = self._base_data.get(CONF_PRESENCE_SENSORS, [])
-		clearing_sensors = self._base_data.get(CONF_CLEARING_SENSORS, [])
-		existing_presence_mappings = self._base_data.get(CONF_PRESENCE_SENSOR_MAPPINGS, {})
-		existing_clearing_mappings = self._base_data.get(CONF_CLEARING_SENSOR_MAPPINGS, {})
-		
-		# Combine all sensors (deduplicated)
-		all_sensors = list(dict.fromkeys(presence_sensors + clearing_sensors))
-		
-		# Filter to only Real Last Changed entities - regular sensors don't need mapping
-		rlc_sensors = [s for s in all_sensors if is_real_last_changed_entity(s)]
-		
-		# Merge existing mappings for lookup
-		existing_mappings = {**existing_presence_mappings, **existing_clearing_mappings}
-		
-		# If no Real Last Changed sensors, skip this step entirely
-		if not rlc_sensors:
-			# Keep any existing mappings (they may be for sensors that were removed)
-			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = {}
-			self._base_data[CONF_CLEARING_SENSOR_MAPPINGS] = {}
-			return await self.async_step_manage_entities()
-		
-		if user_input is not None:
-			# Process user input for mappings
-			presence_mappings = {}
-			clearing_mappings = {}
-			
-			for sensor in rlc_sensors:
-				# Create a safe key for the form field
-				field_key = f"source_{sensor.replace('.', '_')}"
-				source_entity = None
-				
-				if field_key in user_input and user_input[field_key]:
-					# User provided a mapping
-					source_entity = user_input[field_key]
-				else:
-					# Try auto-detection for real_last_changed sensors
-					source = get_source_entity(self.hass, sensor)
-					if source:
-						source_entity = source
-				
-				# Add to appropriate mapping dict
-				if source_entity:
-					if sensor in presence_sensors:
-						presence_mappings[sensor] = source_entity
-					if sensor in clearing_sensors:
-						clearing_mappings[sensor] = source_entity
-			
-			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = presence_mappings
-			self._base_data[CONF_CLEARING_SENSOR_MAPPINGS] = clearing_mappings
-			return await self.async_step_manage_entities()
-		
-		# Build the schema with a field for each Real Last Changed sensor only
-		schema_dict = {}
-		
-		for sensor in rlc_sensors:
-			# Get friendly name for the sensor
-			friendly_name = _get_entity_name(self.hass, sensor)
-			
-			# Check existing mapping first, then try auto-detection
-			default_source = existing_mappings.get(sensor)
-			if default_source is None:
-				default_source = get_source_entity(self.hass, sensor)
-			
-			# Create a safe key for the form field
-			field_key = f"source_{sensor.replace('.', '_')}"
-			
-			# Set the default value if available
-			if default_source:
-				schema_dict[vol.Optional(field_key, default=default_source, description={"suggested_value": default_source})] = selector.EntitySelector(
-					selector.EntitySelectorConfig(
-						domain="binary_sensor",
-						multiple=False,
-					)
-				)
-			else:
-				schema_dict[vol.Optional(field_key)] = selector.EntitySelector(
-					selector.EntitySelectorConfig(
-						domain="binary_sensor",
-						multiple=False,
-					)
-				)
-		
-		# Build sensor descriptions for the form (only RLC sensors)
-		sensor_descriptions = []
-		for sensor in rlc_sensors:
-			friendly_name = _get_entity_name(self.hass, sensor)
-			sensor_types = []
-			if sensor in presence_sensors:
-				sensor_types.append("trigger")
-			if sensor in clearing_sensors:
-				sensor_types.append("clearing")
-			sensor_descriptions.append(f"• {friendly_name} ({', '.join(sensor_types)})")
-		
-		return self.async_show_form(
-			step_id=STEP_SENSOR_MAPPINGS,
-			data_schema=vol.Schema(schema_dict),
-			errors=self._errors,
-			description_placeholders={
-				"sensor_list": "\n".join(sensor_descriptions),
-			},
 		)
 
 	async def async_step_select_entity(self, user_input=None):

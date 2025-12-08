@@ -20,7 +20,6 @@ from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_AUTOMATION_MODE,
-	CONF_CLEARING_SENSOR_MAPPINGS,
 	CONF_CLEARING_SENSORS,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -33,7 +32,6 @@ from .const import (
 	CONF_PRESENCE_CLEARED_STATE,
 	CONF_PRESENCE_DETECTED_SERVICE,
 	CONF_PRESENCE_DETECTED_STATE,
-	CONF_PRESENCE_SENSOR_MAPPINGS,
 	CONF_PRESENCE_SENSORS,
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
@@ -56,7 +54,7 @@ from .const import (
 	STARTUP_MESSAGE,
 )
 from .interceptor import PresenceLockInterceptor, is_interceptor_available
-from .real_last_changed import resolve_entity_for_state_tracking
+from .real_last_changed import is_entity_on, is_entity_off, is_real_last_changed_entity
 
 _LOGGER = logging.getLogger(__package__)
 
@@ -181,19 +179,10 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 		)
 
 	if config_entry.version == 4:
-		# Version 4 -> 5: Add presence_sensor_mappings and clearing_sensor_mappings for real_last_changed support
-		new_data = {**config_entry.data}
-		
-		# Add empty presence_sensor_mappings if not present
-		if CONF_PRESENCE_SENSOR_MAPPINGS not in new_data:
-			new_data[CONF_PRESENCE_SENSOR_MAPPINGS] = {}
-		
-		# Add empty clearing_sensor_mappings if not present
-		if CONF_CLEARING_SENSOR_MAPPINGS not in new_data:
-			new_data[CONF_CLEARING_SENSOR_MAPPINGS] = {}
-
+		# Version 4 -> 5: No changes needed - just bump version
+		# (sensor mappings were removed in favor of reading real_last_changed attributes directly)
 		hass.config_entries.async_update_entry(
-			config_entry, data=new_data, version=5
+			config_entry, data={**config_entry.data}, version=5
 		)
 		_LOGGER.info(
 			"Migration of entry %s from version 4 to 5 successful",
@@ -351,52 +340,22 @@ class PresenceBasedLightingCoordinator:
 			controlled_ids = list(self._entity_states.keys())
 			presence_sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
 			clearing_sensors = self.entry.data.get(CONF_CLEARING_SENSORS, [])
-			presence_sensor_mappings = self.entry.data.get(CONF_PRESENCE_SENSOR_MAPPINGS, {})
-			clearing_sensor_mappings = self.entry.data.get(CONF_CLEARING_SENSOR_MAPPINGS, {})
 			
-			# Resolve presence sensors to their source entities using mappings
-			# This handles real_last_changed sensors by tracking their source binary_sensor
-			resolved_presence_sensors = []
-			self._sensor_to_original = {}  # Map resolved sensor -> original sensor
-			for sensor in presence_sensors:
-				# Use configured mapping first, then fall back to auto-detection
-				resolved = presence_sensor_mappings.get(sensor) or resolve_entity_for_state_tracking(self.hass, sensor)
-				resolved_presence_sensors.append(resolved)
-				if resolved != sensor:
-					_LOGGER.debug("Resolved presence sensor %s -> %s", sensor, resolved)
-				self._sensor_to_original[resolved] = sensor
+			# Store presence and clearing sensors directly
+			# RLC sensors are handled via their previous_valid_state attribute
+			self._presence_sensors = set(presence_sensors)
+			self._clearing_sensors = set(clearing_sensors) if clearing_sensors else set(presence_sensors)
 			
-			# Deduplicate resolved presence sensors
-			resolved_presence_sensors = list(set(resolved_presence_sensors))
-			
-			# Store resolved sensors for checking in handlers
-			self._resolved_presence_sensors = set(resolved_presence_sensors)
-			
-			# Resolve clearing sensors to their source entities using mappings
-			resolved_clearing_sensors = []
-			for sensor in clearing_sensors:
-				# Use configured mapping first, then fall back to auto-detection
-				resolved = clearing_sensor_mappings.get(sensor) or resolve_entity_for_state_tracking(self.hass, sensor)
-				resolved_clearing_sensors.append(resolved)
-				if resolved != sensor:
-					_LOGGER.debug("Resolved clearing sensor %s -> %s", sensor, resolved)
-				self._sensor_to_original[resolved] = sensor
-			
-			# Deduplicate resolved clearing sensors
-			resolved_clearing_sensors = list(set(resolved_clearing_sensors))
-			
-			# Store resolved clearing sensors for checking in handlers
-			self._resolved_clearing_sensors = set(resolved_clearing_sensors)
-			
-			# Combine resolved presence sensors with resolved clearing sensors for state change tracking
-			all_sensors = list(set(resolved_presence_sensors + resolved_clearing_sensors))
+			# Combine all sensors for state change tracking
+			all_sensors = list(set(presence_sensors + clearing_sensors))
 			
 			_LOGGER.debug("Setting up listeners for %d controlled entities: %s", 
 						 len(controlled_ids), controlled_ids)
-			_LOGGER.debug("Setting up listeners for %d presence sensors (resolved): %s", 
-						 len(resolved_presence_sensors), resolved_presence_sensors)
-			_LOGGER.debug("Setting up listeners for %d clearing sensors (resolved): %s", 
-						 len(resolved_clearing_sensors), resolved_clearing_sensors)
+			_LOGGER.debug("Setting up listeners for %d presence sensors: %s", 
+						 len(presence_sensors), presence_sensors)
+			_LOGGER.debug("Setting up listeners for %d clearing sensors: %s", 
+						 len(clearing_sensors) if clearing_sensors else len(presence_sensors), 
+						 clearing_sensors if clearing_sensors else presence_sensors)
 
 			if controlled_ids:
 				self._listeners.append(
@@ -426,6 +385,7 @@ class PresenceBasedLightingCoordinator:
 			_LOGGER.info("Coordinator started successfully with %d listeners", len(self._listeners))
 		except Exception as err:
 			_LOGGER.exception("Error starting PresenceBasedLightingCoordinator: %s", err)
+			raise
 			raise
 
 	@callback
@@ -700,22 +660,46 @@ class PresenceBasedLightingCoordinator:
 							 config.get(CONF_ENTITY_ID), err)
 
 	async def _handle_presence_change(self, event: Event) -> None:
+		"""Handle state changes on presence/clearing sensors.
+		
+		For real_last_changed sensors, the state is a timestamp that changes when
+		the source entity changes. We read the previous_valid_state attribute to
+		determine if the source is now on or off.
+		
+		For regular binary sensors, we use the state directly.
+		"""
 		try:
 			entity_id = event.data.get("entity_id")
 			new_state = event.data.get("new_state")
 			old_state = event.data.get("old_state")
-			if not new_state or not old_state or new_state.state == old_state.state:
+			if not new_state or not old_state:
 				return
 
-			_LOGGER.debug("Presence change detected on %s: %s -> %s", entity_id, old_state.state, new_state.state)
+			# For real_last_changed sensors, the "state" is a timestamp
+			# We need to check previous_valid_state attribute for actual on/off
+			is_rlc = is_real_last_changed_entity(entity_id)
+			
+			if is_rlc:
+				# For RLC sensors, any state change means the source entity changed
+				# Get the current occupancy state from the attribute
+				currently_on = is_entity_on(self.hass, entity_id)
+				currently_off = is_entity_off(self.hass, entity_id)
+				_LOGGER.debug("RLC sensor %s changed, previous_valid_state: on=%s, off=%s", 
+							 entity_id, currently_on, currently_off)
+			else:
+				# For regular sensors, check if state actually changed
+				if new_state.state == old_state.state:
+					return
+				currently_on = new_state.state == STATE_ON
+				currently_off = new_state.state == STATE_OFF
+				_LOGGER.debug("Presence change detected on %s: %s -> %s", 
+							 entity_id, old_state.state, new_state.state)
 
-			# Use resolved sensors for triggering (handles real_last_changed mappings)
-			resolved_presence_sensors = getattr(self, '_resolved_presence_sensors', set())
-			resolved_clearing_sensors = getattr(self, '_resolved_clearing_sensors', set())
+			presence_sensors = getattr(self, '_presence_sensors', set())
+			clearing_sensors = getattr(self, '_clearing_sensors', set())
 			
 			# Trigger detected action if a presence sensor turns on
-			# Check against resolved sensors which are the actual binary sensors we're tracking
-			if new_state.state == STATE_ON and entity_id in resolved_presence_sensors:
+			if currently_on and entity_id in presence_sensors:
 				_LOGGER.debug("Presence detected, cancelling timers")
 				# Cancel all per-entity timers when presence detected
 				for entity_state in self._entity_states.values():
@@ -724,14 +708,14 @@ class PresenceBasedLightingCoordinator:
 						entity_state["off_timer"] = None
 				await self._apply_presence_action(CONF_PRESENCE_DETECTED_SERVICE)
 			# Trigger cleared action if a clearing sensor turns off AND all clearing sensors are clear
-			# Only trigger if the sensor that changed is actually in the clearing sensors list
-			else:
-				# For clearing, use resolved clearing sensors if specified, else fall back to resolved presence sensors
-				effective_clearing = resolved_clearing_sensors if resolved_clearing_sensors else resolved_presence_sensors
-				if new_state.state == STATE_OFF and entity_id in effective_clearing and self._are_clearing_sensors_clear():
-					_LOGGER.debug("Presence cleared, starting off timer")
+			elif currently_off:
+				# For clearing, use clearing sensors if specified, else fall back to presence sensors
+				effective_clearing = clearing_sensors if clearing_sensors else presence_sensors
+				if entity_id in effective_clearing and self._are_clearing_sensors_clear():
 					_LOGGER.debug("Presence cleared, starting off timer")
 					await self._start_off_timer()
+		except Exception as err:
+			_LOGGER.exception("Error handling presence change: %s", err)
 		except Exception as err:
 			_LOGGER.exception("Error handling presence change: %s", err)
 
@@ -802,34 +786,41 @@ class PresenceBasedLightingCoordinator:
 		return context.id in context_ids or (context.parent_id in context_ids if context.parent_id else False)
 
 	def _is_any_occupied(self) -> bool:
-		# Use resolved presence sensors (handles real_last_changed mappings)
-		resolved_sensors = getattr(self, '_resolved_presence_sensors', None)
-		if resolved_sensors:
-			return any(self.hass.states.is_state(sensor, STATE_ON) for sensor in resolved_sensors)
-		# Fallback to original sensors if not yet resolved
+		"""Check if any presence sensor is occupied (on).
+		
+		Uses is_entity_on() helper which handles real_last_changed sensors
+		by reading their previous_valid_state attribute.
+		"""
+		sensors = getattr(self, '_presence_sensors', None)
+		if sensors:
+			return any(is_entity_on(self.hass, sensor) for sensor in sensors)
+		# Fallback if not yet initialized
 		sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
-		return any(self.hass.states.is_state(sensor, STATE_ON) for sensor in sensors)
+		return any(is_entity_on(self.hass, sensor) for sensor in sensors)
 
 	def _are_clearing_sensors_clear(self) -> bool:
-		"""Check if all clearing sensors report off (unoccupied)."""
-		# Use resolved clearing sensors (handles real_last_changed mappings)
-		resolved_clearing = getattr(self, '_resolved_clearing_sensors', None)
-		if resolved_clearing:
-			return all(self.hass.states.is_state(sensor, STATE_OFF) for sensor in resolved_clearing)
+		"""Check if all clearing sensors report off (unoccupied).
+		
+		Uses is_entity_off() helper which handles real_last_changed sensors
+		by reading their previous_valid_state attribute.
+		"""
+		clearing = getattr(self, '_clearing_sensors', None)
+		if clearing:
+			return all(is_entity_off(self.hass, sensor) for sensor in clearing)
 		
 		# Fallback: check if clearing sensors are configured
 		clearing = self.entry.data.get(CONF_CLEARING_SENSORS, [])
 		if clearing:
-			return all(self.hass.states.is_state(sensor, STATE_OFF) for sensor in clearing)
+			return all(is_entity_off(self.hass, sensor) for sensor in clearing)
 		
-		# No clearing sensors configured - fall back to resolved presence sensors
-		resolved_presence = getattr(self, '_resolved_presence_sensors', None)
-		if resolved_presence:
-			return all(self.hass.states.is_state(sensor, STATE_OFF) for sensor in resolved_presence)
+		# No clearing sensors configured - fall back to presence sensors
+		presence = getattr(self, '_presence_sensors', None)
+		if presence:
+			return all(is_entity_off(self.hass, sensor) for sensor in presence)
 		
 		# Last fallback to original presence sensors
 		presence = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
-		return all(self.hass.states.is_state(sensor, STATE_OFF) for sensor in presence)
+		return all(is_entity_off(self.hass, sensor) for sensor in presence)
 
 	async def _start_off_timer(self) -> None:
 		"""Start per-entity off timers when presence clears."""
