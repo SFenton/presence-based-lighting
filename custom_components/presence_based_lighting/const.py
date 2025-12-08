@@ -33,6 +33,7 @@ CONF_ENTITY_OFF_DELAY = "entity_off_delay"
 CONF_AUTOMATION_MODE = "automation_mode"
 CONF_USE_INTERCEPTOR = "use_interceptor"
 CONF_MANUAL_DISABLE_STATES = "manual_disable_states"
+CONF_PRESENCE_SENSOR_MAPPINGS = "presence_sensor_mappings"  # Maps sensors to their source entities
 
 # Automation mode values
 AUTOMATION_MODE_AUTOMATIC = "automatic"

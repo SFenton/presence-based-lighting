@@ -33,6 +33,7 @@ from .const import (
 	CONF_PRESENCE_DETECTED_SERVICE,
 	CONF_PRESENCE_DETECTED_STATE,
 	CONF_PRESENCE_SENSORS,
+	CONF_PRESENCE_SENSOR_MAPPINGS,
 	CONF_RESPECTS_PRESENCE_ALLOWED,
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
@@ -54,8 +55,14 @@ from .const import (
 	NO_ACTION,
 )
 from .interceptor import is_interceptor_available
+from .real_last_changed import (
+	is_real_last_changed_entity,
+	get_source_entity,
+	get_all_real_last_changed_mappings,
+)
 
 STEP_USER = "user"
+STEP_SENSOR_MAPPINGS = "sensor_mappings"
 STEP_SELECT_ENTITY = "select_entity"
 STEP_CONFIGURE_ENTITY = "configure_entity"
 STEP_MANAGE_ENTITIES = "manage_entities"
@@ -66,6 +73,7 @@ FIELD_EDIT_ENTITY = "entity_to_edit"
 FIELD_DELETE_ENTITIES = "entities_to_delete"
 FIELD_PRESENCE_DETECTED_STATE_CUSTOM = "presence_detected_state_custom"
 FIELD_PRESENCE_CLEARED_STATE_CUSTOM = "presence_cleared_state_custom"
+FIELD_SOURCE_ENTITY_PREFIX = "source_entity_"  # Prefix for source entity mapping fields
 
 ACTION_ADD_ENTITY = "add"
 ACTION_NO_ACTION = "no_action"
@@ -402,7 +410,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 4
+	VERSION = 5
 
 	def __init__(self):
 		"""Initialize."""
@@ -428,10 +436,11 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_PRESENCE_SENSORS: user_input[CONF_PRESENCE_SENSORS],
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
+				CONF_PRESENCE_SENSOR_MAPPINGS: {},  # Will be populated in sensor_mappings step
 			}
 			self._controlled_entities = []
 			self._selected_entity_id = None
-			return await self.async_step_select_entity()
+			return await self.async_step_sensor_mappings()
 
 		return self.async_show_form(
 			step_id=STEP_USER,
@@ -440,7 +449,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Required(CONF_ROOM_NAME): str,
 					vol.Required(CONF_PRESENCE_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain="binary_sensor",
+							domain=["binary_sensor", "sensor"],
 							multiple=True,
 						)
 					),
@@ -456,6 +465,76 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				}
 			),
 			errors=self._errors,
+		)
+
+	async def async_step_sensor_mappings(self, user_input=None):
+		"""Step to configure source entity mappings for presence sensors.
+		
+		This step allows users to specify which entity should be used for state tracking
+		when a real_last_changed sensor is selected. Auto-detection is attempted first,
+		with user override always available.
+		"""
+		self._errors = {}
+		presence_sensors = self._base_data.get(CONF_PRESENCE_SENSORS, [])
+		
+		if user_input is not None:
+			# Process user input for mappings
+			mappings = {}
+			for sensor in presence_sensors:
+				# Create a safe key for the form field
+				field_key = f"source_{sensor.replace('.', '_')}"
+				if field_key in user_input and user_input[field_key]:
+					# User provided a mapping
+					mappings[sensor] = user_input[field_key]
+				else:
+					# Try auto-detection
+					source = get_source_entity(self.hass, sensor)
+					if source:
+						mappings[sensor] = source
+			
+			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = mappings
+			return await self.async_step_select_entity()
+		
+		# Build the schema with a field for each presence sensor
+		schema_dict = {}
+		descriptions = {}
+		
+		for sensor in presence_sensors:
+			# Check if this is a real_last_changed sensor
+			is_rlc = is_real_last_changed_entity(sensor)
+			auto_detected_source = get_source_entity(self.hass, sensor) if is_rlc else None
+			
+			# Create a safe key for the form field
+			field_key = f"source_{sensor.replace('.', '_')}"
+			
+			# Set the default value if auto-detected
+			if auto_detected_source:
+				schema_dict[vol.Optional(field_key, default=auto_detected_source)] = selector.EntitySelector(
+					selector.EntitySelectorConfig(
+						domain="binary_sensor",
+						multiple=False,
+					)
+				)
+			else:
+				schema_dict[vol.Optional(field_key)] = selector.EntitySelector(
+					selector.EntitySelectorConfig(
+						domain="binary_sensor",
+						multiple=False,
+					)
+				)
+		
+		# If no sensors require mapping configuration, skip this step
+		if not schema_dict:
+			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = {}
+			return await self.async_step_select_entity()
+		
+		return self.async_show_form(
+			step_id=STEP_SENSOR_MAPPINGS,
+			data_schema=vol.Schema(schema_dict),
+			errors=self._errors,
+			description_placeholders={
+				"sensor_list": ", ".join(presence_sensors),
+			},
 		)
 
 	async def async_step_select_entity(self, user_input=None):
@@ -1154,10 +1233,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
 			self._selected_entity_id = None
 			_LOGGER.debug(
-				"Transitioning to manage_entities step. Current entities: %d",
+				"Transitioning to sensor_mappings step. Current entities: %d",
 				len(self._controlled_entities),
 			)
-			return await self.async_step_manage_entities()
+			return await self.async_step_sensor_mappings()
 
 		return self.async_show_form(
 			step_id="init",
@@ -1168,7 +1247,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						default=self._base_data[CONF_PRESENCE_SENSORS],
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain="binary_sensor",
+							domain=["binary_sensor", "sensor"],
 							multiple=True,
 						)
 					),
@@ -1188,6 +1267,80 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				}
 			),
 			description_placeholders={"room": self._base_data[CONF_ROOM_NAME]},
+		)
+
+	async def async_step_sensor_mappings(self, user_input=None):
+		"""Step to configure source entity mappings for presence sensors.
+		
+		This step allows users to specify which entity should be used for state tracking
+		when a real_last_changed sensor is selected. Auto-detection is attempted first,
+		with user override always available.
+		"""
+		self._errors = {}
+		presence_sensors = self._base_data.get(CONF_PRESENCE_SENSORS, [])
+		existing_mappings = self._base_data.get(CONF_PRESENCE_SENSOR_MAPPINGS, {})
+		
+		if user_input is not None:
+			# Process user input for mappings
+			mappings = {}
+			for sensor in presence_sensors:
+				# Create a safe key for the form field
+				field_key = f"source_{sensor.replace('.', '_')}"
+				if field_key in user_input and user_input[field_key]:
+					# User provided a mapping
+					mappings[sensor] = user_input[field_key]
+				else:
+					# Try auto-detection
+					source = get_source_entity(self.hass, sensor)
+					if source:
+						mappings[sensor] = source
+			
+			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = mappings
+			return await self.async_step_manage_entities()
+		
+		# Build the schema with a field for each presence sensor
+		schema_dict = {}
+		
+		for sensor in presence_sensors:
+			# Check if this is a real_last_changed sensor
+			is_rlc = is_real_last_changed_entity(sensor)
+			
+			# Check existing mapping first, then auto-detect
+			default_source = existing_mappings.get(sensor)
+			if default_source is None and is_rlc:
+				default_source = get_source_entity(self.hass, sensor)
+			
+			# Create a safe key for the form field
+			field_key = f"source_{sensor.replace('.', '_')}"
+			
+			# Set the default value if auto-detected or existing
+			if default_source:
+				schema_dict[vol.Optional(field_key, default=default_source)] = selector.EntitySelector(
+					selector.EntitySelectorConfig(
+						domain="binary_sensor",
+						multiple=False,
+					)
+				)
+			else:
+				schema_dict[vol.Optional(field_key)] = selector.EntitySelector(
+					selector.EntitySelectorConfig(
+						domain="binary_sensor",
+						multiple=False,
+					)
+				)
+		
+		# If no sensors require mapping configuration, skip this step
+		if not schema_dict:
+			self._base_data[CONF_PRESENCE_SENSOR_MAPPINGS] = existing_mappings
+			return await self.async_step_manage_entities()
+		
+		return self.async_show_form(
+			step_id=STEP_SENSOR_MAPPINGS,
+			data_schema=vol.Schema(schema_dict),
+			errors=self._errors,
+			description_placeholders={
+				"sensor_list": ", ".join(presence_sensors),
+			},
 		)
 
 	async def async_step_select_entity(self, user_input=None):

@@ -80,6 +80,12 @@
           "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)"
         }
+      },
+      "sensor_mappings": {
+        "title": "Configure Sensor Mappings",
+        "description": "Map presence sensors to their source entities for state tracking. This is useful when using real_last_changed sensors. Auto-detected mappings are shown as defaults. Leave empty to use the selected sensor directly.",
+        "data": {},
+        "data_description": {}
       }
     },
     "error": {
@@ -108,6 +114,12 @@
           "clearing_sensors": "Binary sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
           "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)"
         }
+      },
+      "sensor_mappings": {
+        "title": "Configure Sensor Mappings",
+        "description": "Map presence sensors to their source entities for state tracking. This is useful when using real_last_changed sensors. Auto-detected mappings are shown as defaults. Leave empty to use the selected sensor directly.",
+        "data": {},
+        "data_description": {}
       },
       "select_entity": {
         "title": "Add Entity to Control",

@@ -56,14 +56,14 @@ def _default_configure_input():
 
 @pytest.mark.asyncio
 async def test_options_flow_init_transitions_to_manage_entities(mock_config_entry):
-    """The init step should transition to the manage step with updated base data."""
+    """The init step should transition to the sensor_mappings step, then to manage step."""
     handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
     handler._controlled_entities = [{"existing": True}]  # type: ignore[attr-defined]
 
-    async def mock_manage():
-        return "manage_entities_step"
+    async def mock_sensor_mappings(user_input=None):
+        return "sensor_mappings_step"
 
-    handler.async_step_manage_entities = mock_manage
+    handler.async_step_sensor_mappings = mock_sensor_mappings
 
     user_input = {
         CONF_PRESENCE_SENSORS: ["binary_sensor.updated_motion"],
@@ -76,7 +76,7 @@ async def test_options_flow_init_transitions_to_manage_entities(mock_config_entr
     assert handler._base_data[CONF_OFF_DELAY] == 10  # type: ignore[attr-defined]
     assert handler._controlled_entities == [{"existing": True}]  # type: ignore[attr-defined]
     assert handler._selected_entity_id is None  # type: ignore[attr-defined]
-    assert result == "manage_entities_step"
+    assert result == "sensor_mappings_step"
 
 
 @pytest.mark.asyncio
@@ -245,10 +245,10 @@ async def test_options_flow_preserves_entities_when_updating_base_settings(mock_
     assert len(handler._controlled_entities) == 1  # type: ignore[attr-defined]
     original_entity = handler._controlled_entities[0]  # type: ignore[attr-defined]
 
-    async def mock_manage_entities():
-        return "manage_entities_step"
+    async def mock_sensor_mappings(user_input=None):
+        return "sensor_mappings_step"
 
-    handler.async_step_manage_entities = mock_manage_entities
+    handler.async_step_sensor_mappings = mock_sensor_mappings
 
     user_input = {
         CONF_PRESENCE_SENSORS: ["binary_sensor.new_sensor_1", "binary_sensor.new_sensor_2"],
@@ -260,7 +260,7 @@ async def test_options_flow_preserves_entities_when_updating_base_settings(mock_
     assert handler._base_data[CONF_PRESENCE_SENSORS] == ["binary_sensor.new_sensor_1", "binary_sensor.new_sensor_2"]  # type: ignore[attr-defined]
     assert handler._base_data[CONF_OFF_DELAY] == 30  # type: ignore[attr-defined]
     assert handler._controlled_entities[0] == original_entity  # type: ignore[attr-defined]
-    assert result == "manage_entities_step"
+    assert result == "sensor_mappings_step"
 
 
 @pytest.mark.asyncio
