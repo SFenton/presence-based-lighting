@@ -351,6 +351,21 @@ class PresenceBasedLightingCoordinator:
 			# Combine all sensors for state change tracking
 			all_sensors = list(set(presence_sensors + clearing_sensors))
 			
+			# Initialize last_effective_state for RLC-tracked entities
+			# This prevents the first state change event from being treated as a "change"
+			# which would incorrectly trigger manual control logic on startup
+			for entity_id, entity_state in self._entity_states.items():
+				cfg = entity_state["config"]
+				rlc_tracking_entity = cfg.get(CONF_RLC_TRACKING_ENTITY)
+				if rlc_tracking_entity:
+					rlc_state = get_effective_state(self.hass, rlc_tracking_entity)
+					if rlc_state is not None:
+						entity_state["last_effective_state"] = rlc_state
+						_LOGGER.debug(
+							"Initialized last_effective_state for %s from RLC %s: %s",
+							entity_id, rlc_tracking_entity, rlc_state
+						)
+			
 			_LOGGER.debug("Setting up listeners for %d controlled entities: %s", 
 						 len(controlled_ids), controlled_ids)
 			_LOGGER.debug("Setting up listeners for %d presence sensors: %s", 
