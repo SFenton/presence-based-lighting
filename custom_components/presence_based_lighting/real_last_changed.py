@@ -108,3 +108,79 @@ def is_entity_off(hass: "HomeAssistant", entity_id: str) -> bool:
     """
     effective_state = get_effective_state(hass, entity_id)
     return effective_state == "off"
+
+
+def is_rlc_integration_available(hass: "HomeAssistant") -> bool:
+    """Check if the real_last_changed integration is available.
+    
+    Checks if any entities with the previous_valid_state attribute exist,
+    which indicates the RLC integration is installed and has created sensors.
+    
+    Args:
+        hass: Home Assistant instance
+        
+    Returns:
+        True if RLC integration appears to be available
+    """
+    for state in hass.states.async_all():
+        if state.entity_id.startswith("sensor.") and ATTR_PREVIOUS_VALID_STATE in state.attributes:
+            return True
+    return False
+
+
+def get_rlc_sensors_for_entity(hass: "HomeAssistant", target_entity_id: str) -> list[str]:
+    """Find RLC sensors that might track a given entity.
+    
+    RLC sensors track when another entity last changed state. This function
+    looks for sensors that have the 'entity_id' attribute matching the target,
+    or whose name contains the target entity's name.
+    
+    Args:
+        hass: Home Assistant instance
+        target_entity_id: The entity ID to find RLC sensors for (e.g., "light.lamp")
+        
+    Returns:
+        List of RLC sensor entity_ids that likely track the target entity
+    """
+    rlc_sensors = []
+    
+    # Extract the name part from the entity_id (e.g., "lamp" from "light.lamp")
+    target_name = target_entity_id.split(".", 1)[-1] if "." in target_entity_id else target_entity_id
+    
+    for state in hass.states.async_all():
+        if not state.entity_id.startswith("sensor."):
+            continue
+            
+        if ATTR_PREVIOUS_VALID_STATE not in state.attributes:
+            continue
+            
+        # Check if this RLC sensor tracks our target entity
+        # Method 1: Check the 'entity_id' attribute (if RLC stores the source entity)
+        tracked_entity = state.attributes.get("entity_id")
+        if tracked_entity == target_entity_id:
+            rlc_sensors.append(state.entity_id)
+            continue
+            
+        # Method 2: Check if the sensor name contains the target entity's name
+        sensor_name = state.entity_id.split(".", 1)[-1] if "." in state.entity_id else state.entity_id
+        if target_name in sensor_name:
+            rlc_sensors.append(state.entity_id)
+            continue
+    
+    return rlc_sensors
+
+
+def get_all_rlc_sensors(hass: "HomeAssistant") -> list[str]:
+    """Get all RLC sensors in the system.
+    
+    Args:
+        hass: Home Assistant instance
+        
+    Returns:
+        List of all RLC sensor entity_ids
+    """
+    return [
+        state.entity_id
+        for state in hass.states.async_all()
+        if state.entity_id.startswith("sensor.") and ATTR_PREVIOUS_VALID_STATE in state.attributes
+    ]

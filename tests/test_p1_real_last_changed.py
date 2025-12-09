@@ -563,3 +563,223 @@ class TestRLCEventHandling:
         # Timer should now be set (or already fired for delay=0)
         # With delay=0 and the async nature, we just verify the event was processed
         # by checking that no exception was raised and the method completed
+
+
+class TestRLCTrackingEntityForManualControl:
+    """Tests for using RLC tracking entity to detect manual control on controlled entities."""
+
+    @pytest.fixture
+    def mock_hass(self):
+        """Create a mock Home Assistant instance."""
+        hass = MagicMock()
+        hass.services = MagicMock()
+        hass.services.async_call = AsyncMock()
+        hass.bus = MagicMock()
+        hass.bus.async_fire = AsyncMock()
+        hass.bus.async_listen = MagicMock(return_value=lambda: None)
+        
+        # States storage
+        hass._states_data = {}
+        
+        def get_state(entity_id):
+            if entity_id in hass._states_data:
+                data = hass._states_data[entity_id]
+                mock_state = MagicMock()
+                mock_state.state = data["state"]
+                mock_state.attributes = data.get("attributes", {})
+                mock_state.entity_id = entity_id
+                return mock_state
+            return None
+        
+        hass.states = MagicMock()
+        hass.states.get = get_state
+        hass.states.async_all = MagicMock(return_value=[])
+        
+        return hass
+
+    @pytest.fixture
+    def mock_entry_with_rlc_tracking(self):
+        """Create a config entry with RLC tracking entity configured."""
+        from custom_components.presence_based_lighting.const import CONF_RLC_TRACKING_ENTITY
+        
+        entry = MagicMock()
+        entry.data = {
+            CONF_ROOM_NAME: "test_room",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.motion"],
+            CONF_CLEARING_SENSORS: [],
+            CONF_OFF_DELAY: 0,
+            CONF_CONTROLLED_ENTITIES: [
+                {
+                    CONF_ENTITY_ID: "light.test_light",
+                    CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                    CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                    CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                    CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                    CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                    CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                    CONF_AUTOMATION_MODE: AUTOMATION_MODE_AUTOMATIC,
+                    CONF_RLC_TRACKING_ENTITY: "sensor.light_test_light_rlc",
+                    "manual_disable_states": ["off"],  # Manual off disables automation
+                }
+            ],
+        }
+        entry.options = {}
+        entry.entry_id = "test_rlc_tracking"
+        return entry
+
+    def _create_state_change_event(self, entity_id, old_state, new_state, context=None):
+        """Create a state change event for testing."""
+        event = MagicMock()
+        event.data = {
+            "entity_id": entity_id,
+            "old_state": old_state,
+            "new_state": new_state,
+        }
+        return event
+
+    @pytest.mark.asyncio
+    async def test_rlc_tracking_uses_effective_state_for_manual_control(self, mock_hass, mock_entry_with_rlc_tracking):
+        """When RLC tracking entity is configured, manual control detection uses RLC state."""
+        from custom_components.presence_based_lighting.const import CONF_RLC_TRACKING_ENTITY
+        
+        # Set up states: light is "on", RLC sensor shows "on" as effective state
+        mock_hass._states_data["binary_sensor.motion"] = {
+            "state": "on",
+            "attributes": {},
+        }
+        mock_hass._states_data["light.test_light"] = {
+            "state": "on",
+            "attributes": {},
+        }
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "on"},  # RLC says light is "on"
+        }
+        
+        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+        
+        # Initially presence should be allowed
+        assert coordinator.get_presence_allowed("light.test_light") is True
+        
+        # Create event: light changed from on to off externally
+        old_state = MagicMock()
+        old_state.state = "on"
+        old_state.attributes = {}
+        
+        new_state = MagicMock()
+        new_state.state = "off"
+        new_state.attributes = {}
+        new_state.context = MagicMock()
+        new_state.context.id = "external_context"
+        
+        event = self._create_state_change_event(
+            "light.test_light",
+            old_state=old_state,
+            new_state=new_state,
+        )
+        
+        # Update RLC sensor to reflect the new "real" state
+        mock_hass._states_data["sensor.light_test_light_rlc"]["attributes"] = {
+            ATTR_PREVIOUS_VALID_STATE: "off"  # RLC confirms light is really off
+        }
+        
+        # Handle the controlled entity change
+        await coordinator._handle_controlled_entity_change(event)
+        
+        # Presence should now be disabled because RLC tracking shows "off" (in manual_disable_states)
+        assert coordinator.get_presence_allowed("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_tracking_ignores_spurious_changes(self, mock_hass, mock_entry_with_rlc_tracking):
+        """When RLC tracking shows different state than entity, use RLC state."""
+        # This simulates a scenario where the light state changes due to reboot,
+        # but the RLC sensor still shows the "real" previous state
+        
+        mock_hass._states_data["binary_sensor.motion"] = {
+            "state": "on",
+            "attributes": {},
+        }
+        mock_hass._states_data["light.test_light"] = {
+            "state": "off",  # Light appears off (maybe due to reboot)
+            "attributes": {},
+        }
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "on"},  # RLC knows light was really on
+        }
+        
+        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+        
+        # Create event: light changed from on to off
+        old_state = MagicMock()
+        old_state.state = "on"
+        old_state.attributes = {}
+        
+        new_state = MagicMock()
+        new_state.state = "off"
+        new_state.attributes = {}
+        new_state.context = MagicMock()
+        new_state.context.id = "external_context"
+        
+        event = self._create_state_change_event(
+            "light.test_light",
+            old_state=old_state,
+            new_state=new_state,
+        )
+        
+        # RLC still shows "on" - this is a spurious change
+        # (RLC hasn't updated because the change wasn't "real")
+        
+        # Handle the controlled entity change
+        await coordinator._handle_controlled_entity_change(event)
+        
+        # Presence should STILL be allowed because RLC tracking shows "on" (not in manual_disable_states)
+        assert coordinator.get_presence_allowed("light.test_light") is True
+
+    @pytest.mark.asyncio
+    async def test_rlc_tracking_unavailable_ignores_change(self, mock_hass, mock_entry_with_rlc_tracking):
+        """When RLC tracking entity is unavailable, the state change is ignored."""
+        mock_hass._states_data["binary_sensor.motion"] = {
+            "state": "on",
+            "attributes": {},
+        }
+        mock_hass._states_data["light.test_light"] = {
+            "state": "on",
+            "attributes": {},
+        }
+        # RLC sensor is NOT present in states (unavailable)
+        
+        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+        
+        # Initially presence should be allowed
+        assert coordinator.get_presence_allowed("light.test_light") is True
+        
+        # Create event: light changed from on to off
+        old_state = MagicMock()
+        old_state.state = "on"
+        old_state.attributes = {}
+        
+        new_state = MagicMock()
+        new_state.state = "off"
+        new_state.attributes = {}
+        new_state.context = MagicMock()
+        new_state.context.id = "external_context"
+        
+        event = self._create_state_change_event(
+            "light.test_light",
+            old_state=old_state,
+            new_state=new_state,
+        )
+        
+        # Handle the controlled entity change
+        await coordinator._handle_controlled_entity_change(event)
+        
+        # Presence should STILL be allowed because RLC tracking entity is unavailable
+        # (the change is ignored entirely)
+        assert coordinator.get_presence_allowed("light.test_light") is True

@@ -36,6 +36,7 @@ from .const import (
 	CONF_RESPECTS_PRESENCE_ALLOWED,
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
+	CONF_RLC_TRACKING_ENTITY,
 	CONF_ROOM_NAME,
 	CONF_USE_INTERCEPTOR,
 	DEFAULT_AUTOMATION_MODE,
@@ -54,7 +55,12 @@ from .const import (
 	NO_ACTION,
 )
 from .interceptor import is_interceptor_available
-from .real_last_changed import is_real_last_changed_entity
+from .real_last_changed import (
+	is_real_last_changed_entity,
+	is_rlc_integration_available,
+	get_rlc_sensors_for_entity,
+	get_all_rlc_sensors,
+)
 
 STEP_USER = "user"
 STEP_SELECT_ENTITY = "select_entity"
@@ -510,10 +516,16 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		defaults.setdefault(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
 		defaults.setdefault(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
 		defaults.setdefault(CONF_MANUAL_DISABLE_STATES, [])
+		defaults.setdefault(CONF_RLC_TRACKING_ENTITY, None)
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
+		
+		# Check if RLC integration is available and find potential RLC sensors for this entity
+		rlc_available = is_rlc_integration_available(self.hass)
+		rlc_sensors_for_entity = get_rlc_sensors_for_entity(self.hass, entity_id) if rlc_available else []
+		all_rlc_sensors = get_all_rlc_sensors(self.hass) if rlc_available else []
 
 		state_option_source = await _build_state_option_dicts(
 			self.hass,
@@ -563,6 +575,9 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				
 				# Get manual_disable_states - only relevant for automatic mode
 				manual_disable_states = user_input.get(CONF_MANUAL_DISABLE_STATES, [])
+				
+				# Get RLC tracking entity (optional)
+				rlc_tracking_entity = user_input.get(CONF_RLC_TRACKING_ENTITY)
 
 				updated_config = {
 					CONF_ENTITY_ID: self._selected_entity_id,
@@ -580,6 +595,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_REQUIRE_VACANCY_FOR_CLEARED: require_vacancy,
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
+				
+				# Only store RLC tracking entity if one was selected
+				if rlc_tracking_entity:
+					updated_config[CONF_RLC_TRACKING_ENTITY] = rlc_tracking_entity
 
 				if entity_off_delay is not None:
 					updated_config[CONF_ENTITY_OFF_DELAY] = entity_off_delay
@@ -711,6 +730,39 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					translation_key="manual_disable_states",
 				)
 			)
+
+		# Add RLC tracking entity selector if RLC integration is available
+		if rlc_available and all_rlc_sensors:
+			# Build options - prioritize sensors that match this entity, then show all
+			rlc_options: list[selector.SelectOptionDict] = []
+			# Add matched sensors first with a hint
+			for sensor_id in rlc_sensors_for_entity:
+				friendly = _get_entity_name(self.hass, sensor_id)
+				rlc_options.append(selector.SelectOptionDict(
+					value=sensor_id,
+					label=f"⭐ {friendly} (recommended)",
+				))
+			# Add remaining sensors
+			for sensor_id in all_rlc_sensors:
+				if sensor_id not in rlc_sensors_for_entity:
+					friendly = _get_entity_name(self.hass, sensor_id)
+					rlc_options.append(selector.SelectOptionDict(
+						value=sensor_id,
+						label=friendly,
+					))
+			
+			if rlc_options:
+				rlc_default = defaults.get(CONF_RLC_TRACKING_ENTITY)
+				schema_fields[vol.Optional(
+					CONF_RLC_TRACKING_ENTITY,
+					default=rlc_default,
+				)] = selector.SelectSelector(
+					selector.SelectSelectorConfig(
+						options=rlc_options,
+						mode=selector.SelectSelectorMode.DROPDOWN,
+						translation_key="rlc_tracking_entity",
+					)
+				)
 
 		if use_dropdown:
 			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)
@@ -1259,11 +1311,19 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_MANUAL_DISABLE_STATES: self._current_entity_config.get(
 				CONF_MANUAL_DISABLE_STATES, []
 			),
+			CONF_RLC_TRACKING_ENTITY: self._current_entity_config.get(
+				CONF_RLC_TRACKING_ENTITY
+			),
 		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
+		
+		# Check if RLC integration is available and find potential RLC sensors for this entity
+		rlc_available = is_rlc_integration_available(self.hass)
+		rlc_sensors_for_entity = get_rlc_sensors_for_entity(self.hass, entity_id) if rlc_available else []
+		all_rlc_sensors = get_all_rlc_sensors(self.hass) if rlc_available else []
 
 		state_option_source = await _build_state_option_dicts(
 			self.hass,
@@ -1313,6 +1373,9 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				
 				# Get manual_disable_states - only relevant for automatic mode
 				manual_disable_states = user_input.get(CONF_MANUAL_DISABLE_STATES, [])
+				
+				# Get RLC tracking entity (optional)
+				rlc_tracking_entity = user_input.get(CONF_RLC_TRACKING_ENTITY)
 
 				updated_config = {
 					CONF_ENTITY_ID: self._selected_entity_id,
@@ -1330,6 +1393,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_REQUIRE_VACANCY_FOR_CLEARED: require_vacancy,
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
+				
+				# Only store RLC tracking entity if one was selected
+				if rlc_tracking_entity:
+					updated_config[CONF_RLC_TRACKING_ENTITY] = rlc_tracking_entity
 
 				if entity_off_delay is not None:
 					updated_config[CONF_ENTITY_OFF_DELAY] = entity_off_delay
@@ -1461,6 +1528,39 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					translation_key="manual_disable_states",
 				)
 			)
+
+		# Add RLC tracking entity selector if RLC integration is available
+		if rlc_available and all_rlc_sensors:
+			# Build options - prioritize sensors that match this entity, then show all
+			rlc_options: list[selector.SelectOptionDict] = []
+			# Add matched sensors first with a hint
+			for sensor_id in rlc_sensors_for_entity:
+				friendly = _get_entity_name(self.hass, sensor_id)
+				rlc_options.append(selector.SelectOptionDict(
+					value=sensor_id,
+					label=f"⭐ {friendly} (recommended)",
+				))
+			# Add remaining sensors
+			for sensor_id in all_rlc_sensors:
+				if sensor_id not in rlc_sensors_for_entity:
+					friendly = _get_entity_name(self.hass, sensor_id)
+					rlc_options.append(selector.SelectOptionDict(
+						value=sensor_id,
+						label=friendly,
+					))
+			
+			if rlc_options:
+				rlc_default = defaults.get(CONF_RLC_TRACKING_ENTITY)
+				schema_fields[vol.Optional(
+					CONF_RLC_TRACKING_ENTITY,
+					default=rlc_default,
+				)] = selector.SelectSelector(
+					selector.SelectSelectorConfig(
+						options=rlc_options,
+						mode=selector.SelectSelectorMode.DROPDOWN,
+						translation_key="rlc_tracking_entity",
+					)
+				)
 
 		if use_dropdown:
 			detected_custom_field = vol.Optional(FIELD_PRESENCE_DETECTED_STATE_CUSTOM)

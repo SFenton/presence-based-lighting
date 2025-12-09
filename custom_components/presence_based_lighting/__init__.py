@@ -36,6 +36,7 @@ from .const import (
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
 	CONF_RESPECTS_PRESENCE_ALLOWED,
+	CONF_RLC_TRACKING_ENTITY,
 	CONF_ROOM_NAME,
 	DEFAULT_AUTOMATION_MODE,
 	NO_ACTION,
@@ -54,7 +55,7 @@ from .const import (
 	STARTUP_MESSAGE,
 )
 from .interceptor import PresenceLockInterceptor, is_interceptor_available
-from .real_last_changed import is_entity_on, is_entity_off, is_real_last_changed_entity
+from .real_last_changed import get_effective_state, is_entity_on, is_entity_off, is_real_last_changed_entity
 
 _LOGGER = logging.getLogger(__package__)
 
@@ -510,8 +511,32 @@ class PresenceBasedLightingCoordinator:
 			entity_state = self._entity_states[entity_id]
 			cfg = entity_state["config"]
 
+			# Check if an RLC tracking entity is configured for this entity
+			# If so, use the RLC sensor's state to determine if this is a "real" change
+			rlc_tracking_entity = cfg.get(CONF_RLC_TRACKING_ENTITY)
+			if rlc_tracking_entity:
+				# Get the "real" state from the RLC sensor
+				rlc_state = get_effective_state(self.hass, rlc_tracking_entity)
+				if rlc_state is None:
+					_LOGGER.debug(
+						"RLC tracking entity %s unavailable for %s, ignoring state change",
+						rlc_tracking_entity, entity_id
+					)
+					return
+				
+				# Use the RLC sensor's previous_valid_state as the effective state
+				# This filters out spurious changes from reboots/power outages
+				effective_new_state = rlc_state
+				_LOGGER.debug(
+					"Using RLC tracking entity %s for %s: effective state = %s (raw state = %s)",
+					rlc_tracking_entity, entity_id, effective_new_state, new_state.state
+				)
+			else:
+				# No RLC tracking - use the entity's direct state
+				effective_new_state = new_state.state
+
 			# Check presence lock first - this takes priority
-			if await self._check_and_apply_presence_lock(entity_state, new_state.state):
+			if await self._check_and_apply_presence_lock(entity_state, effective_new_state):
 				return  # Presence lock handled the state change
 
 			if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
@@ -525,16 +550,16 @@ class PresenceBasedLightingCoordinator:
 				manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
 				# New behavior: use configured manual_disable_states list
 				# Empty list = no states disable automation
-				if new_state.state in manual_disable_states:
+				if effective_new_state in manual_disable_states:
 					_LOGGER.debug(
 						"Manual control: %s set to %s (in disable list), pausing automation",
-						entity_id, new_state.state
+						entity_id, effective_new_state
 					)
 					await self.async_set_presence_allowed(entity_id, False)
 				else:
 					_LOGGER.debug(
 						"Manual control: %s set to %s (not in disable list), resuming automation",
-						entity_id, new_state.state
+						entity_id, effective_new_state
 					)
 					await self.async_set_presence_allowed(entity_id, True)
 					if not self._is_any_occupied():
@@ -542,9 +567,9 @@ class PresenceBasedLightingCoordinator:
 			else:
 				# Legacy behavior: no manual_disable_states configured
 				# Any manual change disables automation (backward compatible, but problematic)
-				if new_state.state == cfg[CONF_PRESENCE_CLEARED_STATE]:
+				if effective_new_state == cfg[CONF_PRESENCE_CLEARED_STATE]:
 					await self.async_set_presence_allowed(entity_id, False)
-				elif new_state.state == cfg[CONF_PRESENCE_DETECTED_STATE]:
+				elif effective_new_state == cfg[CONF_PRESENCE_DETECTED_STATE]:
 					await self.async_set_presence_allowed(entity_id, True)
 					if not self._is_any_occupied():
 						await self._start_off_timer()

@@ -33,6 +33,7 @@ CONF_ENTITY_OFF_DELAY = "entity_off_delay"
 CONF_AUTOMATION_MODE = "automation_mode"
 CONF_USE_INTERCEPTOR = "use_interceptor"
 CONF_MANUAL_DISABLE_STATES = "manual_disable_states"
+CONF_RLC_TRACKING_ENTITY = "rlc_tracking_entity"  # Optional RLC sensor that tracks this entity's real state
 CONF_PRESENCE_SENSOR_MAPPINGS = "presence_sensor_mappings"  # Maps presence sensors to their source entities
 CONF_CLEARING_SENSOR_MAPPINGS = "clearing_sensor_mappings"  # Maps clearing sensors to their source entities
 
