@@ -748,6 +748,12 @@ class PresenceBasedLightingCoordinator:
 						entity_state["off_timer"].cancel()
 						entity_state["off_timer"] = None
 				await self._apply_presence_action(CONF_PRESENCE_DETECTED_SERVICE)
+				# Start off-timer immediately after presence detected
+				# This handles the case where clearing sensors may already be cleared
+				# (e.g., primer sensor triggers but person never enters main room)
+				# Timer will check clearing sensor state when it fires
+				_LOGGER.debug("Starting off timer after presence detected")
+				await self._start_off_timer()
 			# Trigger cleared action if a clearing sensor turns off AND all clearing sensors are clear
 			elif currently_off:
 				# For clearing, use clearing sensors if specified, else fall back to presence sensors
@@ -879,16 +885,25 @@ class PresenceBasedLightingCoordinator:
 				)
 
 	async def _execute_entity_off_timer(self, entity_state: dict, delay: int) -> None:
-		"""Execute the off timer for a specific entity."""
+		"""Execute the off timer for a specific entity.
+		
+		When timer fires, checks if all clearing sensors are in cleared state.
+		This handles scenarios where:
+		- Normal flow: clearing sensor transitioned off -> timer fires -> turn off
+		- Primer flow: presence sensor triggered but clearing sensor was never on
+		              -> timer fires -> clearing sensors already cleared -> turn off
+		"""
 		entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 		try:
 			_LOGGER.debug("Starting off timer for %s with delay %d seconds", entity_id, delay)
 			await asyncio.sleep(delay)
-			if not self._is_any_occupied():
-				_LOGGER.debug("Off timer expired for %s, applying cleared action", entity_id)
+			# Check if all clearing sensors are cleared (not just presence sensors)
+			# This allows the timer to work even if clearing sensors were never triggered
+			if self._are_clearing_sensors_clear():
+				_LOGGER.debug("Off timer expired for %s, clearing sensors clear, applying cleared action", entity_id)
 				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
 			else:
-				_LOGGER.debug("Off timer expired for %s, but room is occupied", entity_id)
+				_LOGGER.debug("Off timer expired for %s, but clearing sensors not all clear", entity_id)
 		except asyncio.CancelledError:
 			_LOGGER.debug("Off timer cancelled for %s", entity_id)
 		except Exception as err:
