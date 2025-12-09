@@ -782,8 +782,12 @@ class PresenceBasedLightingCoordinator:
 			_LOGGER.exception("Error handling presence change: %s", err)
 
 	async def _apply_presence_action(self, service_key: str) -> None:
+		_LOGGER.debug("Applying presence action %s to %d entities: %s", 
+					 service_key, len(self._entity_states), list(self._entity_states.keys()))
 		for entity_state in self._entity_states.values():
+			entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 			if not self._should_follow_presence(entity_state):
+				_LOGGER.debug("Skipping %s - presence_allowed is False", entity_id)
 				continue
 			await self._apply_action_to_entity(entity_state, service_key)
 
