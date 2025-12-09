@@ -783,3 +783,64 @@ class TestRLCTrackingEntityForManualControl:
         # Presence should STILL be allowed because RLC tracking entity is unavailable
         # (the change is ignored entirely)
         assert coordinator.get_presence_allowed("light.test_light") is True
+
+    @pytest.mark.asyncio
+    async def test_rlc_tracking_ignores_repeated_effective_state(self, mock_hass, mock_entry_with_rlc_tracking):
+        """When RLC effective state hasn't changed, state changes should be ignored.
+        
+        This tests the scenario where:
+        1. System turns off the light (our context)
+        2. Later, another state_changed event fires with different context (e.g., availability change)
+        3. But the RLC effective state is still "off"
+        4. This should NOT trigger manual control detection because effective state didn't change
+        
+        This bug caused lights to not turn on when entering a room because a spurious
+        state change was incorrectly detected as "manual control".
+        """
+        mock_hass._states_data["binary_sensor.motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data["light.test_light"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},  # RLC says light is "off"
+        }
+        
+        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+        
+        # Initially presence should be allowed
+        assert coordinator.get_presence_allowed("light.test_light") is True
+        
+        # Simulate: our system turned off the light (set the tracked state)
+        coordinator._entity_states["light.test_light"]["last_effective_state"] = "off"
+        
+        # Now a spurious state change comes in from a different source
+        # (e.g., the light reports availability changed, or a state refresh occurred)
+        old_state = MagicMock()
+        old_state.state = "unavailable"  # Was unavailable
+        old_state.attributes = {}
+        
+        new_state = MagicMock()
+        new_state.state = "off"  # Now reports "off" - same as RLC effective state
+        new_state.attributes = {}
+        new_state.context = MagicMock()
+        new_state.context.id = "external_context"  # Different context from ours
+        
+        event = self._create_state_change_event(
+            "light.test_light",
+            old_state=old_state,
+            new_state=new_state,
+        )
+        
+        # Handle the controlled entity change
+        await coordinator._handle_controlled_entity_change(event)
+        
+        # Presence should STILL be allowed because the RLC effective state
+        # didn't actually change - it was already "off" when we last set it
+        assert coordinator.get_presence_allowed("light.test_light") is True

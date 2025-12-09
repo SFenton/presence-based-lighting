@@ -304,6 +304,7 @@ class PresenceBasedLightingCoordinator:
 					"callbacks": set(),
 					"contexts": deque(maxlen=20),
 					"off_timer": None,
+					"last_effective_state": None,  # Track RLC effective state for change detection
 				}
 			
 			_LOGGER.info("Coordinator initialized with %d unique entities", len(self._entity_states))
@@ -527,6 +528,22 @@ class PresenceBasedLightingCoordinator:
 				# Use the RLC sensor's previous_valid_state as the effective state
 				# This filters out spurious changes from reboots/power outages
 				effective_new_state = rlc_state
+				
+				# Check if the effective state actually changed
+				# This prevents spurious raw state changes (e.g., unavailable -> off) 
+				# from incorrectly triggering manual control logic when the RLC-tracked
+				# effective state hasn't changed
+				last_effective = entity_state.get("last_effective_state")
+				if last_effective is not None and effective_new_state == last_effective:
+					_LOGGER.debug(
+						"RLC tracking entity %s for %s: effective state unchanged (%s), ignoring",
+						rlc_tracking_entity, entity_id, effective_new_state
+					)
+					return
+				
+				# Update tracked effective state
+				entity_state["last_effective_state"] = effective_new_state
+				
 				_LOGGER.debug(
 					"Using RLC tracking entity %s for %s: effective state = %s (raw state = %s)",
 					rlc_tracking_entity, entity_id, effective_new_state, new_state.state
@@ -799,6 +816,11 @@ class PresenceBasedLightingCoordinator:
 
 			context = Context()
 			entity_state["contexts"].append(context.id)
+			
+			# Update tracked effective state so our own changes don't trigger manual control logic
+			# This is especially important for RLC-tracked entities where raw state changes
+			# might be delayed or arrive separately from the RLC sensor update
+			entity_state["last_effective_state"] = target_state
 			
 			_LOGGER.debug("Calling service %s.%s for entity %s", entity_state["domain"], service, entity_id)
 			await self.hass.services.async_call(
