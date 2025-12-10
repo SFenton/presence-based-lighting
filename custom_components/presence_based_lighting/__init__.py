@@ -357,13 +357,20 @@ class PresenceBasedLightingCoordinator:
 			for entity_id, entity_state in self._entity_states.items():
 				cfg = entity_state["config"]
 				rlc_tracking_entity = cfg.get(CONF_RLC_TRACKING_ENTITY)
+				_LOGGER.debug("Checking RLC init for %s: tracking_entity=%s", entity_id, rlc_tracking_entity)
 				if rlc_tracking_entity:
 					rlc_state = get_effective_state(self.hass, rlc_tracking_entity)
+					_LOGGER.debug("RLC state for %s from %s: %s", entity_id, rlc_tracking_entity, rlc_state)
 					if rlc_state is not None:
 						entity_state["last_effective_state"] = rlc_state
 						_LOGGER.debug(
 							"Initialized last_effective_state for %s from RLC %s: %s",
 							entity_id, rlc_tracking_entity, rlc_state
+						)
+					else:
+						_LOGGER.debug(
+							"RLC sensor %s not available yet for %s, last_effective_state remains None",
+							rlc_tracking_entity, entity_id
 						)
 			
 			_LOGGER.debug("Setting up listeners for %d controlled entities: %s", 
