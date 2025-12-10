@@ -551,12 +551,22 @@ class PresenceBasedLightingCoordinator:
 				# This filters out spurious changes from reboots/power outages
 				effective_new_state = rlc_state
 				
+				# Check if this is the first event for this entity (startup initialization)
+				# If so, just record the state and don't trigger manual control logic
+				last_effective = entity_state.get("last_effective_state")
+				if last_effective is None:
+					entity_state["last_effective_state"] = effective_new_state
+					_LOGGER.debug(
+						"RLC tracking entity %s for %s: first event, initializing last_effective_state to %s (skipping manual control)",
+						rlc_tracking_entity, entity_id, effective_new_state
+					)
+					return
+				
 				# Check if the effective state actually changed
 				# This prevents spurious raw state changes (e.g., unavailable -> off) 
 				# from incorrectly triggering manual control logic when the RLC-tracked
 				# effective state hasn't changed
-				last_effective = entity_state.get("last_effective_state")
-				if last_effective is not None and effective_new_state == last_effective:
+				if effective_new_state == last_effective:
 					_LOGGER.debug(
 						"RLC tracking entity %s for %s: effective state unchanged (%s), ignoring",
 						rlc_tracking_entity, entity_id, effective_new_state
