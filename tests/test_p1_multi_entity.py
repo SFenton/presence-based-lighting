@@ -85,8 +85,8 @@ class TestMultiEntity:
         )
         await asyncio.sleep(1.1)
 
-        assert coordinator.get_presence_allowed("light.living_room_1") is False
-        assert coordinator.get_presence_allowed("light.living_room_2") is True
+        assert coordinator.get_automation_paused("light.living_room_1") is True
+        assert coordinator.get_automation_paused("light.living_room_2") is False
 
         assert_service_called(mock_hass, "light", "turn_off", "light.living_room_2")
         for call in mock_hass.services.calls:

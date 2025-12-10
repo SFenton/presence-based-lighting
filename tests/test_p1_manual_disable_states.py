@@ -75,7 +75,7 @@ class TestManualDisableStatesEmpty:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
     @pytest.mark.asyncio
     async def test_empty_list_allows_presence_to_turn_on_after_manual_off(self, mock_hass, mock_config_entry):
@@ -112,7 +112,7 @@ class TestManualDisableStatesOff:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
     @pytest.mark.asyncio
     async def test_manual_on_re_enables_when_off_in_list(self, mock_hass, mock_config_entry):
@@ -126,13 +126,13 @@ class TestManualDisableStatesOff:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # Manual on re-enables
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_OFF, STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
     @pytest.mark.asyncio
     async def test_presence_blocked_after_manual_off(self, mock_hass, mock_config_entry):
@@ -169,7 +169,7 @@ class TestManualDisableStatesOn:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_OFF, STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
     @pytest.mark.asyncio
     async def test_manual_off_re_enables_when_on_in_list(self, mock_hass, mock_config_entry):
@@ -183,13 +183,13 @@ class TestManualDisableStatesOn:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_OFF, STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # Manual off re-enables
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
     @pytest.mark.asyncio
     async def test_presence_cleared_blocked_after_manual_on(self, mock_hass, mock_config_entry):
@@ -230,13 +230,13 @@ class TestManualDisableStatesBothOnOff:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_OFF, STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # Manual off also keeps it disabled
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
 
 class TestManualDisableStatesCustomStates:
@@ -253,7 +253,7 @@ class TestManualDisableStatesCustomStates:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, "dim")
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
     @pytest.mark.asyncio
     async def test_custom_state_not_in_list_re_enables(self, mock_hass, mock_config_entry):
@@ -267,13 +267,13 @@ class TestManualDisableStatesCustomStates:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, "dim")
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # "bright" is not in the list, so it re-enables
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", "dim", "bright")
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
     @pytest.mark.asyncio
     async def test_multiple_custom_states_in_list(self, mock_hass, mock_config_entry):
@@ -287,19 +287,19 @@ class TestManualDisableStatesCustomStates:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, "dim")
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # "movie_mode" keeps it disabled
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", "dim", "movie_mode")
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # "on" is not in the list, so it re-enables
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", "movie_mode", STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
 
 class TestManualDisableStatesServiceCalls:
@@ -316,7 +316,7 @@ class TestManualDisableStatesServiceCalls:
         # Simulate service call turn_off (pass service name, not state)
         mock_hass.states.set("light.living_room", STATE_OFF)
         await coordinator._handle_external_action("light.living_room", "turn_off")
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
     @pytest.mark.asyncio
     async def test_service_call_turn_on_re_enables_when_off_in_list(self, mock_hass, mock_config_entry):
@@ -329,12 +329,12 @@ class TestManualDisableStatesServiceCalls:
         # Disable first
         mock_hass.states.set("light.living_room", STATE_OFF)
         await coordinator._handle_external_action("light.living_room", "turn_off")
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # Re-enable with turn_on
         mock_hass.states.set("light.living_room", STATE_ON)
         await coordinator._handle_external_action("light.living_room", "turn_on")
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
 
 class TestManualDisableStatesInteractionWithOtherSettings:
@@ -353,7 +353,7 @@ class TestManualDisableStatesInteractionWithOtherSettings:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
     @pytest.mark.asyncio
     async def test_missing_manual_disable_states_uses_legacy_behavior(self, mock_hass, mock_config_entry):
@@ -370,7 +370,7 @@ class TestManualDisableStatesInteractionWithOtherSettings:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
 
 class TestManualDisableStatesMultipleEntities:
@@ -401,22 +401,22 @@ class TestManualDisableStatesMultipleEntities:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # Bedroom: on disables (off should NOT disable)
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.bedroom", STATE_OFF, STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.bedroom") is False
+        assert coordinator.get_automation_paused("light.bedroom") is True
 
         # Living room: on re-enables
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_OFF, STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
         # Bedroom: off re-enables
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.bedroom", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.bedroom") is True
+        assert coordinator.get_automation_paused("light.bedroom") is False

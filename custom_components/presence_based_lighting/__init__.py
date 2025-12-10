@@ -301,6 +301,7 @@ class PresenceBasedLightingCoordinator:
 					"presence_allowed": entity.get(
 						CONF_INITIAL_PRESENCE_ALLOWED, DEFAULT_INITIAL_PRESENCE_ALLOWED
 					),
+					"automation_paused": False,  # Transient pause due to manual control
 					"callbacks": set(),
 					"contexts": deque(maxlen=20),
 					"off_timer": None,
@@ -467,6 +468,7 @@ class PresenceBasedLightingCoordinator:
 		return self._entity_states[entity_id]["presence_allowed"]
 
 	async def async_set_presence_allowed(self, entity_id: str, allowed: bool) -> None:
+		"""Set user-controlled presence_allowed state (persisted by switch)."""
 		entity_state = self._entity_states[entity_id]
 		if entity_state["presence_allowed"] == allowed:
 			return
@@ -474,8 +476,34 @@ class PresenceBasedLightingCoordinator:
 		entity_state["presence_allowed"] = allowed
 		self._notify_switch(entity_id)
 
-		if allowed and self._is_any_occupied():
+		# If enabling and room is occupied and not paused, apply detected action
+		if allowed and not entity_state.get("automation_paused", False) and self._is_any_occupied():
 			await self._apply_action_to_entity(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
+
+	def get_automation_paused(self, entity_id: str) -> bool:
+		"""Get whether automation is temporarily paused for this entity."""
+		return self._entity_states[entity_id].get("automation_paused", False)
+
+	def set_automation_paused(self, entity_id: str, paused: bool) -> None:
+		"""Set transient automation pause state (not persisted, based on manual control).
+		
+		This is separate from presence_allowed:
+		- presence_allowed: User-controlled, persisted across reboots
+		- automation_paused: Automatic, transient, based on manual_disable_states
+		"""
+		entity_state = self._entity_states[entity_id]
+		old_paused = entity_state.get("automation_paused", False)
+		if old_paused == paused:
+			return
+		
+		entity_state["automation_paused"] = paused
+		_LOGGER.debug(
+			"Automation %s for %s",
+			"paused" if paused else "resumed",
+			entity_id
+		)
+		# Notify switch so it can update attributes
+		self._notify_switch(entity_id)
 
 	def _notify_switch(self, entity_id: str) -> None:
 		for callback_fn in list(self._entity_states[entity_id]["callbacks"]):
@@ -592,34 +620,34 @@ class PresenceBasedLightingCoordinator:
 				return
 
 			# Use manual_disable_states for automatic mode behavior
-			# If the new state is in manual_disable_states, disable automation
-			# If the new state is NOT in manual_disable_states, re-enable automation
+			# If the new state is in manual_disable_states, pause automation
+			# If the new state is NOT in manual_disable_states, resume automation
 			# If the key exists (even empty), use new behavior. If missing, use legacy.
 			if CONF_MANUAL_DISABLE_STATES in cfg:
 				manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
 				# New behavior: use configured manual_disable_states list
-				# Empty list = no states disable automation
+				# Empty list = no states pause automation
 				if effective_new_state in manual_disable_states:
 					_LOGGER.debug(
 						"Manual control: %s set to %s (in disable list), pausing automation",
 						entity_id, effective_new_state
 					)
-					await self.async_set_presence_allowed(entity_id, False)
+					self.set_automation_paused(entity_id, True)
 				else:
 					_LOGGER.debug(
 						"Manual control: %s set to %s (not in disable list), resuming automation",
 						entity_id, effective_new_state
 					)
-					await self.async_set_presence_allowed(entity_id, True)
+					self.set_automation_paused(entity_id, False)
 					if not self._is_any_occupied():
 						await self._start_off_timer()
 			else:
 				# Legacy behavior: no manual_disable_states configured
-				# Any manual change disables automation (backward compatible, but problematic)
+				# Any manual change pauses/resumes automation (backward compatible)
 				if effective_new_state == cfg[CONF_PRESENCE_CLEARED_STATE]:
-					await self.async_set_presence_allowed(entity_id, False)
+					self.set_automation_paused(entity_id, True)
 				elif effective_new_state == cfg[CONF_PRESENCE_DETECTED_STATE]:
-					await self.async_set_presence_allowed(entity_id, True)
+					self.set_automation_paused(entity_id, False)
 					if not self._is_any_occupied():
 						await self._start_off_timer()
 		except Exception as err:
@@ -644,33 +672,33 @@ class PresenceBasedLightingCoordinator:
 			return
 
 		# Use manual_disable_states for automatic mode behavior
-		# If the target state is in manual_disable_states, disable automation
-		# If the target state is NOT in manual_disable_states, re-enable automation
+		# If the target state is in manual_disable_states, pause automation
+		# If the target state is NOT in manual_disable_states, resume automation
 		# If the key exists (even empty), use new behavior. If missing, use legacy.
 		if CONF_MANUAL_DISABLE_STATES in cfg:
 			manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
 			# New behavior: use configured manual_disable_states list
-			# Empty list = no states disable automation
+			# Empty list = no states pause automation
 			if target_state and target_state in manual_disable_states:
 				_LOGGER.debug(
 					"Manual action: %s targeting %s (in disable list), pausing automation",
 					entity_id, target_state
 				)
-				await self.async_set_presence_allowed(entity_id, False)
+				self.set_automation_paused(entity_id, True)
 			elif target_state:
 				_LOGGER.debug(
 					"Manual action: %s targeting %s (not in disable list), resuming automation",
 					entity_id, target_state
 				)
-				await self.async_set_presence_allowed(entity_id, True)
+				self.set_automation_paused(entity_id, False)
 				if not self._is_any_occupied():
 					await self._start_off_timer()
 		else:
 			# Legacy behavior: based on service type
 			if service == cfg[CONF_PRESENCE_CLEARED_SERVICE]:
-				await self.async_set_presence_allowed(entity_id, False)
+				self.set_automation_paused(entity_id, True)
 			elif service == cfg[CONF_PRESENCE_DETECTED_SERVICE]:
-				await self.async_set_presence_allowed(entity_id, True)
+				self.set_automation_paused(entity_id, False)
 				if not self._is_any_occupied():
 					await self._start_off_timer()
 
@@ -876,11 +904,15 @@ class PresenceBasedLightingCoordinator:
 		"""Check if automation should apply to this entity.
 		
 		Returns True if presence automation should affect this entity.
-		The presence_allowed flag always controls whether automation applies,
-		regardless of whether RESPECTS_PRESENCE_ALLOWED is set (which only
-		controls visibility of the switch in the UI).
+		Requires both:
+		- presence_allowed: User-controlled toggle (persisted across reboots)
+		- NOT automation_paused: Transient pause due to manual control
+		
+		The presence_allowed flag is controlled by the user via the switch.
+		The automation_paused flag is controlled automatically based on
+		manual_disable_states configuration.
 		"""
-		return entity_state["presence_allowed"]
+		return entity_state["presence_allowed"] and not entity_state.get("automation_paused", False)
 
 	def _is_context_ours(self, entity_id: str, context: Context | None) -> bool:
 		if not context:
@@ -909,17 +941,36 @@ class PresenceBasedLightingCoordinator:
 		"""
 		clearing = getattr(self, '_clearing_sensors', None)
 		if clearing:
-			return all(is_entity_off(self.hass, sensor) for sensor in clearing)
+			result = all(is_entity_off(self.hass, sensor) for sensor in clearing)
+			if not result:
+				# Log which sensors are not clear for debugging
+				for sensor in clearing:
+					effective = get_effective_state(self.hass, sensor)
+					if effective != "off":
+						_LOGGER.debug("Clearing sensor %s not clear: effective_state=%s", sensor, effective)
+			return result
 		
 		# Fallback: check if clearing sensors are configured
 		clearing = self.entry.data.get(CONF_CLEARING_SENSORS, [])
 		if clearing:
-			return all(is_entity_off(self.hass, sensor) for sensor in clearing)
+			result = all(is_entity_off(self.hass, sensor) for sensor in clearing)
+			if not result:
+				for sensor in clearing:
+					effective = get_effective_state(self.hass, sensor)
+					if effective != "off":
+						_LOGGER.debug("Clearing sensor %s not clear: effective_state=%s", sensor, effective)
+			return result
 		
 		# No clearing sensors configured - fall back to presence sensors
 		presence = getattr(self, '_presence_sensors', None)
 		if presence:
-			return all(is_entity_off(self.hass, sensor) for sensor in presence)
+			result = all(is_entity_off(self.hass, sensor) for sensor in presence)
+			if not result:
+				for sensor in presence:
+					effective = get_effective_state(self.hass, sensor)
+					if effective != "off":
+						_LOGGER.debug("Presence sensor (as clearing) %s not clear: effective_state=%s", sensor, effective)
+			return result
 		
 		# Last fallback to original presence sensors
 		presence = self.entry.data.get(CONF_PRESENCE_SENSORS, [])

@@ -40,7 +40,7 @@ class TestNoOpServiceCalls:
         await coordinator.async_start()
 
         await coordinator._handle_service_call(_service_event("light", "turn_off", [self.entity]))
-        assert coordinator.get_presence_allowed(self.entity) is False
+        assert coordinator.get_automation_paused(self.entity) is True
 
     @pytest.mark.asyncio
     async def test_external_turn_on_keeps_presence_allowed(self, mock_hass, mock_config_entry):
@@ -60,7 +60,7 @@ class TestNoOpServiceCalls:
         await coordinator._handle_service_call(
             _service_event("light", "turn_off", [self.entity, "light.kitchen", "light.hallway"])
         )
-        assert coordinator.get_presence_allowed(self.entity) is False
+        assert coordinator.get_automation_paused(self.entity) is True
 
     @pytest.mark.asyncio
     async def test_other_domains_ignored(self, mock_hass, mock_config_entry):
@@ -104,7 +104,7 @@ class TestNoOpServiceCalls:
         )()
         await coordinator._handle_controlled_entity_change(event)
 
-        assert coordinator.get_presence_allowed(self.entity) is False
+        assert coordinator.get_automation_paused(self.entity) is True
 
     @pytest.mark.asyncio
     async def test_integration_contexts_are_ignored(self, mock_hass, mock_config_entry):
@@ -127,10 +127,10 @@ class TestNoOpServiceCalls:
         await coordinator.async_start()
 
         await coordinator._handle_service_call(_service_event("light", "turn_off", self.entity))
-        assert coordinator.get_presence_allowed(self.entity) is False
+        assert coordinator.get_automation_paused(self.entity) is True
 
         await coordinator._handle_service_call(_service_event("light", "turn_on", self.entity))
-        assert coordinator.get_presence_allowed(self.entity) is True
+        assert coordinator.get_automation_paused(self.entity) is False
 
     @pytest.mark.asyncio
     async def test_timer_turn_off_uses_own_context(self, mock_hass, mock_config_entry):

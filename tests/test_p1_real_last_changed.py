@@ -688,8 +688,8 @@ class TestRLCTrackingEntityForManualControl:
         # Handle the controlled entity change
         await coordinator._handle_controlled_entity_change(event)
         
-        # Presence should now be disabled because RLC tracking shows "off" (in manual_disable_states)
-        assert coordinator.get_presence_allowed("light.test_light") is False
+        # Automation should now be paused because RLC tracking shows "off" (in manual_disable_states)
+        assert coordinator.get_automation_paused("light.test_light") is True
 
     @pytest.mark.asyncio
     async def test_rlc_tracking_ignores_spurious_changes(self, mock_hass, mock_entry_with_rlc_tracking):

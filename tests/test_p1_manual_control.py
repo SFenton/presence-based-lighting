@@ -49,7 +49,7 @@ class TestManualOverrides:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         # Occupancy should not turn the light back on while presence is disallowed
         await coordinator._handle_presence_change(
@@ -61,7 +61,7 @@ class TestManualOverrides:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_OFF, STATE_ON)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
         mock_hass.services.clear()
         mock_hass.states.set("light.living_room", STATE_OFF)
@@ -80,7 +80,7 @@ class TestManualOverrides:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is True
+        assert coordinator.get_automation_paused("light.living_room") is False
 
         mock_hass.services.clear()
         await coordinator._handle_presence_change(
@@ -98,7 +98,7 @@ class TestManualOverrides:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
-        assert coordinator.get_presence_allowed("light.living_room") is False
+        assert coordinator.get_automation_paused("light.living_room") is True
 
         mock_hass.services.clear()
         await coordinator._handle_presence_change(
