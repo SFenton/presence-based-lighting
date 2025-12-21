@@ -59,38 +59,6 @@ from .real_last_changed import get_effective_state, is_entity_on, is_entity_off,
 
 _LOGGER = logging.getLogger(__package__)
 
-# Add file handler for persistent logging across crashes
-_log_file_handler = None
-_file_logging_setup = False
-
-async def _setup_file_logging(hass: HomeAssistant):
-	"""Set up file logging that persists across crashes. Only sets up once globally."""
-	global _log_file_handler, _file_logging_setup
-	
-	# Use a flag to ensure we only setup once, even if multiple entries are being set up simultaneously
-	if _file_logging_setup:
-		return
-	
-	_file_logging_setup = True
-	
-	if _log_file_handler is None:
-		try:
-			log_path = hass.config.path("presence_based_lighting_debug.log")
-			
-			# Create FileHandler in executor to avoid blocking I/O
-			_log_file_handler = await hass.async_add_executor_job(
-				logging.FileHandler, log_path, 'a'
-			)
-			_log_file_handler.setLevel(logging.DEBUG)
-			formatter = logging.Formatter(
-				'%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-			)
-			_log_file_handler.setFormatter(formatter)
-			_LOGGER.addHandler(_log_file_handler)
-			_LOGGER.info("File logging enabled at: %s", log_path)
-		except Exception as err:
-			_LOGGER.error("Failed to set up file logging: %s", err)
-
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 	"""YAML setup is not supported."""
@@ -198,9 +166,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	
 	try:
 		_LOGGER.info("Setting up Presence Based Lighting entry: %s", entry.entry_id)
-		
-		# Enable persistent file logging
-		await _setup_file_logging(hass)
 
 		if DOMAIN not in hass.data:
 			hass.data[DOMAIN] = {}
