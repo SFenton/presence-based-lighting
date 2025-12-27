@@ -448,13 +448,13 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Required(CONF_ROOM_NAME): str,
 					vol.Required(CONF_PRESENCE_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain=["binary_sensor", "sensor"],
+							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
 						)
 					),
 					vol.Optional(CONF_CLEARING_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain=["binary_sensor", "sensor"],
+							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
 						)
 					),
@@ -1223,7 +1223,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						default=self._base_data[CONF_PRESENCE_SENSORS],
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain=["binary_sensor", "sensor"],
+							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
 						)
 					),
@@ -1232,7 +1232,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						default=self._base_data.get(CONF_CLEARING_SENSORS, []),
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain=["binary_sensor", "sensor"],
+							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
 						)
 					),
