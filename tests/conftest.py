@@ -165,21 +165,13 @@ sys.modules['homeassistant.util.dt'] = dt_module
 util_module.dt = dt_module
 
 
-@pytest_asyncio.fixture(autouse=True, scope="session")
-async def mock_zeroconf_resolver():
-    """Override HA's zeroconf resolver with platform-friendly default."""
-    with patch(
-        "homeassistant.helpers.aiohttp_client._async_make_resolver",
-        return_value=ThreadedResolver(),
-    ):
-        yield
-
 # Set up config_validation as a real module with entity_id function
 import voluptuous as vol
 
 # Create helpers as a real module so submodules work properly
 helpers_module = types.ModuleType('homeassistant.helpers')
 sys.modules['homeassistant.helpers'] = helpers_module
+homeassistant_module.helpers = helpers_module  # Set as attribute on parent module
 
 # Create selector module with lightweight placeholder classes used in config flow
 selector_module = types.ModuleType('homeassistant.helpers.selector')
@@ -248,6 +240,17 @@ async def _async_make_resolver(*_args, **_kwargs):
 aiohttp_client_module._async_make_resolver = _async_make_resolver
 sys.modules['homeassistant.helpers.aiohttp_client'] = aiohttp_client_module
 helpers_module.aiohttp_client = aiohttp_client_module
+
+
+@pytest_asyncio.fixture(autouse=True, scope="session")
+async def mock_zeroconf_resolver():
+    """Override HA's zeroconf resolver with platform-friendly default."""
+    with patch(
+        "homeassistant.helpers.aiohttp_client._async_make_resolver",
+        return_value=ThreadedResolver(),
+    ):
+        yield
+
 
 # Add types to core module
 import uuid

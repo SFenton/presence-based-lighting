@@ -441,9 +441,14 @@ class PresenceBasedLightingCoordinator:
 		entity_state["presence_allowed"] = allowed
 		self._notify_switch(entity_id)
 
-		# If enabling and room is occupied and not paused, apply detected action
-		if allowed and not entity_state.get("automation_paused", False) and self._is_any_occupied():
-			await self._apply_action_to_entity(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
+		# If enabling and not paused, check room state and act accordingly
+		if allowed and not entity_state.get("automation_paused", False):
+			if self._is_any_occupied():
+				# Room is occupied, apply detected action
+				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
+			# Always start off timer when re-enabling - this handles the case where
+			# the room is empty and lights should be turned off after the delay
+			await self._start_off_timer()
 
 	def get_automation_paused(self, entity_id: str) -> bool:
 		"""Get whether automation is temporarily paused for this entity."""

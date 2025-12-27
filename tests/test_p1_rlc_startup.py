@@ -274,8 +274,9 @@ class TestNoFalseManualControlOnStartup:
             _entity_event(mock_hass_with_rlc, "light.master_bedroom", STATE_ON, STATE_OFF)
         )
 
-        # NOW it should be disabled - this was a real manual change
-        assert coordinator.get_presence_allowed("light.master_bedroom") is False
+        # NOW automation should be paused - this was a real manual change
+        # (manual_disable_states pauses automation, not presence_allowed)
+        assert coordinator.get_automation_paused("light.master_bedroom") is True
 
 
 class TestMultipleEntitiesWithRLC:
