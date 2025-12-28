@@ -6,6 +6,8 @@ import logging
 from collections import deque
 from typing import Callable, Dict
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
 	EVENT_CALL_SERVICE,
@@ -15,6 +17,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
+import homeassistant.helpers.config_validation as cv
 
 from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
@@ -60,8 +63,88 @@ from .real_last_changed import get_effective_state, is_entity_on, is_entity_off,
 _LOGGER = logging.getLogger(__package__)
 
 
+SERVICE_RESUME_AUTOMATION = "resume_automation"
+SERVICE_PAUSE_AUTOMATION = "pause_automation"
+
+SERVICE_SCHEMA = vol.Schema({
+	vol.Optional("entity_id"): cv.entity_id,
+})
+
+
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
-	"""YAML setup is not supported."""
+	"""Set up the Presence Based Lighting component."""
+
+	async def handle_resume_automation(call):
+		"""Handle the resume_automation service call."""
+		target_entity_id = call.data.get("entity_id")
+		
+		# Get target switches from the service call
+		target_switches = []
+		if hasattr(call, "target") and call.target:
+			target_switches = call.target.get("entity_id", [])
+			if isinstance(target_switches, str):
+				target_switches = [target_switches]
+		
+		if not target_switches:
+			_LOGGER.warning("resume_automation called without target switch")
+			return
+		
+		# Find coordinators for the target switches
+		for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+			if not isinstance(coordinator, PresenceBasedLightingCoordinator):
+				continue
+			
+			# Check if this coordinator's switch matches any target
+			switch_entity_id = f"switch.{coordinator.entry.data.get(CONF_ROOM_NAME, '').lower().replace(' ', '_')}_presence_lighting"
+			if switch_entity_id not in target_switches:
+				continue
+			
+			# Resume automation for entities
+			for entity_id in coordinator._entity_states:
+				if target_entity_id is None or entity_id == target_entity_id:
+					_LOGGER.debug("Resuming automation for %s", entity_id)
+					coordinator.set_automation_paused(entity_id, False)
+
+	async def handle_pause_automation(call):
+		"""Handle the pause_automation service call."""
+		target_entity_id = call.data.get("entity_id")
+		
+		# Get target switches from the service call
+		target_switches = []
+		if hasattr(call, "target") and call.target:
+			target_switches = call.target.get("entity_id", [])
+			if isinstance(target_switches, str):
+				target_switches = [target_switches]
+		
+		if not target_switches:
+			_LOGGER.warning("pause_automation called without target switch")
+			return
+		
+		# Find coordinators for the target switches
+		for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+			if not isinstance(coordinator, PresenceBasedLightingCoordinator):
+				continue
+			
+			# Check if this coordinator's switch matches any target
+			switch_entity_id = f"switch.{coordinator.entry.data.get(CONF_ROOM_NAME, '').lower().replace(' ', '_')}_presence_lighting"
+			if switch_entity_id not in target_switches:
+				continue
+			
+			# Pause automation for entities
+			for entity_id in coordinator._entity_states:
+				if target_entity_id is None or entity_id == target_entity_id:
+					_LOGGER.debug("Pausing automation for %s", entity_id)
+					coordinator.set_automation_paused(entity_id, True)
+
+	# Register services
+	hass.services.async_register(
+		DOMAIN, SERVICE_RESUME_AUTOMATION, handle_resume_automation, schema=SERVICE_SCHEMA
+	)
+	hass.services.async_register(
+		DOMAIN, SERVICE_PAUSE_AUTOMATION, handle_pause_automation, schema=SERVICE_SCHEMA
+	)
+	_LOGGER.debug("Registered %s and %s services", SERVICE_RESUME_AUTOMATION, SERVICE_PAUSE_AUTOMATION)
+
 	return True
 
 

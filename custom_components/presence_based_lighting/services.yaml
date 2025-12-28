@@ -1,0 +1,39 @@
+resume_automation:
+  name: Resume Automation
+  description: Resume automation for controlled entities by resetting the automation_paused flag.
+  target:
+    entity:
+      integration: presence_based_lighting
+      domain: switch
+  fields:
+    entity_id:
+      name: Entity
+      description: The controlled entity to resume automation for. If not specified, resumes all entities for the targeted switch.
+      required: false
+      selector:
+        entity:
+          domain:
+            - light
+            - switch
+            - fan
+            - cover
+
+pause_automation:
+  name: Pause Automation
+  description: Pause automation for controlled entities by setting the automation_paused flag.
+  target:
+    entity:
+      integration: presence_based_lighting
+      domain: switch
+  fields:
+    entity_id:
+      name: Entity
+      description: The controlled entity to pause automation for. If not specified, pauses all entities for the targeted switch.
+      required: false
+      selector:
+        entity:
+          domain:
+            - light
+            - switch
+            - fan
+            - cover
