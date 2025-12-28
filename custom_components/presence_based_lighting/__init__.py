@@ -66,8 +66,9 @@ _LOGGER = logging.getLogger(__package__)
 SERVICE_RESUME_AUTOMATION = "resume_automation"
 SERVICE_PAUSE_AUTOMATION = "pause_automation"
 
+# Allow entity_id to be a string or a list of strings
 SERVICE_SCHEMA = vol.Schema({
-	vol.Optional("entity_id"): cv.entity_id,
+	vol.Optional("entity_id"): vol.Any(cv.entity_id, [cv.entity_id]),
 })
 
 
@@ -78,12 +79,20 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 		"""Handle the resume_automation service call."""
 		target_entity_id = call.data.get("entity_id")
 		
-		# Get target switches from the service call
+		# Get target switches from the service call (can be in target or data)
 		target_switches = []
 		if hasattr(call, "target") and call.target:
 			target_switches = call.target.get("entity_id", [])
 			if isinstance(target_switches, str):
 				target_switches = [target_switches]
+		
+		# If no target, check if entity_id in data is the switch
+		if not target_switches and target_entity_id:
+			if isinstance(target_entity_id, list):
+				target_switches = target_entity_id
+			else:
+				target_switches = [target_entity_id]
+			target_entity_id = None  # Clear since we're using it as target
 		
 		if not target_switches:
 			_LOGGER.warning("resume_automation called without target switch")
@@ -109,12 +118,20 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 		"""Handle the pause_automation service call."""
 		target_entity_id = call.data.get("entity_id")
 		
-		# Get target switches from the service call
+		# Get target switches from the service call (can be in target or data)
 		target_switches = []
 		if hasattr(call, "target") and call.target:
 			target_switches = call.target.get("entity_id", [])
 			if isinstance(target_switches, str):
 				target_switches = [target_switches]
+		
+		# If no target, check if entity_id in data is the switch
+		if not target_switches and target_entity_id:
+			if isinstance(target_entity_id, list):
+				target_switches = target_entity_id
+			else:
+				target_switches = [target_entity_id]
+			target_entity_id = None  # Clear since we're using it as target
 		
 		if not target_switches:
 			_LOGGER.warning("pause_automation called without target switch")
