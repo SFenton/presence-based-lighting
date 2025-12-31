@@ -22,6 +22,7 @@ import homeassistant.helpers.config_validation as cv
 from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
 	AUTOMATION_MODE_PRESENCE_LOCK,
+	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
 	CONF_CLEARING_SENSORS,
 	CONF_CONTROLLED_ENTITIES,
@@ -171,6 +172,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 	Version 2 -> 3: Add automation_mode derived from legacy boolean toggles.
 	Version 3 -> 4: Add manual_disable_states for automatic mode.
 	Version 4 -> 5: Add presence_sensor_mappings for real_last_changed support.
+	Version 5 -> 6: Add activation_conditions for optional AND gate on light activation.
 	"""
 	_LOGGER.debug(
 		"Migrating config entry %s from version %s",
@@ -255,6 +257,20 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 		)
 		_LOGGER.info(
 			"Migration of entry %s from version 4 to 5 successful",
+			config_entry.entry_id,
+		)
+
+	if config_entry.version == 5:
+		# Version 5 -> 6: Add activation_conditions (empty by default = existing behavior)
+		new_data = {**config_entry.data}
+		if CONF_ACTIVATION_CONDITIONS not in new_data:
+			new_data[CONF_ACTIVATION_CONDITIONS] = []
+		
+		hass.config_entries.async_update_entry(
+			config_entry, data=new_data, version=6
+		)
+		_LOGGER.info(
+			"Migration of entry %s from version 5 to 6 successful",
 			config_entry.entry_id,
 		)
 
@@ -408,11 +424,15 @@ class PresenceBasedLightingCoordinator:
 			controlled_ids = list(self._entity_states.keys())
 			presence_sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
 			clearing_sensors = self.entry.data.get(CONF_CLEARING_SENSORS, [])
+			activation_conditions = self.entry.data.get(CONF_ACTIVATION_CONDITIONS, [])
 			
 			# Store presence and clearing sensors directly
 			# RLC sensors are handled via their previous_valid_state attribute
 			self._presence_sensors = set(presence_sensors)
 			self._clearing_sensors = set(clearing_sensors) if clearing_sensors else set(presence_sensors)
+			
+			# Store activation conditions (optional AND gate for light activation)
+			self._activation_conditions = set(activation_conditions)
 			
 			# Combine all sensors for state change tracking
 			all_sensors = list(set(presence_sensors + clearing_sensors))
@@ -466,6 +486,18 @@ class PresenceBasedLightingCoordinator:
 					)
 				)
 				_LOGGER.debug("Registered state change listener for presence/clearing sensors")
+
+			# Register listener for activation conditions (AND gate for light activation)
+			if activation_conditions:
+				self._listeners.append(
+					async_track_state_change_event(
+						self.hass,
+						activation_conditions,
+						self._handle_activation_condition_change,
+					)
+				)
+				_LOGGER.debug("Registered state change listener for %d activation conditions: %s",
+							 len(activation_conditions), activation_conditions)
 
 			self._listeners.append(
 				self.hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle_service_call)
@@ -911,9 +943,75 @@ class PresenceBasedLightingCoordinator:
 		except Exception as err:
 			_LOGGER.exception("Error handling presence change: %s", err)
 
+	async def _handle_activation_condition_change(self, event: Event) -> None:
+		"""Handle state changes on activation condition entities.
+		
+		When an activation condition becomes true while the room is occupied,
+		trigger the detected action (turn on lights).
+		
+		This allows scenarios like:
+		- Motion detected while it's still light outside (lux sensor off)
+		- Sun sets (lux sensor turns on) while room is still occupied
+		- Lights should turn on at that moment
+		"""
+		try:
+			entity_id = event.data.get("entity_id")
+			new_state = event.data.get("new_state")
+			old_state = event.data.get("old_state")
+			
+			if not new_state or not old_state:
+				return
+			
+			# Only care about transitions to ON
+			if new_state.state != STATE_ON or old_state.state == STATE_ON:
+				return
+			
+			_LOGGER.debug(
+				"Activation condition %s changed: %s -> %s",
+				entity_id, old_state.state, new_state.state
+			)
+			
+			# Check if room is currently occupied AND all activation conditions are now met
+			if self._is_any_occupied() and self._are_activation_conditions_met():
+				_LOGGER.debug(
+					"Activation conditions now met while room is occupied - triggering detected action"
+				)
+				# Cancel any pending off timers since we're activating
+				for entity_state in self._entity_states.values():
+					if entity_state["off_timer"]:
+						entity_state["off_timer"].cancel()
+						entity_state["off_timer"] = None
+				
+				await self._apply_presence_action(CONF_PRESENCE_DETECTED_SERVICE)
+				
+				# Start off-timer in case clearing sensors are already cleared
+				await self._start_off_timer()
+			else:
+				if not self._is_any_occupied():
+					_LOGGER.debug("Activation condition met but room not occupied")
+				else:
+					_LOGGER.debug("Activation condition changed but not all conditions met yet")
+		except Exception as err:
+			_LOGGER.exception("Error handling activation condition change: %s", err)
+
 	async def _apply_presence_action(self, service_key: str) -> None:
+		"""Apply presence action to all controlled entities.
+		
+		For DETECTED actions: only applies if activation conditions are met.
+		For CLEARED actions: always applies (clear regardless of activation conditions).
+		"""
 		_LOGGER.debug("Applying presence action %s to %d entities: %s", 
 					 service_key, len(self._entity_states), list(self._entity_states.keys()))
+		
+		# For detected (turn on) actions, check activation conditions
+		if service_key == CONF_PRESENCE_DETECTED_SERVICE:
+			if not self._are_activation_conditions_met():
+				_LOGGER.debug(
+					"Skipping detected action - activation conditions not met. "
+					"Lights will turn on when conditions are satisfied while occupied."
+				)
+				return
+		
 		for entity_state in self._entity_states.values():
 			entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 			if not self._should_follow_presence(entity_state):
@@ -1045,6 +1143,29 @@ class PresenceBasedLightingCoordinator:
 		# Last fallback to original presence sensors
 		presence = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
 		return all(is_entity_off(self.hass, sensor) for sensor in presence)
+
+	def _are_activation_conditions_met(self) -> bool:
+		"""Check if all activation conditions are satisfied (AND gate).
+		
+		If no activation conditions are configured, returns True (always allow).
+		If any activation condition is off/false, returns False.
+		All conditions must be on/true for lights to activate.
+		"""
+		conditions = getattr(self, '_activation_conditions', None)
+		if not conditions:
+			# No conditions configured - always allow activation
+			return True
+		
+		for condition in conditions:
+			state = self.hass.states.get(condition)
+			if not state or state.state != STATE_ON:
+				_LOGGER.debug(
+					"Activation condition %s not met: state=%s",
+					condition, state.state if state else "unavailable"
+				)
+				return False
+		
+		return True
 
 	async def _start_off_timer(self) -> None:
 		"""Start per-entity off timers when presence clears."""

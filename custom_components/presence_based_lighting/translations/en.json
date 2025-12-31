@@ -8,12 +8,14 @@
           "room_name": "Room Name",
           "presence_sensors": "Trigger Sensors",
           "clearing_sensors": "Clearing Sensors (optional)",
+          "activation_conditions": "Activation Conditions (optional)",
           "off_delay": "Global Turn Off Delay (seconds)"
         },
         "data_description": {
           "room_name": "Friendly name for this room (e.g., 'Living Room', 'Kitchen')",
           "presence_sensors": "Binary sensors that trigger the 'detected' action when any turns on",
           "clearing_sensors": "Binary sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
+          "activation_conditions": "Binary sensors or input booleans that must ALL be on for lights to activate. If presence is detected while conditions are not met, lights will turn on when conditions become true. Leave empty for no additional conditions.",
           "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)"
         }
       },
@@ -109,11 +111,13 @@
         "data": {
           "presence_sensors": "Trigger Sensors",
           "clearing_sensors": "Clearing Sensors (optional)",
+          "activation_conditions": "Activation Conditions (optional)",
           "off_delay": "Global Turn Off Delay (seconds)"
         },
         "data_description": {
           "presence_sensors": "Binary sensors that trigger the 'detected' action when any turns on",
           "clearing_sensors": "Binary sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
+          "activation_conditions": "Binary sensors or input booleans that must ALL be on for lights to activate. If presence is detected while conditions are not met, lights will turn on when conditions become true. Leave empty for no additional conditions.",
           "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)"
         }
       },

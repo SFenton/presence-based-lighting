@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
 	AUTOMATION_MODE_PRESENCE_LOCK,
+	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -409,7 +410,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 5
+	VERSION = 6
 
 	def __init__(self):
 		"""Initialize."""
@@ -434,6 +435,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
 				CONF_PRESENCE_SENSORS: user_input[CONF_PRESENCE_SENSORS],
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
+				CONF_ACTIVATION_CONDITIONS: user_input.get(CONF_ACTIVATION_CONDITIONS, []),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
 			}
 			self._controlled_entities = []
@@ -455,6 +457,12 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Optional(CONF_CLEARING_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "sensor", "input_boolean"],
+							multiple=True,
+						)
+					),
+					vol.Optional(CONF_ACTIVATION_CONDITIONS): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain=["binary_sensor", "input_boolean"],
 							multiple=True,
 						)
 					),
@@ -1205,6 +1213,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			_LOGGER.debug("Processing user input, updating base_data")
 			self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
 			self._base_data[CONF_CLEARING_SENSORS] = user_input.get(CONF_CLEARING_SENSORS, [])
+			self._base_data[CONF_ACTIVATION_CONDITIONS] = user_input.get(CONF_ACTIVATION_CONDITIONS, [])
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
 			self._selected_entity_id = None
 			_LOGGER.debug(
@@ -1233,6 +1242,15 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "sensor", "input_boolean"],
+							multiple=True,
+						)
+					),
+					vol.Optional(
+						CONF_ACTIVATION_CONDITIONS,
+						default=self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
+					): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain=["binary_sensor", "input_boolean"],
 							multiple=True,
 						)
 					),
