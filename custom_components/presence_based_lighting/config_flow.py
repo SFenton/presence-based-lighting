@@ -818,6 +818,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			CONF_ROOM_NAME: self._base_data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: self._base_data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
+			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 		}
@@ -1039,6 +1040,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			**self.config_entry.data,
 			CONF_PRESENCE_SENSORS: self._base_data[CONF_PRESENCE_SENSORS],
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
+			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 		}

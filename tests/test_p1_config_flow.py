@@ -28,6 +28,7 @@ from custom_components.presence_based_lighting.config_flow import (
 )
 from custom_components.presence_based_lighting.const import (
     AUTOMATION_MODE_AUTOMATIC,
+    CONF_ACTIVATION_CONDITIONS,
     CONF_AUTOMATION_MODE,
     CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
@@ -144,6 +145,7 @@ async def test_manage_entities_creates_entry_when_ready():
         CONF_ROOM_NAME: "Office",
         CONF_PRESENCE_SENSORS: ["binary_sensor.office_motion"],
         CONF_CLEARING_SENSORS: [],
+        CONF_ACTIVATION_CONDITIONS: [],
         CONF_OFF_DELAY: 15,
         CONF_CONTROLLED_ENTITIES: handler._controlled_entities,  # type: ignore[attr-defined]
     }
