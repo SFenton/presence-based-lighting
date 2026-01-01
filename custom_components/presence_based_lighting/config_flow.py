@@ -998,6 +998,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: config_entry.data.get(CONF_CLEARING_SENSORS, []),
+			CONF_ACTIVATION_CONDITIONS: config_entry.data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 		}
 		# Load existing entities from config entry
