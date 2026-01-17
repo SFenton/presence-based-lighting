@@ -5,7 +5,7 @@ from datetime import time as dt_time
 import logging
 
 from homeassistant.components.time import TimeEntity
-from homeassistant.const import EntityCategory
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
