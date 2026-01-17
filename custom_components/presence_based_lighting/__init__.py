@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections import deque
-from typing import Callable, Dict
+from datetime import time, datetime, timedelta
+from pathlib import Path
+from typing import Callable, Dict, Any
 
 import voluptuous as vol
 
@@ -16,7 +19,8 @@ from homeassistant.const import (
 	STATE_ON,
 )
 from homeassistant.core import Context, Event, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
+from homeassistant.util import dt as dt_util
 import homeassistant.helpers.config_validation as cv
 
 from .const import (
@@ -24,6 +28,8 @@ from .const import (
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
+	CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+	CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
 	CONF_CLEARING_SENSORS,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -43,6 +49,9 @@ from .const import (
 	CONF_RLC_TRACKING_ENTITY,
 	CONF_ROOM_NAME,
 	DEFAULT_AUTOMATION_MODE,
+	DEFAULT_AUTO_REENABLE_END_TIME,
+	DEFAULT_AUTO_REENABLE_START_TIME,
+	DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
 	NO_ACTION,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
@@ -173,6 +182,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 	Version 3 -> 4: Add manual_disable_states for automatic mode.
 	Version 4 -> 5: Add presence_sensor_mappings for real_last_changed support.
 	Version 5 -> 6: Add activation_conditions for optional AND gate on light activation.
+	Version 6 -> 7: Add auto_reenable_presence_sensors and auto_reenable_vacancy_threshold.
 	"""
 	_LOGGER.debug(
 		"Migrating config entry %s from version %s",
@@ -274,6 +284,22 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 			config_entry.entry_id,
 		)
 
+	if config_entry.version == 6:
+		# Version 6 -> 7: Add auto_reenable_presence_sensors and auto_reenable_vacancy_threshold
+		new_data = {**config_entry.data}
+		if CONF_AUTO_REENABLE_PRESENCE_SENSORS not in new_data:
+			new_data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] = []
+		if CONF_AUTO_REENABLE_VACANCY_THRESHOLD not in new_data:
+			new_data[CONF_AUTO_REENABLE_VACANCY_THRESHOLD] = DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
+		
+		hass.config_entries.async_update_entry(
+			config_entry, data=new_data, version=7
+		)
+		_LOGGER.info(
+			"Migration of entry %s from version 6 to 7 successful",
+			config_entry.entry_id,
+		)
+
 	return True
 
 
@@ -354,6 +380,20 @@ class PresenceBasedLightingCoordinator:
 		self._entity_states: Dict[str, dict] = {}
 		self._interceptor: PresenceLockInterceptor | None = None
 		self._using_interceptor: bool = False
+		
+		# Auto re-enable feature state
+		self._auto_reenable_enabled: bool = False
+		self._auto_reenable_start_time: time | None = None
+		self._auto_reenable_end_time: time | None = None
+		self._auto_reenable_tracking: Dict[str, Any] = {
+			"is_tracking": False,
+			"window_start": None,  # datetime when tracking started
+			"occupied_seconds": 0.0,  # total seconds occupied
+			"last_presence_change": None,  # datetime of last presence state change
+			"was_occupied": False,  # last known occupancy state
+		}
+		self._auto_reenable_end_time_unsub: Callable[[], None] | None = None
+		self._auto_reenable_start_time_unsub: Callable[[], None] | None = None
 
 		try:
 			_LOGGER.debug("Initializing coordinator for entry: %s", entry.entry_id)
@@ -504,6 +544,22 @@ class PresenceBasedLightingCoordinator:
 			)
 			_LOGGER.debug("Registered service call listener")
 			
+			# Register listener for auto-reenable presence sensors
+			auto_reenable_sensors = self.entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, [])
+			if auto_reenable_sensors:
+				self._listeners.append(
+					async_track_state_change_event(
+						self.hass,
+						auto_reenable_sensors,
+						self._handle_auto_reenable_presence_change,
+					)
+				)
+				_LOGGER.debug("Registered state change listener for %d auto-reenable sensors: %s",
+							 len(auto_reenable_sensors), auto_reenable_sensors)
+			
+			# Check if we need to continue tracking after a restart
+			await self._check_auto_reenable_startup()
+			
 			_LOGGER.info("Coordinator started successfully with %d listeners", len(self._listeners))
 		except Exception as err:
 			_LOGGER.exception("Error starting PresenceBasedLightingCoordinator: %s", err)
@@ -522,6 +578,9 @@ class PresenceBasedLightingCoordinator:
 				self._interceptor.teardown()
 				self._interceptor = None
 				self._using_interceptor = False
+
+			# Cancel auto-reenable schedules
+			self._cancel_auto_reenable_schedules()
 
 			# Cancel all per-entity timers
 			cancelled_count = 0
@@ -1210,3 +1269,383 @@ class PresenceBasedLightingCoordinator:
 			_LOGGER.exception("Error in off timer for %s: %s", entity_id, err)
 		finally:
 			entity_state["off_timer"] = None
+
+	# =========================================================================
+	# Auto Re-Enable Feature Methods
+	# =========================================================================
+
+	def _get_tracking_persistence_path(self) -> Path:
+		"""Get the path to the tracking persistence file."""
+		return Path(self.hass.config.path(".storage")) / f"pbl_tracking_{self.entry.entry_id}.json"
+
+	async def _save_tracking_state(self) -> None:
+		"""Persist tracking state to storage for restart recovery."""
+		try:
+			tracking = self._auto_reenable_tracking
+			data = {
+				"is_tracking": tracking["is_tracking"],
+				"window_start": tracking["window_start"].isoformat() if tracking["window_start"] else None,
+				"occupied_seconds": tracking["occupied_seconds"],
+				"last_presence_change": tracking["last_presence_change"].isoformat() if tracking["last_presence_change"] else None,
+				"was_occupied": tracking["was_occupied"],
+				"saved_at": dt_util.utcnow().isoformat(),
+			}
+			
+			path = self._get_tracking_persistence_path()
+			await self.hass.async_add_executor_job(
+				lambda: path.write_text(json.dumps(data))
+			)
+			_LOGGER.debug("Saved auto-reenable tracking state: %s", data)
+		except Exception as err:
+			_LOGGER.exception("Failed to save tracking state: %s", err)
+
+	async def _load_tracking_state(self) -> bool:
+		"""Load tracking state from storage. Returns True if state was loaded."""
+		try:
+			path = self._get_tracking_persistence_path()
+			if not path.exists():
+				return False
+			
+			data = await self.hass.async_add_executor_job(
+				lambda: json.loads(path.read_text())
+			)
+			
+			tracking = self._auto_reenable_tracking
+			tracking["is_tracking"] = data.get("is_tracking", False)
+			tracking["occupied_seconds"] = data.get("occupied_seconds", 0.0)
+			tracking["was_occupied"] = data.get("was_occupied", False)
+			
+			if data.get("window_start"):
+				tracking["window_start"] = datetime.fromisoformat(data["window_start"])
+			if data.get("last_presence_change"):
+				tracking["last_presence_change"] = datetime.fromisoformat(data["last_presence_change"])
+			
+			_LOGGER.debug("Loaded auto-reenable tracking state: %s", data)
+			return tracking["is_tracking"]
+		except Exception as err:
+			_LOGGER.debug("No valid tracking state to load: %s", err)
+			return False
+
+	async def _clear_tracking_state(self) -> None:
+		"""Clear persisted tracking state."""
+		try:
+			path = self._get_tracking_persistence_path()
+			if path.exists():
+				await self.hass.async_add_executor_job(path.unlink)
+				_LOGGER.debug("Cleared persisted tracking state")
+		except Exception as err:
+			_LOGGER.debug("Failed to clear tracking state: %s", err)
+
+	def set_auto_reenable_enabled(self, enabled: bool) -> None:
+		"""Set whether auto re-enable is enabled for this room."""
+		self._auto_reenable_enabled = enabled
+		_LOGGER.debug("Auto re-enable %s for %s", 
+					 "enabled" if enabled else "disabled",
+					 self.entry.data.get(CONF_ROOM_NAME))
+		
+		if enabled:
+			self._schedule_auto_reenable_times()
+		else:
+			self._cancel_auto_reenable_schedules()
+
+	def set_auto_reenable_start_time(self, start_time: time) -> None:
+		"""Set the start time for the monitoring window."""
+		self._auto_reenable_start_time = start_time
+		_LOGGER.debug("Auto re-enable start time set to %s for %s",
+					 start_time, self.entry.data.get(CONF_ROOM_NAME))
+		if self._auto_reenable_enabled:
+			self._schedule_auto_reenable_times()
+
+	def set_auto_reenable_end_time(self, end_time: time) -> None:
+		"""Set the end time for the monitoring window."""
+		self._auto_reenable_end_time = end_time
+		_LOGGER.debug("Auto re-enable end time set to %s for %s",
+					 end_time, self.entry.data.get(CONF_ROOM_NAME))
+		if self._auto_reenable_enabled:
+			self._schedule_auto_reenable_times()
+
+	def get_auto_reenable_tracking_info(self) -> Dict[str, Any]:
+		"""Get current tracking information for display in entity attributes."""
+		tracking = self._auto_reenable_tracking
+		threshold = self.entry.data.get(
+			CONF_AUTO_REENABLE_VACANCY_THRESHOLD, 
+			DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
+		)
+		
+		info = {
+			"is_tracking": tracking["is_tracking"],
+			"vacancy_threshold_percent": threshold,
+			"start_time": str(self._auto_reenable_start_time) if self._auto_reenable_start_time else None,
+			"end_time": str(self._auto_reenable_end_time) if self._auto_reenable_end_time else None,
+		}
+		
+		if tracking["is_tracking"] and tracking["window_start"]:
+			now = dt_util.utcnow()
+			total_seconds = (now - tracking["window_start"]).total_seconds()
+			
+			# Add time from current presence state if occupied
+			current_occupied_seconds = tracking["occupied_seconds"]
+			if tracking["was_occupied"] and tracking["last_presence_change"]:
+				current_occupied_seconds += (now - tracking["last_presence_change"]).total_seconds()
+			
+			if total_seconds > 0:
+				vacancy_percent = 100.0 * (1 - current_occupied_seconds / total_seconds)
+			else:
+				vacancy_percent = 100.0
+			
+			info["tracking_started"] = tracking["window_start"].isoformat()
+			info["total_tracking_seconds"] = round(total_seconds, 1)
+			info["occupied_seconds"] = round(current_occupied_seconds, 1)
+			info["current_vacancy_percent"] = round(vacancy_percent, 1)
+			info["currently_occupied"] = tracking["was_occupied"]
+		
+		return info
+
+	def _schedule_auto_reenable_times(self) -> None:
+		"""Schedule callbacks for start and end times."""
+		self._cancel_auto_reenable_schedules()
+		
+		if not self._auto_reenable_start_time or not self._auto_reenable_end_time:
+			_LOGGER.debug("Cannot schedule auto-reenable: start or end time not set")
+			return
+		
+		# Schedule start time callback
+		self._auto_reenable_start_time_unsub = async_track_time_change(
+			self.hass,
+			self._handle_auto_reenable_start_time,
+			hour=self._auto_reenable_start_time.hour,
+			minute=self._auto_reenable_start_time.minute,
+			second=self._auto_reenable_start_time.second,
+		)
+		
+		# Schedule end time callback
+		self._auto_reenable_end_time_unsub = async_track_time_change(
+			self.hass,
+			self._handle_auto_reenable_end_time,
+			hour=self._auto_reenable_end_time.hour,
+			minute=self._auto_reenable_end_time.minute,
+			second=self._auto_reenable_end_time.second,
+		)
+		
+		_LOGGER.debug(
+			"Scheduled auto-reenable for %s: start=%s, end=%s",
+			self.entry.data.get(CONF_ROOM_NAME),
+			self._auto_reenable_start_time,
+			self._auto_reenable_end_time
+		)
+
+	def _cancel_auto_reenable_schedules(self) -> None:
+		"""Cancel scheduled auto-reenable callbacks."""
+		if self._auto_reenable_start_time_unsub:
+			self._auto_reenable_start_time_unsub()
+			self._auto_reenable_start_time_unsub = None
+		
+		if self._auto_reenable_end_time_unsub:
+			self._auto_reenable_end_time_unsub()
+			self._auto_reenable_end_time_unsub = None
+
+	async def _handle_auto_reenable_start_time(self, now: datetime) -> None:
+		"""Called when the monitoring window starts."""
+		if not self._auto_reenable_enabled:
+			return
+		
+		room_name = self.entry.data.get(CONF_ROOM_NAME)
+		_LOGGER.info("Auto re-enable monitoring started for %s at %s", room_name, now)
+		
+		# Initialize tracking state
+		tracking = self._auto_reenable_tracking
+		tracking["is_tracking"] = True
+		tracking["window_start"] = dt_util.utcnow()
+		tracking["occupied_seconds"] = 0.0
+		tracking["last_presence_change"] = dt_util.utcnow()
+		tracking["was_occupied"] = self._is_auto_reenable_sensors_occupied()
+		
+		await self._save_tracking_state()
+
+	async def _handle_auto_reenable_end_time(self, now: datetime) -> None:
+		"""Called when the monitoring window ends - evaluate and potentially re-enable."""
+		if not self._auto_reenable_enabled:
+			return
+		
+		await self._evaluate_and_apply_auto_reenable()
+
+	async def _evaluate_and_apply_auto_reenable(self) -> None:
+		"""Evaluate vacancy percentage and re-enable presence lighting if threshold met."""
+		room_name = self.entry.data.get(CONF_ROOM_NAME)
+		tracking = self._auto_reenable_tracking
+		
+		if not tracking["is_tracking"]:
+			_LOGGER.debug("Auto re-enable evaluation skipped for %s: not tracking", room_name)
+			return
+		
+		now = dt_util.utcnow()
+		total_seconds = (now - tracking["window_start"]).total_seconds()
+		
+		# Finalize occupied seconds calculation
+		occupied_seconds = tracking["occupied_seconds"]
+		if tracking["was_occupied"] and tracking["last_presence_change"]:
+			occupied_seconds += (now - tracking["last_presence_change"]).total_seconds()
+		
+		# Calculate vacancy percentage
+		if total_seconds > 0:
+			vacancy_percent = 100.0 * (1 - occupied_seconds / total_seconds)
+		else:
+			vacancy_percent = 100.0
+		
+		threshold = self.entry.data.get(
+			CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
+			DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
+		)
+		
+		_LOGGER.info(
+			"Auto re-enable evaluation for %s: vacancy=%.1f%%, threshold=%d%%, occupied=%.1fs/%.1fs",
+			room_name, vacancy_percent, threshold, occupied_seconds, total_seconds
+		)
+		
+		# Reset tracking state
+		tracking["is_tracking"] = False
+		tracking["window_start"] = None
+		tracking["occupied_seconds"] = 0.0
+		tracking["last_presence_change"] = None
+		tracking["was_occupied"] = False
+		await self._clear_tracking_state()
+		
+		# Check if we should re-enable
+		if vacancy_percent >= threshold:
+			_LOGGER.info(
+				"Auto re-enable triggered for %s: room was empty %.1f%% of time (>= %d%% threshold)",
+				room_name, vacancy_percent, threshold
+			)
+			await self._reenable_presence_lighting()
+		else:
+			_LOGGER.info(
+				"Auto re-enable NOT triggered for %s: room was empty only %.1f%% of time (< %d%% threshold)",
+				room_name, vacancy_percent, threshold
+			)
+
+	async def _reenable_presence_lighting(self) -> None:
+		"""Re-enable presence-based lighting for all entities in this room."""
+		room_name = self.entry.data.get(CONF_ROOM_NAME)
+		
+		for entity_id, entity_state in self._entity_states.items():
+			if not entity_state["presence_allowed"]:
+				_LOGGER.info("Re-enabling presence lighting for %s in %s", entity_id, room_name)
+				await self.async_set_presence_allowed(entity_id, True)
+			
+			# Also resume automation if paused
+			if entity_state.get("automation_paused", False):
+				_LOGGER.info("Resuming automation for %s in %s", entity_id, room_name)
+				self.set_automation_paused(entity_id, False)
+
+	def _is_auto_reenable_sensors_occupied(self) -> bool:
+		"""Check if any auto-reenable presence sensor is occupied."""
+		sensors = self.entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, [])
+		if not sensors:
+			# Fall back to main presence sensors if none configured
+			sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
+		
+		return any(is_entity_on(self.hass, sensor) for sensor in sensors)
+
+	async def _handle_auto_reenable_presence_change(self, event: Event) -> None:
+		"""Track presence changes during the monitoring window."""
+		tracking = self._auto_reenable_tracking
+		if not tracking["is_tracking"]:
+			return
+		
+		entity_id = event.data.get("entity_id")
+		new_state = event.data.get("new_state")
+		old_state = event.data.get("old_state")
+		
+		if not new_state or not old_state:
+			return
+		
+		# Determine if currently occupied (any sensor on)
+		is_now_occupied = self._is_auto_reenable_sensors_occupied()
+		was_occupied = tracking["was_occupied"]
+		
+		if is_now_occupied != was_occupied:
+			now = dt_util.utcnow()
+			
+			# If transitioning from occupied to vacant, add the occupied time
+			if was_occupied and not is_now_occupied:
+				if tracking["last_presence_change"]:
+					occupied_duration = (now - tracking["last_presence_change"]).total_seconds()
+					tracking["occupied_seconds"] += occupied_duration
+					_LOGGER.debug(
+						"Auto-reenable tracking: %s now vacant, added %.1fs occupied time (total: %.1fs)",
+						self.entry.data.get(CONF_ROOM_NAME), occupied_duration, tracking["occupied_seconds"]
+					)
+			elif not was_occupied and is_now_occupied:
+				_LOGGER.debug(
+					"Auto-reenable tracking: %s now occupied",
+					self.entry.data.get(CONF_ROOM_NAME)
+				)
+			
+			tracking["last_presence_change"] = now
+			tracking["was_occupied"] = is_now_occupied
+			
+			# Persist state periodically
+			await self._save_tracking_state()
+
+	async def _check_auto_reenable_startup(self) -> None:
+		"""Check if we need to continue or evaluate tracking after a restart."""
+		if not self._auto_reenable_enabled:
+			return
+		
+		room_name = self.entry.data.get(CONF_ROOM_NAME)
+		was_tracking = await self._load_tracking_state()
+		
+		if not was_tracking:
+			_LOGGER.debug("No tracking state to restore for %s", room_name)
+			return
+		
+		tracking = self._auto_reenable_tracking
+		now = dt_util.utcnow()
+		
+		# Check if we're still in the monitoring window or just past it
+		if not self._auto_reenable_start_time or not self._auto_reenable_end_time:
+			_LOGGER.debug("Cannot check window for %s: times not set", room_name)
+			return
+		
+		today = now.date()
+		start_dt = dt_util.as_utc(datetime.combine(today, self._auto_reenable_start_time))
+		end_dt = dt_util.as_utc(datetime.combine(today, self._auto_reenable_end_time))
+		
+		# Handle window crossing midnight
+		if end_dt <= start_dt:
+			# Window spans midnight - if we're before end, use yesterday's start
+			if now < end_dt:
+				start_dt = start_dt - timedelta(days=1)
+			else:
+				# We're after end, so next window starts today
+				end_dt = end_dt + timedelta(days=1)
+		
+		# Check if window_start is valid for current window
+		if tracking["window_start"]:
+			window_start = tracking["window_start"]
+			if isinstance(window_start, str):
+				window_start = datetime.fromisoformat(window_start)
+			
+			# If we were tracking and are now past end time, evaluate
+			if now >= end_dt and window_start < end_dt:
+				_LOGGER.info(
+					"HA restarted after monitoring window ended for %s, evaluating now",
+					room_name
+				)
+				await self._evaluate_and_apply_auto_reenable()
+			# If we're still in the window, continue tracking
+			elif start_dt <= now < end_dt:
+				_LOGGER.info(
+					"HA restarted during monitoring window for %s, continuing tracking",
+					room_name
+				)
+				tracking["is_tracking"] = True
+				# Update presence state
+				tracking["last_presence_change"] = now
+				tracking["was_occupied"] = self._is_auto_reenable_sensors_occupied()
+			else:
+				_LOGGER.debug(
+					"Stale tracking state for %s, clearing",
+					room_name
+				)
+				await self._clear_tracking_state()

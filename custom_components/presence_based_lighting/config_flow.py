@@ -21,6 +21,8 @@ from .const import (
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
+	CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+	CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
 	CONF_ENTITY_ID,
@@ -41,6 +43,7 @@ from .const import (
 	CONF_ROOM_NAME,
 	CONF_USE_INTERCEPTOR,
 	DEFAULT_AUTOMATION_MODE,
+	DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
 	DEFAULT_DETECTED_SERVICE,
@@ -62,7 +65,6 @@ from .real_last_changed import (
 	get_rlc_sensors_for_entity,
 	get_all_rlc_sensors,
 )
-
 STEP_USER = "user"
 STEP_SELECT_ENTITY = "select_entity"
 STEP_CONFIGURE_ENTITY = "configure_entity"
@@ -410,7 +412,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 6
+	VERSION = 7
 
 	def __init__(self):
 		"""Initialize."""
@@ -1000,6 +1002,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_CLEARING_SENSORS: config_entry.data.get(CONF_CLEARING_SENSORS, []),
 			CONF_ACTIVATION_CONDITIONS: config_entry.data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
+			CONF_AUTO_REENABLE_PRESENCE_SENSORS: config_entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
+			CONF_AUTO_REENABLE_VACANCY_THRESHOLD: config_entry.data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
 		}
 		# Load existing entities from config entry
 		existing_entities = config_entry.data.get(CONF_CONTROLLED_ENTITIES, [])
@@ -1044,6 +1048,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
+			CONF_AUTO_REENABLE_PRESENCE_SENSORS: self._base_data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
+			CONF_AUTO_REENABLE_VACANCY_THRESHOLD: self._base_data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
 		}
 		self.hass.config_entries.async_update_entry(
 			self.config_entry,
@@ -1218,6 +1224,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			self._base_data[CONF_CLEARING_SENSORS] = user_input.get(CONF_CLEARING_SENSORS, [])
 			self._base_data[CONF_ACTIVATION_CONDITIONS] = user_input.get(CONF_ACTIVATION_CONDITIONS, [])
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
+			self._base_data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] = user_input.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, [])
+			self._base_data[CONF_AUTO_REENABLE_VACANCY_THRESHOLD] = user_input.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD)
 			self._selected_entity_id = None
 			_LOGGER.debug(
 				"Transitioning to manage_entities step. Current entities: %d",
@@ -1261,6 +1269,19 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						CONF_OFF_DELAY,
 						default=self._base_data[CONF_OFF_DELAY],
 					): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+					vol.Optional(
+						CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+						default=self._base_data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
+					): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain=["binary_sensor"],
+							multiple=True,
+						)
+					),
+					vol.Optional(
+						CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
+						default=self._base_data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
+					): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
 				}
 			),
 			description_placeholders={"room": self._base_data[CONF_ROOM_NAME]},

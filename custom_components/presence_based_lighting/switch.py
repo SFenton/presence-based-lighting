@@ -17,16 +17,23 @@ from .const import (
     CONF_ROOM_NAME,
     DOMAIN,
     ICON,
+    ICON_AUTO_REENABLE,
 )
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up per-entity presence switches."""
+    """Set up per-entity presence switches and auto re-enable switch."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
+    
+    # Per-entity presence switches
     entities = [
         PresenceEntitySwitch(coordinator, entry, entity_config)
         for entity_config in entry.data.get(CONF_CONTROLLED_ENTITIES, [])
     ]
+    
+    # Auto re-enable switch for the room
+    entities.append(AutoReEnableSwitch(coordinator, entry))
+    
     async_add_entities(entities)
 
 
@@ -151,3 +158,82 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
     @callback
     def _handle_coordinator_update(self):
         self.async_write_ha_state()
+
+
+class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
+    """Switch controlling whether auto re-enable is active for this room.
+    
+    When enabled, the coordinator will track presence during the configured
+    time window and automatically re-enable presence-based lighting if the
+    room was empty for the configured threshold percentage of time.
+    """
+
+    def __init__(self, coordinator, entry):
+        """Initialize the auto re-enable switch."""
+        self._coordinator = coordinator
+        self._entry = entry
+        self._is_on = False
+        
+        room_name = entry.data.get(CONF_ROOM_NAME, "Unknown")
+        sanitized_room = slugify(room_name)
+        
+        self._attr_name = f"{room_name} Auto Re-Enable Presence Lighting"
+        self._attr_unique_id = f"{entry.entry_id}_auto_reenable"
+        self._attr_icon = ICON_AUTO_REENABLE
+
+    @property
+    def device_info(self):
+        """Return device information for grouping under the room."""
+        return {
+            "identifiers": {(DOMAIN, self._entry.entry_id)},
+            "name": f"{self._entry.data[CONF_ROOM_NAME]} Presence Lighting",
+            "manufacturer": "Presence Based Lighting",
+            "model": "Presence Automation",
+        }
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether auto re-enable is enabled."""
+        return self._is_on
+
+    @property
+    def extra_state_attributes(self):
+        """Return additional state attributes."""
+        attrs = {
+            "room": self._entry.data.get(CONF_ROOM_NAME),
+        }
+        
+        # Add tracking info from coordinator if available
+        if hasattr(self._coordinator, 'get_auto_reenable_tracking_info'):
+            tracking_info = self._coordinator.get_auto_reenable_tracking_info()
+            attrs.update(tracking_info)
+        
+        return attrs
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable auto re-enable."""
+        self._is_on = True
+        if hasattr(self._coordinator, 'set_auto_reenable_enabled'):
+            self._coordinator.set_auto_reenable_enabled(True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disable auto re-enable."""
+        self._is_on = False
+        if hasattr(self._coordinator, 'set_auto_reenable_enabled'):
+            self._coordinator.set_auto_reenable_enabled(False)
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        """Restore state on startup."""
+        await super().async_added_to_hass()
+        
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            self._is_on = last_state.state == STATE_ON
+        else:
+            self._is_on = False
+        
+        # Notify coordinator of initial state
+        if hasattr(self._coordinator, 'set_auto_reenable_enabled'):
+            self._coordinator.set_auto_reenable_enabled(self._is_on)
