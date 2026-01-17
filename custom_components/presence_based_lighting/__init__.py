@@ -28,7 +28,9 @@ from .const import (
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
+	CONF_AUTO_REENABLE_END_TIME,
 	CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+	CONF_AUTO_REENABLE_START_TIME,
 	CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
 	CONF_CLEARING_SENSORS,
 	CONF_CONTROLLED_ENTITIES,
@@ -285,12 +287,16 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 		)
 
 	if config_entry.version == 6:
-		# Version 6 -> 7: Add auto_reenable_presence_sensors and auto_reenable_vacancy_threshold
+		# Version 6 -> 7: Add auto_reenable_presence_sensors, vacancy_threshold, start/end times
 		new_data = {**config_entry.data}
 		if CONF_AUTO_REENABLE_PRESENCE_SENSORS not in new_data:
 			new_data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] = []
 		if CONF_AUTO_REENABLE_VACANCY_THRESHOLD not in new_data:
 			new_data[CONF_AUTO_REENABLE_VACANCY_THRESHOLD] = DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
+		if CONF_AUTO_REENABLE_START_TIME not in new_data:
+			new_data[CONF_AUTO_REENABLE_START_TIME] = DEFAULT_AUTO_REENABLE_START_TIME
+		if CONF_AUTO_REENABLE_END_TIME not in new_data:
+			new_data[CONF_AUTO_REENABLE_END_TIME] = DEFAULT_AUTO_REENABLE_END_TIME
 		
 		hass.config_entries.async_update_entry(
 			config_entry, data=new_data, version=7
@@ -383,8 +389,6 @@ class PresenceBasedLightingCoordinator:
 		
 		# Auto re-enable feature state
 		self._auto_reenable_enabled: bool = False
-		self._auto_reenable_start_time: time | None = None
-		self._auto_reenable_end_time: time | None = None
 		self._auto_reenable_tracking: Dict[str, Any] = {
 			"is_tracking": False,
 			"window_start": None,  # datetime when tracking started
@@ -394,6 +398,14 @@ class PresenceBasedLightingCoordinator:
 		}
 		self._auto_reenable_end_time_unsub: Callable[[], None] | None = None
 		self._auto_reenable_start_time_unsub: Callable[[], None] | None = None
+		
+		# Parse start/end times from config entry
+		self._auto_reenable_start_time = self._parse_time_string(
+			entry.data.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME)
+		)
+		self._auto_reenable_end_time = self._parse_time_string(
+			entry.data.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME)
+		)
 
 		try:
 			_LOGGER.debug("Initializing coordinator for entry: %s", entry.entry_id)
@@ -433,6 +445,16 @@ class PresenceBasedLightingCoordinator:
 		except Exception as err:
 			_LOGGER.exception("Error initializing PresenceBasedLightingCoordinator: %s", err)
 			raise
+
+	def _parse_time_string(self, time_str: str) -> time:
+		"""Parse a time string like 'HH:MM:SS' or 'HH:MM' to a time object."""
+		if not time_str:
+			return time(0, 0, 0)
+		parts = time_str.split(":")
+		hour = int(parts[0]) if len(parts) > 0 else 0
+		minute = int(parts[1]) if len(parts) > 1 else 0
+		second = int(parts[2]) if len(parts) > 2 else 0
+		return time(hour=hour, minute=minute, second=second)
 
 	async def async_start(self) -> None:
 		"""Begin tracking sensors and controlled entities."""
@@ -1347,22 +1369,6 @@ class PresenceBasedLightingCoordinator:
 			self._schedule_auto_reenable_times()
 		else:
 			self._cancel_auto_reenable_schedules()
-
-	def set_auto_reenable_start_time(self, start_time: time) -> None:
-		"""Set the start time for the monitoring window."""
-		self._auto_reenable_start_time = start_time
-		_LOGGER.debug("Auto re-enable start time set to %s for %s",
-					 start_time, self.entry.data.get(CONF_ROOM_NAME))
-		if self._auto_reenable_enabled:
-			self._schedule_auto_reenable_times()
-
-	def set_auto_reenable_end_time(self, end_time: time) -> None:
-		"""Set the end time for the monitoring window."""
-		self._auto_reenable_end_time = end_time
-		_LOGGER.debug("Auto re-enable end time set to %s for %s",
-					 end_time, self.entry.data.get(CONF_ROOM_NAME))
-		if self._auto_reenable_enabled:
-			self._schedule_auto_reenable_times()
 
 	def get_auto_reenable_tracking_info(self) -> Dict[str, Any]:
 		"""Get current tracking information for display in entity attributes."""

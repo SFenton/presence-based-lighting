@@ -30,6 +30,10 @@ from custom_components.presence_based_lighting.const import (
     AUTOMATION_MODE_AUTOMATIC,
     CONF_ACTIVATION_CONDITIONS,
     CONF_AUTOMATION_MODE,
+    CONF_AUTO_REENABLE_END_TIME,
+    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+    CONF_AUTO_REENABLE_START_TIME,
+    CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
     CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -46,6 +50,9 @@ from custom_components.presence_based_lighting.const import (
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
     DEFAULT_AUTOMATION_MODE,
+    DEFAULT_AUTO_REENABLE_END_TIME,
+    DEFAULT_AUTO_REENABLE_START_TIME,
+    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
     DEFAULT_CLEARED_SERVICE,
     DEFAULT_CLEARED_STATE,
     DEFAULT_DETECTED_SERVICE,
@@ -148,6 +155,10 @@ async def test_manage_entities_creates_entry_when_ready():
         CONF_ACTIVATION_CONDITIONS: [],
         CONF_OFF_DELAY: 15,
         CONF_CONTROLLED_ENTITIES: handler._controlled_entities,  # type: ignore[attr-defined]
+        CONF_AUTO_REENABLE_PRESENCE_SENSORS: [],
+        CONF_AUTO_REENABLE_VACANCY_THRESHOLD: DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
+        CONF_AUTO_REENABLE_START_TIME: DEFAULT_AUTO_REENABLE_START_TIME,
+        CONF_AUTO_REENABLE_END_TIME: DEFAULT_AUTO_REENABLE_END_TIME,
     }
     handler.async_create_entry.assert_called_once_with(title="Office", data=expected_payload)
     assert result == {"type": "create_entry"}

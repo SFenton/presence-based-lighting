@@ -12,8 +12,7 @@ ICON_AUTO_REENABLE = "mdi:autorenew"
 
 # Platforms
 SWITCH = "switch"
-TIME = "time"
-PLATFORMS = [SWITCH, TIME]
+PLATFORMS = [SWITCH]
 
 # Configuration keys
 CONF_ROOM_NAME = "room_name"
@@ -43,6 +42,8 @@ CONF_ACTIVATION_CONDITIONS = "activation_conditions"  # Optional binary_sensor/i
 # Auto re-enable configuration keys
 CONF_AUTO_REENABLE_PRESENCE_SENSORS = "auto_reenable_presence_sensors"  # Presence sensors used for vacancy tracking
 CONF_AUTO_REENABLE_VACANCY_THRESHOLD = "auto_reenable_vacancy_threshold"  # Percentage threshold for vacancy (0-100)
+CONF_AUTO_REENABLE_START_TIME = "auto_reenable_start_time"  # Start of monitoring window (time string HH:MM:SS)
+CONF_AUTO_REENABLE_END_TIME = "auto_reenable_end_time"  # End of monitoring window (time string HH:MM:SS)
 
 # Automation mode values
 AUTOMATION_MODE_AUTOMATIC = "automatic"

@@ -21,7 +21,9 @@ from .const import (
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
+	CONF_AUTO_REENABLE_END_TIME,
 	CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+	CONF_AUTO_REENABLE_START_TIME,
 	CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -43,6 +45,8 @@ from .const import (
 	CONF_ROOM_NAME,
 	CONF_USE_INTERCEPTOR,
 	DEFAULT_AUTOMATION_MODE,
+	DEFAULT_AUTO_REENABLE_END_TIME,
+	DEFAULT_AUTO_REENABLE_START_TIME,
 	DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
@@ -439,6 +443,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
 				CONF_ACTIVATION_CONDITIONS: user_input.get(CONF_ACTIVATION_CONDITIONS, []),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
+				CONF_AUTO_REENABLE_PRESENCE_SENSORS: user_input.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
+				CONF_AUTO_REENABLE_VACANCY_THRESHOLD: user_input.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
+				CONF_AUTO_REENABLE_START_TIME: user_input.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME),
+				CONF_AUTO_REENABLE_END_TIME: user_input.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME),
 			}
 			self._controlled_entities = []
 			self._selected_entity_id = None
@@ -471,6 +479,24 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Optional(
 						CONF_OFF_DELAY, default=DEFAULT_OFF_DELAY
 					): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+					vol.Optional(CONF_AUTO_REENABLE_PRESENCE_SENSORS): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain=["binary_sensor"],
+							multiple=True,
+						)
+					),
+					vol.Optional(
+						CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
+						default=DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
+					): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+					vol.Optional(
+						CONF_AUTO_REENABLE_START_TIME,
+						default=DEFAULT_AUTO_REENABLE_START_TIME,
+					): selector.TimeSelector(),
+					vol.Optional(
+						CONF_AUTO_REENABLE_END_TIME,
+						default=DEFAULT_AUTO_REENABLE_END_TIME,
+					): selector.TimeSelector(),
 				}
 			),
 			errors=self._errors,
@@ -823,6 +849,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
+			CONF_AUTO_REENABLE_PRESENCE_SENSORS: self._base_data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
+			CONF_AUTO_REENABLE_VACANCY_THRESHOLD: self._base_data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
+			CONF_AUTO_REENABLE_START_TIME: self._base_data.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME),
+			CONF_AUTO_REENABLE_END_TIME: self._base_data.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME),
 		}
 
 	async def async_step_manage_entities(self, user_input=None):
@@ -1004,6 +1034,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_AUTO_REENABLE_PRESENCE_SENSORS: config_entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
 			CONF_AUTO_REENABLE_VACANCY_THRESHOLD: config_entry.data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
+			CONF_AUTO_REENABLE_START_TIME: config_entry.data.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME),
+			CONF_AUTO_REENABLE_END_TIME: config_entry.data.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME),
 		}
 		# Load existing entities from config entry
 		existing_entities = config_entry.data.get(CONF_CONTROLLED_ENTITIES, [])
@@ -1050,6 +1082,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 			CONF_AUTO_REENABLE_PRESENCE_SENSORS: self._base_data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
 			CONF_AUTO_REENABLE_VACANCY_THRESHOLD: self._base_data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
+			CONF_AUTO_REENABLE_START_TIME: self._base_data.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME),
+			CONF_AUTO_REENABLE_END_TIME: self._base_data.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME),
 		}
 		self.hass.config_entries.async_update_entry(
 			self.config_entry,
@@ -1226,6 +1260,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
 			self._base_data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] = user_input.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, [])
 			self._base_data[CONF_AUTO_REENABLE_VACANCY_THRESHOLD] = user_input.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD)
+			self._base_data[CONF_AUTO_REENABLE_START_TIME] = user_input.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME)
+			self._base_data[CONF_AUTO_REENABLE_END_TIME] = user_input.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME)
 			self._selected_entity_id = None
 			_LOGGER.debug(
 				"Transitioning to manage_entities step. Current entities: %d",
@@ -1282,6 +1318,14 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
 						default=self._base_data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
 					): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+					vol.Optional(
+						CONF_AUTO_REENABLE_START_TIME,
+						default=self._base_data.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME),
+					): selector.TimeSelector(),
+					vol.Optional(
+						CONF_AUTO_REENABLE_END_TIME,
+						default=self._base_data.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME),
+					): selector.TimeSelector(),
 				}
 			),
 			description_placeholders={"room": self._base_data[CONF_ROOM_NAME]},
