@@ -12,7 +12,7 @@ ICON_AUTO_REENABLE = "mdi:autorenew"
 
 # Platforms
 SWITCH = "switch"
-TIME = "datetime"
+TIME = "time"
 PLATFORMS = [SWITCH, TIME]
 
 # Configuration keys

@@ -1,14 +1,13 @@
-"""DateTime platform for Presence Based Lighting auto re-enable time configuration."""
+"""Time platform for Presence Based Lighting auto re-enable time configuration."""
 from __future__ import annotations
 
-from datetime import time
+from datetime import time as dt_time
 import logging
 
-from homeassistant.components.datetime import DateTimeEntity
+from homeassistant.components.time import TimeEntity
 from homeassistant.const import EntityCategory
-from homeassistant.core import callback
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.util import dt as dt_util, slugify
+from homeassistant.util import slugify
 
 from .const import (
     CONF_ROOM_NAME,
@@ -33,11 +32,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(entities)
 
 
-class AutoReEnableTimeEntity(DateTimeEntity, RestoreEntity):
+class AutoReEnableTimeEntity(TimeEntity, RestoreEntity):
     """Base class for auto re-enable time entities."""
 
-    _attr_has_date = False
-    _attr_has_time = True
     _attr_entity_category = EntityCategory.CONFIG
     
     def __init__(self, coordinator, entry, suffix: str, default_time: str):
@@ -45,10 +42,9 @@ class AutoReEnableTimeEntity(DateTimeEntity, RestoreEntity):
         self._coordinator = coordinator
         self._entry = entry
         self._default_time_str = default_time
-        self._time_value: time | None = None
+        self._time_value: dt_time | None = None
         
         room_name = entry.data.get(CONF_ROOM_NAME, "Unknown")
-        sanitized_room = slugify(room_name)
         
         self._attr_name = f"{room_name} Auto Re-Enable {suffix}"
         self._attr_unique_id = f"{entry.entry_id}_auto_reenable_{suffix.lower().replace(' ', '_')}"
@@ -65,40 +61,21 @@ class AutoReEnableTimeEntity(DateTimeEntity, RestoreEntity):
         }
 
     @property
-    def native_value(self):
-        """Return the current time value as a datetime."""
-        if self._time_value is None:
-            return None
-        # Return as a datetime with today's date for the time component
-        today = dt_util.now().date()
-        return dt_util.as_utc(
-            dt_util.now().replace(
-                hour=self._time_value.hour,
-                minute=self._time_value.minute,
-                second=self._time_value.second,
-                microsecond=0,
-            )
-        )
+    def native_value(self) -> dt_time | None:
+        """Return the current time value."""
+        return self._time_value
 
-    def _parse_time_string(self, time_str: str) -> time:
+    def _parse_time_string(self, time_str: str) -> dt_time:
         """Parse a time string like '00:00:00' to a time object."""
         parts = time_str.split(":")
         hour = int(parts[0]) if len(parts) > 0 else 0
         minute = int(parts[1]) if len(parts) > 1 else 0
         second = int(parts[2]) if len(parts) > 2 else 0
-        return time(hour=hour, minute=minute, second=second)
+        return dt_time(hour=hour, minute=minute, second=second)
 
-    async def async_set_value(self, value) -> None:
+    async def async_set_value(self, value: dt_time) -> None:
         """Set the time value."""
-        if hasattr(value, 'time'):
-            # It's a datetime, extract the time
-            self._time_value = value.time()
-        elif isinstance(value, time):
-            self._time_value = value
-        else:
-            # Try to parse as string
-            self._time_value = self._parse_time_string(str(value))
-        
+        self._time_value = value
         self._notify_coordinator()
         self.async_write_ha_state()
 
@@ -114,12 +91,8 @@ class AutoReEnableTimeEntity(DateTimeEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
         if last_state is not None and last_state.state not in (None, "unknown", "unavailable"):
             try:
-                # Parse the ISO format datetime and extract time
-                parsed = dt_util.parse_datetime(last_state.state)
-                if parsed:
-                    self._time_value = parsed.time()
-                else:
-                    self._time_value = self._parse_time_string(self._default_time_str)
+                # Parse the time string (format: HH:MM:SS)
+                self._time_value = self._parse_time_string(last_state.state)
             except (ValueError, AttributeError):
                 self._time_value = self._parse_time_string(self._default_time_str)
         else:
