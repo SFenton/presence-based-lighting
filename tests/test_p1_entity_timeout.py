@@ -29,6 +29,62 @@ from custom_components.presence_based_lighting.const import (
 )
 
 
+@pytest.mark.asyncio
+async def test_timer_restart_does_not_clear_new_timer_reference(mock_hass):
+    """Cancelling a timer and starting a new one should not lose the new reference.
+
+    This guards against a race where the cancelled task's `finally` block clears
+    `entity_state["off_timer"]` after a newer task has been stored.
+    """
+    entry = MagicMock()
+    entry.entry_id = "testrace"
+    entry.data = {
+        CONF_ROOM_NAME: "Race Room",
+        CONF_PRESENCE_SENSORS: ["binary_sensor.motion"],
+        CONF_OFF_DELAY: 1,  # global delay; overridden per-entity below
+        CONF_CONTROLLED_ENTITIES: [
+            {
+                CONF_ENTITY_ID: "light.race",
+                CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                CONF_INITIAL_PRESENCE_ALLOWED: True,
+                CONF_ENTITY_OFF_DELAY: 5,  # long enough that timers stay pending
+            },
+        ],
+    }
+
+    mock_hass.states.set("binary_sensor.motion", STATE_OFF)
+    mock_hass.states.set("light.race", STATE_ON)
+
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    await coordinator.async_start()
+
+    entity_state = coordinator._entity_states["light.race"]
+
+    # Start a timer, then immediately restart it.
+    await coordinator._start_off_timer()
+    first = entity_state["off_timer"]
+    assert first is not None
+
+    await coordinator._start_off_timer()
+    second = entity_state["off_timer"]
+    assert second is not None
+    assert second is not first
+
+    # Let the cancelled task finalize; it must not clear the new reference.
+    await asyncio.sleep(0)
+    assert entity_state["off_timer"] is second
+
+    # Cleanup to avoid leaking background tasks.
+    second.cancel()
+    await asyncio.sleep(0)
+    coordinator.async_stop()
+
+
 def _presence_event(mock_hass, sensor_id, state):
     """Fire a presence sensor state change."""
     event_data = {

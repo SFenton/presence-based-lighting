@@ -586,7 +586,6 @@ class PresenceBasedLightingCoordinator:
 		except Exception as err:
 			_LOGGER.exception("Error starting PresenceBasedLightingCoordinator: %s", err)
 			raise
-			raise
 
 	@callback
 	def async_stop(self) -> None:
@@ -1006,7 +1005,6 @@ class PresenceBasedLightingCoordinator:
 				for entity_state in self._entity_states.values():
 					if entity_state["off_timer"]:
 						entity_state["off_timer"].cancel()
-						entity_state["off_timer"] = None
 				await self._apply_presence_action(CONF_PRESENCE_DETECTED_SERVICE)
 				# Start off-timer immediately after presence detected
 				# This handles the case where clearing sensors may already be cleared
@@ -1261,9 +1259,8 @@ class PresenceBasedLightingCoordinator:
 				if delay is None:
 					delay = self.entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY)
 				
-				entity_state["off_timer"] = asyncio.create_task(
-					self._execute_entity_off_timer(entity_state, delay)
-				)
+				task = asyncio.create_task(self._execute_entity_off_timer(entity_state, delay))
+				entity_state["off_timer"] = task
 
 	async def _execute_entity_off_timer(self, entity_state: dict, delay: int) -> None:
 		"""Execute the off timer for a specific entity.
@@ -1275,6 +1272,7 @@ class PresenceBasedLightingCoordinator:
 		              -> timer fires -> clearing sensors already cleared -> turn off
 		"""
 		entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
+		this_task = asyncio.current_task()
 		try:
 			_LOGGER.debug("Starting off timer for %s with delay %d seconds", entity_id, delay)
 			await asyncio.sleep(delay)
@@ -1290,7 +1288,10 @@ class PresenceBasedLightingCoordinator:
 		except Exception as err:
 			_LOGGER.exception("Error in off timer for %s: %s", entity_id, err)
 		finally:
-			entity_state["off_timer"] = None
+			# Avoid clobbering a newly started timer:
+			# if this task was cancelled/replaced, a newer task may already be stored.
+			if entity_state.get("off_timer") is this_task:
+				entity_state["off_timer"] = None
 
 	# =========================================================================
 	# Auto Re-Enable Feature Methods

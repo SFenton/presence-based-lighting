@@ -7,3 +7,13 @@ venv
 venv/
 __pycache__/
 *.pyc
+
+# If a virtualenv/venv is accidentally created in the repo root
+pyvenv.cfg
+bin/
+include/
+lib/
+lib64/
+Scripts/
+share/
+
