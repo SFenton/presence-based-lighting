@@ -58,6 +58,8 @@ from .const import (
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+	CONF_FILE_LOGGING_ENABLED,
+	DEFAULT_FILE_LOGGING_ENABLED,
 	DEFAULT_USE_INTERCEPTOR,
 	DOMAIN,
 	NO_ACTION,
@@ -442,6 +444,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_PRESENCE_SENSORS: user_input[CONF_PRESENCE_SENSORS],
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
 				CONF_ACTIVATION_CONDITIONS: user_input.get(CONF_ACTIVATION_CONDITIONS, []),
+				CONF_FILE_LOGGING_ENABLED: user_input.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
 				CONF_AUTO_REENABLE_PRESENCE_SENSORS: user_input.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
 				CONF_AUTO_REENABLE_VACANCY_THRESHOLD: user_input.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
@@ -476,6 +479,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 							multiple=True,
 						)
 					),
+					vol.Optional(
+						CONF_FILE_LOGGING_ENABLED,
+						default=DEFAULT_FILE_LOGGING_ENABLED,
+					): cv.boolean,
 					vol.Optional(
 						CONF_OFF_DELAY, default=DEFAULT_OFF_DELAY
 					): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
@@ -847,6 +854,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			CONF_PRESENCE_SENSORS: self._base_data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
+			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 			CONF_AUTO_REENABLE_PRESENCE_SENSORS: self._base_data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
@@ -1031,6 +1039,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: config_entry.data.get(CONF_CLEARING_SENSORS, []),
 			CONF_ACTIVATION_CONDITIONS: config_entry.data.get(CONF_ACTIVATION_CONDITIONS, []),
+			CONF_FILE_LOGGING_ENABLED: config_entry.data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_AUTO_REENABLE_PRESENCE_SENSORS: config_entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
 			CONF_AUTO_REENABLE_VACANCY_THRESHOLD: config_entry.data.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD),
@@ -1078,6 +1087,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_PRESENCE_SENSORS: self._base_data[CONF_PRESENCE_SENSORS],
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
+			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
 			CONF_AUTO_REENABLE_PRESENCE_SENSORS: self._base_data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
@@ -1257,6 +1267,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
 			self._base_data[CONF_CLEARING_SENSORS] = user_input.get(CONF_CLEARING_SENSORS, [])
 			self._base_data[CONF_ACTIVATION_CONDITIONS] = user_input.get(CONF_ACTIVATION_CONDITIONS, [])
+			self._base_data[CONF_FILE_LOGGING_ENABLED] = user_input.get(
+				CONF_FILE_LOGGING_ENABLED,
+				self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
+			)
 			self._base_data[CONF_OFF_DELAY] = user_input[CONF_OFF_DELAY]
 			self._base_data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] = user_input.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, [])
 			self._base_data[CONF_AUTO_REENABLE_VACANCY_THRESHOLD] = user_input.get(CONF_AUTO_REENABLE_VACANCY_THRESHOLD, DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD)
@@ -1301,6 +1315,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 							multiple=True,
 						)
 					),
+					vol.Optional(
+						CONF_FILE_LOGGING_ENABLED,
+						default=self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
+					): cv.boolean,
 					vol.Required(
 						CONF_OFF_DELAY,
 						default=self._base_data[CONF_OFF_DELAY],

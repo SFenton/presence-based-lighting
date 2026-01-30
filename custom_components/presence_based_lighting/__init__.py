@@ -19,7 +19,11 @@ from homeassistant.const import (
 	STATE_ON,
 )
 from homeassistant.core import Context, Event, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
+from homeassistant.helpers.event import (
+	async_track_state_change_event,
+	async_track_time_change,
+	async_track_time_interval,
+)
 from homeassistant.util import dt as dt_util
 import homeassistant.helpers.config_validation as cv
 
@@ -65,6 +69,10 @@ from .const import (
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
+	CONF_FILE_LOGGING_ENABLED,
+	DEFAULT_FILE_LOGGING_ENABLED,
+	FILE_LOG_NAME,
+	FILE_LOG_MAX_LINES,
 	DOMAIN,
 	PLATFORMS,
 	STARTUP_MESSAGE,
@@ -73,6 +81,181 @@ from .interceptor import PresenceLockInterceptor, is_interceptor_available
 from .real_last_changed import get_effective_state, is_entity_on, is_entity_off, is_real_last_changed_entity
 
 _LOGGER = logging.getLogger(__package__)
+
+_FILE_LOGGING_STATE_KEY = "_file_logging"
+
+
+class _LineCappedFileHandler(logging.FileHandler):
+	"""A FileHandler that periodically trims itself to the last N lines."""
+
+	def __init__(
+		self,
+		*args,
+		hass: HomeAssistant,
+		max_lines: int,
+		trim_every_writes: int = 200,
+		**kwargs,
+	):
+		super().__init__(*args, **kwargs)
+		self._hass = hass
+		self._max_lines = max_lines
+		self._trim_every_writes = max(1, trim_every_writes)
+		self._writes_since_trim = 0
+		self._trim_pending = False
+
+	def emit(self, record) -> None:
+		super().emit(record)
+		self._writes_since_trim += 1
+		if self._trim_pending or self._writes_since_trim < self._trim_every_writes:
+			return
+		self._writes_since_trim = 0
+		self._trim_pending = True
+		loop = getattr(self._hass, "loop", None)
+		if loop is None:
+			self._trim_pending = False
+			return
+
+		def _schedule() -> None:
+			async def _do_trim() -> None:
+				try:
+					await _trim_log_file(self._hass, self.baseFilename, self._max_lines)
+				finally:
+					self._trim_pending = False
+
+			create_task = getattr(self._hass, "async_create_task", None)
+			if callable(create_task):
+				create_task(_do_trim())
+			else:
+				# Fallback for HA internals; safest no-op if unavailable.
+				self._trim_pending = False
+
+		try:
+			loop.call_soon_threadsafe(_schedule)
+		except Exception:
+			self._trim_pending = False
+
+
+def _get_file_logging_state(hass: HomeAssistant) -> dict:
+	"""Return (and initialize) shared file-logging state stored in hass.data."""
+	if DOMAIN not in hass.data:
+		hass.data[DOMAIN] = {}
+	state = hass.data[DOMAIN].get(_FILE_LOGGING_STATE_KEY)
+	if isinstance(state, dict):
+		return state
+	state = {
+		"handler": None,
+		"unsub_trim": None,
+		"enabled_entries": set(),
+		"log_path": None,
+	}
+	hass.data[DOMAIN][_FILE_LOGGING_STATE_KEY] = state
+	return state
+
+
+async def _trim_log_file(hass: HomeAssistant, log_path: str, max_lines: int) -> None:
+	"""Trim the log file to the last max_lines (runs in executor)."""
+	path = Path(log_path)
+	if not path.exists():
+		return
+
+	def _trim() -> None:  # pragma: no cover - executor I/O
+		from collections import deque
+		try:
+			with path.open("r", encoding="utf-8", errors="replace") as file_handle:
+				lines = deque(file_handle, maxlen=max_lines)
+			with path.open("w", encoding="utf-8") as file_handle:
+				file_handle.writelines(lines)
+		except Exception as err:
+			_LOGGER.debug("Failed trimming log file %s: %s", log_path, err)
+
+	await hass.async_add_executor_job(_trim)
+
+
+async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
+	"""Ensure the shared file handler exists and periodic trimming is active."""
+	state = _get_file_logging_state(hass)
+	if state.get("handler") is not None:
+		return
+
+	log_path = hass.config.path(FILE_LOG_NAME)
+
+	def _create_handler() -> logging.FileHandler:  # pragma: no cover - executor I/O
+		return _LineCappedFileHandler(
+			log_path,
+			mode="a",
+			encoding="utf-8",
+			hass=hass,
+			max_lines=FILE_LOG_MAX_LINES,
+			trim_every_writes=200,
+		)
+
+	handler = await hass.async_add_executor_job(_create_handler)
+	handler.setLevel(logging.DEBUG)
+	handler.setFormatter(
+		logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+	)
+
+	logger = logging.getLogger("custom_components.presence_based_lighting")
+	logger.addHandler(handler)
+
+	state["handler"] = handler
+	state["log_path"] = log_path
+
+	await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
+
+	async def _periodic_trim(_now) -> None:
+		await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
+
+	state["unsub_trim"] = async_track_time_interval(
+		hass,
+		lambda now: hass.async_create_task(_periodic_trim(now)),
+		timedelta(seconds=30),
+	)
+	_LOGGER.info("File logging enabled at: %s (capped at %d lines)", log_path, FILE_LOG_MAX_LINES)
+
+
+async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
+	"""Tear down the shared handler if no config entries still need it."""
+	state = _get_file_logging_state(hass)
+	enabled_entries = state.get("enabled_entries")
+	if enabled_entries:
+		return
+
+	unsub = state.get("unsub_trim")
+	if callable(unsub):
+		try:
+			unsub()
+		except Exception:
+			pass
+	state["unsub_trim"] = None
+
+	handler = state.get("handler")
+	if handler is not None:
+		logger = logging.getLogger("custom_components.presence_based_lighting")
+		try:
+			logger.removeHandler(handler)
+		except Exception:
+			pass
+		await hass.async_add_executor_job(handler.close)
+	state["handler"] = None
+	state["log_path"] = None
+	_LOGGER.info("File logging disabled")
+
+
+async def _update_file_logging_for_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+	"""Apply file logging enable/disable for a single entry based on entry data."""
+	state = _get_file_logging_state(hass)
+	enabled_entries: set[str] = state["enabled_entries"]
+
+	enabled = entry.data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED)
+	if enabled:
+		enabled_entries.add(entry.entry_id)
+		await _ensure_file_logging_enabled(hass)
+		return
+
+	if entry.entry_id in enabled_entries:
+		enabled_entries.discard(entry.entry_id)
+		await _disable_file_logging_if_unused(hass)
 
 
 SERVICE_RESUME_AUTOMATION = "resume_automation"
@@ -319,6 +502,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 			hass.data[DOMAIN] = {}
 			_LOGGER.info(STARTUP_MESSAGE)
 
+		await _update_file_logging_for_entry(hass, entry)
+
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
 		coordinator = PresenceBasedLightingCoordinator(hass, entry)
 		hass.data[DOMAIN][entry.entry_id] = coordinator
@@ -342,6 +527,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	
 	try:
 		_LOGGER.info("Unloading Presence Based Lighting entry: %s", entry.entry_id)
+
+		# Always drop this entry from the file logging reference set on unload.
+		state = _get_file_logging_state(hass)
+		enabled_entries: set[str] = state.get("enabled_entries", set())
+		if entry.entry_id in enabled_entries:
+			enabled_entries.discard(entry.entry_id)
+			await _disable_file_logging_if_unused(hass)
 		
 		coordinator: PresenceBasedLightingCoordinator = hass.data[DOMAIN][entry.entry_id]
 		coordinator.async_stop()

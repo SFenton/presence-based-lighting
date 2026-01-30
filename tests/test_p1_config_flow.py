@@ -38,6 +38,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
+    CONF_FILE_LOGGING_ENABLED,
     CONF_INITIAL_PRESENCE_ALLOWED,
     CONF_OFF_DELAY,
     CONF_PRESENCE_CLEARED_SERVICE,
@@ -57,6 +58,7 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_CLEARED_STATE,
     DEFAULT_DETECTED_SERVICE,
     DEFAULT_DETECTED_STATE,
+    DEFAULT_FILE_LOGGING_ENABLED,
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
     DEFAULT_OFF_DELAY,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
@@ -153,6 +155,7 @@ async def test_manage_entities_creates_entry_when_ready():
         CONF_PRESENCE_SENSORS: ["binary_sensor.office_motion"],
         CONF_CLEARING_SENSORS: [],
         CONF_ACTIVATION_CONDITIONS: [],
+        CONF_FILE_LOGGING_ENABLED: DEFAULT_FILE_LOGGING_ENABLED,
         CONF_OFF_DELAY: 15,
         CONF_CONTROLLED_ENTITIES: handler._controlled_entities,  # type: ignore[attr-defined]
         CONF_AUTO_REENABLE_PRESENCE_SENSORS: [],

@@ -72,6 +72,12 @@ DEFAULT_AUTO_REENABLE_START_TIME = "00:00:00"  # Midnight
 DEFAULT_AUTO_REENABLE_END_TIME = "05:00:00"  # 5 AM
 DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD = 80  # 80% empty threshold
 
+# File logging (optional)
+CONF_FILE_LOGGING_ENABLED = "file_logging_enabled"
+DEFAULT_FILE_LOGGING_ENABLED = False
+FILE_LOG_NAME = "presence_based_lighting_debug.log"
+FILE_LOG_MAX_LINES = 10_000
+
 # State attributes
 
 STARTUP_MESSAGE = f"""
