@@ -147,6 +147,7 @@ def _get_file_logging_state(hass: HomeAssistant) -> dict:
 		"unsub_trim": None,
 		"enabled_entries": set(),
 		"log_path": None,
+		"prev_logger_level": None,
 	}
 	hass.data[DOMAIN][_FILE_LOGGING_STATE_KEY] = state
 	return state
@@ -174,6 +175,14 @@ async def _trim_log_file(hass: HomeAssistant, log_path: str, max_lines: int) -> 
 async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 	"""Ensure the shared file handler exists and periodic trimming is active."""
 	state = _get_file_logging_state(hass)
+	logger = logging.getLogger("custom_components.presence_based_lighting")
+	# Home Assistant commonly sets component loggers to WARNING by default.
+	# If we don't force DEBUG here, the logger can filter everything before the
+	# handler ever sees it, resulting in an empty log file.
+	if state.get("prev_logger_level") is None:
+		state["prev_logger_level"] = logger.level
+	logger.setLevel(logging.DEBUG)
+
 	if state.get("handler") is not None:
 		return
 
@@ -195,7 +204,6 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 	)
 
-	logger = logging.getLogger("custom_components.presence_based_lighting")
 	logger.addHandler(handler)
 
 	state["handler"] = handler
@@ -221,6 +229,8 @@ async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
 	if enabled_entries:
 		return
 
+	logger = logging.getLogger("custom_components.presence_based_lighting")
+
 	unsub = state.get("unsub_trim")
 	if callable(unsub):
 		try:
@@ -231,7 +241,6 @@ async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
 
 	handler = state.get("handler")
 	if handler is not None:
-		logger = logging.getLogger("custom_components.presence_based_lighting")
 		try:
 			logger.removeHandler(handler)
 		except Exception:
@@ -239,6 +248,11 @@ async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
 		await hass.async_add_executor_job(handler.close)
 	state["handler"] = None
 	state["log_path"] = None
+
+	prev_level = state.get("prev_logger_level")
+	if isinstance(prev_level, int):
+		logger.setLevel(prev_level)
+	state["prev_logger_level"] = None
 	_LOGGER.info("File logging disabled")
 
 
