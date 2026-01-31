@@ -89,8 +89,31 @@ _FILE_LOGGER_NAME = "custom_components.presence_based_lighting"
 _FILE_LOGGING_STATE_KEY = "_file_logging"
 
 
+class _AcceptAllFilter(logging.Filter):
+	"""A filter that accepts all log records regardless of level."""
+
+	def filter(self, record: logging.LogRecord) -> bool:
+		return True
+
+
+class _ComponentNameFilter(logging.Filter):
+	"""A filter that only accepts records from our component namespace."""
+
+	def __init__(self, component_name: str):
+		super().__init__()
+		self._prefix = component_name
+
+	def filter(self, record: logging.LogRecord) -> bool:
+		# Accept records from our component and all its submodules
+		return record.name.startswith(self._prefix)
+
+
 class _LineCappedFileHandler(logging.FileHandler):
-	"""A FileHandler that periodically trims itself to the last N lines."""
+	"""A FileHandler that periodically trims itself to the last N lines.
+	
+	This handler also forces the parent logger to DEBUG level on every emit
+	to work around Home Assistant resetting logger levels.
+	"""
 
 	def __init__(
 		self,
@@ -98,6 +121,7 @@ class _LineCappedFileHandler(logging.FileHandler):
 		hass: HomeAssistant,
 		max_lines: int,
 		trim_every_writes: int = 200,
+		logger_name: str = "",
 		**kwargs,
 	):
 		super().__init__(*args, **kwargs)
@@ -106,8 +130,15 @@ class _LineCappedFileHandler(logging.FileHandler):
 		self._trim_every_writes = max(1, trim_every_writes)
 		self._writes_since_trim = 0
 		self._trim_pending = False
+		self._logger_name = logger_name
 
 	def emit(self, record) -> None:
+		# Force the target logger to DEBUG level every time we emit.
+		# This works around HA resetting the logger level after we configure it.
+		if self._logger_name:
+			target_logger = logging.getLogger(self._logger_name)
+			if target_logger.level > logging.DEBUG:
+				target_logger.setLevel(logging.DEBUG)
 		super().emit(record)
 		self._writes_since_trim += 1
 		if self._trim_pending or self._writes_since_trim < self._trim_every_writes:
@@ -187,30 +218,21 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		state["lock"] = lock
 
 	async with lock:
-		logger = logging.getLogger(_FILE_LOGGER_NAME)
-		# HA's logging config can disable loggers; if that happens, records won't be
-		# emitted at all (even if handlers are attached). Ensure our namespace is
-		# enabled so normal _LOGGER.* calls reach our file handler.
-		logger.disabled = False
-
-		# Home Assistant commonly sets component loggers to WARNING by default.
-		# If we don't force DEBUG here, the logger can filter everything before the
-		# handler ever sees it, resulting in an empty log file.
-		if state.get("prev_logger_level") is None:
-			state["prev_logger_level"] = logger.level
-		logger.setLevel(logging.DEBUG)
+		# We attach our handler to the ROOT logger (not the component logger)
+		# to bypass HA's level restrictions. A filter ensures we only capture
+		# our component's logs.
+		root_logger = logging.getLogger()
 
 		handler = state.get("handler")
 		if handler is not None:
-			# HA can reconfigure logging at runtime and drop handlers. If our handler
-			# is missing, re-attach it instead of assuming file logging still works.
-			if handler not in logger.handlers:
+			# If our handler is missing from the root logger, re-attach it.
+			if handler not in root_logger.handlers:
 				try:
-					logger.addHandler(handler)
+					root_logger.addHandler(handler)
 				except Exception:
 					pass
 			# If the handler is attached now, nothing else to do.
-			if handler in logger.handlers:
+			if handler in root_logger.handlers:
 				return
 
 		log_path = hass.config.path(FILE_LOG_NAME)
@@ -223,6 +245,7 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 				hass=hass,
 				max_lines=FILE_LOG_MAX_LINES,
 				trim_every_writes=200,
+				logger_name=_FILE_LOGGER_NAME,
 			)
 
 		handler = await hass.async_add_executor_job(_create_handler)
@@ -230,8 +253,14 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		handler.setFormatter(
 			logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 		)
+		# Add a filter so this handler only captures our component's logs
+		handler.addFilter(_ComponentNameFilter(_FILE_LOGGER_NAME))
 
-		logger.addHandler(handler)
+		# Attach to the ROOT logger instead of the component logger.
+		# This bypasses HA's level restrictions on component loggers.
+		# The filter ensures we only capture our component's log records.
+		root_logger = logging.getLogger()
+		root_logger.addHandler(handler)
 		# Emit diagnostic info directly to the handler (bypasses logger filtering)
 		# so we can debug why normal logger calls aren't appearing.
 		def _emit_direct(msg: str) -> None:
@@ -252,19 +281,11 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 				pass
 
 		_emit_direct(f"File logging initialized at {log_path} (capped at {FILE_LOG_MAX_LINES} lines)")
-		_emit_direct(f"Logger name: {logger.name}")
-		_emit_direct(f"Logger level: {logging.getLevelName(logger.level)} ({logger.level})")
-		_emit_direct(f"Logger disabled: {logger.disabled}")
-		_emit_direct(f"Logger handlers: {len(logger.handlers)}")
-		_emit_direct(f"Logger propagate: {logger.propagate}")
-		_emit_direct(f"Logger parent: {logger.parent}")
-		if logger.parent:
-			_emit_direct(f"Parent level: {logging.getLevelName(logger.parent.level)} ({logger.parent.level})")
-			_emit_direct(f"Parent disabled: {logger.parent.disabled}")
-		_emit_direct(f"Logger effective level: {logging.getLevelName(logger.getEffectiveLevel())}")
+		_emit_direct(f"Handler attached to root logger with component filter")
+		_emit_direct(f"Root logger handlers: {len(root_logger.handlers)}")
 
-		# Now try logging through the logger itself
-		logger.info("TEST: This line was logged via logger.info()")
+		# Now try logging through the component logger - should propagate to root
+		_LOGGER.info("TEST: This line was logged via _LOGGER.info()")
 		handler.flush()
 
 		state["handler"] = handler
@@ -273,9 +294,9 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
 		# If HA logging reconfigured while we yielded, our handler may have been
 		# removed; re-attach defensively.
-		if handler not in logger.handlers:
+		if handler not in root_logger.handlers:
 			try:
-				logger.addHandler(handler)
+				root_logger.addHandler(handler)
 			except Exception:
 				pass
 
@@ -302,7 +323,7 @@ async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
 	if enabled_entries:
 		return
 
-	logger = logging.getLogger(_FILE_LOGGER_NAME)
+	root_logger = logging.getLogger()
 
 	unsub = state.get("unsub_trim")
 	if callable(unsub):
@@ -315,17 +336,12 @@ async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
 	handler = state.get("handler")
 	if handler is not None:
 		try:
-			logger.removeHandler(handler)
+			root_logger.removeHandler(handler)
 		except Exception:
 			pass
 		await hass.async_add_executor_job(handler.close)
 	state["handler"] = None
 	state["log_path"] = None
-
-	prev_level = state.get("prev_logger_level")
-	if isinstance(prev_level, int):
-		logger.setLevel(prev_level)
-	state["prev_logger_level"] = None
 	_LOGGER.info("File logging disabled")
 
 
