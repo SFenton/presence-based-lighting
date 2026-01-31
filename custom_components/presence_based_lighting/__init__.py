@@ -81,7 +81,10 @@ from .interceptor import PresenceLockInterceptor, is_interceptor_available
 from .real_last_changed import get_effective_state, is_entity_on, is_entity_off, is_real_last_changed_entity
 
 _LOGGER = logging.getLogger(__name__)
-_BASE_LOGGER_NAME = __name__
+
+# Use the package name (not module name) for file logging so all submodules' logs
+# propagate up and get captured. This matches how HA configures component loggers.
+_FILE_LOGGER_NAME = "custom_components.presence_based_lighting"
 
 _FILE_LOGGING_STATE_KEY = "_file_logging"
 
@@ -184,7 +187,7 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		state["lock"] = lock
 
 	async with lock:
-		logger = logging.getLogger(_BASE_LOGGER_NAME)
+		logger = logging.getLogger(_FILE_LOGGER_NAME)
 		# HA's logging config can disable loggers; if that happens, records won't be
 		# emitted at all (even if handlers are attached). Ensure our namespace is
 		# enabled so normal _LOGGER.* calls reach our file handler.
@@ -229,36 +232,40 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		)
 
 		logger.addHandler(handler)
-		# Emit a direct line to the handler so the file is never empty even if HA's
-		# logger configuration filters out our log records.
-		try:
-			handler.emit(
-				logging.LogRecord(
-					name=_BASE_LOGGER_NAME,
-					level=logging.INFO,
-					pathname=__file__,
-					lineno=0,
-					msg="File logging initialized at %s (capped at %d lines)",
-					args=(log_path, FILE_LOG_MAX_LINES),
-					exc_info=None,
+		# Emit diagnostic info directly to the handler (bypasses logger filtering)
+		# so we can debug why normal logger calls aren't appearing.
+		def _emit_direct(msg: str) -> None:
+			try:
+				handler.emit(
+					logging.LogRecord(
+						name=_FILE_LOGGER_NAME,
+						level=logging.INFO,
+						pathname=__file__,
+						lineno=0,
+						msg=msg,
+						args=(),
+						exc_info=None,
+					)
 				)
-			)
-			handler.flush()
-		except Exception:
-			pass
+				handler.flush()
+			except Exception:
+				pass
 
-		# Also emit through the logger itself (before any awaits) so we can detect
-		# if our handler gets removed by HA logging reconfiguration.
-		try:
-			logger.info(
-				"File logging active (logger=%s, level=%s, handlers=%d)",
-				logger.name,
-				logging.getLevelName(logger.level),
-				len(logger.handlers),
-			)
-			handler.flush()
-		except Exception:
-			pass
+		_emit_direct(f"File logging initialized at {log_path} (capped at {FILE_LOG_MAX_LINES} lines)")
+		_emit_direct(f"Logger name: {logger.name}")
+		_emit_direct(f"Logger level: {logging.getLevelName(logger.level)} ({logger.level})")
+		_emit_direct(f"Logger disabled: {logger.disabled}")
+		_emit_direct(f"Logger handlers: {len(logger.handlers)}")
+		_emit_direct(f"Logger propagate: {logger.propagate}")
+		_emit_direct(f"Logger parent: {logger.parent}")
+		if logger.parent:
+			_emit_direct(f"Parent level: {logging.getLevelName(logger.parent.level)} ({logger.parent.level})")
+			_emit_direct(f"Parent disabled: {logger.parent.disabled}")
+		_emit_direct(f"Logger effective level: {logging.getLevelName(logger.getEffectiveLevel())}")
+
+		# Now try logging through the logger itself
+		logger.info("TEST: This line was logged via logger.info()")
+		handler.flush()
 
 		state["handler"] = handler
 		state["log_path"] = log_path
@@ -295,7 +302,7 @@ async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
 	if enabled_entries:
 		return
 
-	logger = logging.getLogger(_BASE_LOGGER_NAME)
+	logger = logging.getLogger(_FILE_LOGGER_NAME)
 
 	unsub = state.get("unsub_trim")
 	if callable(unsub):
@@ -1922,3 +1929,4 @@ class PresenceBasedLightingCoordinator:
 					room_name
 				)
 				await self._clear_tracking_state()
+
