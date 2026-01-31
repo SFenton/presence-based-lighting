@@ -197,8 +197,18 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 			state["prev_logger_level"] = logger.level
 		logger.setLevel(logging.DEBUG)
 
-		if state.get("handler") is not None:
-			return
+		handler = state.get("handler")
+		if handler is not None:
+			# HA can reconfigure logging at runtime and drop handlers. If our handler
+			# is missing, re-attach it instead of assuming file logging still works.
+			if handler not in logger.handlers:
+				try:
+					logger.addHandler(handler)
+				except Exception:
+					pass
+			# If the handler is attached now, nothing else to do.
+			if handler in logger.handlers:
+				return
 
 		log_path = hass.config.path(FILE_LOG_NAME)
 
@@ -237,10 +247,30 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		except Exception:
 			pass
 
+		# Also emit through the logger itself (before any awaits) so we can detect
+		# if our handler gets removed by HA logging reconfiguration.
+		try:
+			logger.info(
+				"File logging active (logger=%s, level=%s, handlers=%d)",
+				logger.name,
+				logging.getLevelName(logger.level),
+				len(logger.handlers),
+			)
+			handler.flush()
+		except Exception:
+			pass
+
 		state["handler"] = handler
 		state["log_path"] = log_path
 
 		await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
+		# If HA logging reconfigured while we yielded, our handler may have been
+		# removed; re-attach defensively.
+		if handler not in logger.handlers:
+			try:
+				logger.addHandler(handler)
+			except Exception:
+				pass
 
 		async def _periodic_trim(_now) -> None:
 			await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
