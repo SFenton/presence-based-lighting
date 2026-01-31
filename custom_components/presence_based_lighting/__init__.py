@@ -22,6 +22,7 @@ from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
 	async_track_state_change_event,
 	async_track_time_change,
+	async_track_time_interval,
 )
 from homeassistant.util import dt as dt_util
 import homeassistant.helpers.config_validation as cv
@@ -81,6 +82,35 @@ _LOGGER = logging.getLogger(__package__)
 _log_file_handler: logging.FileHandler | None = None
 _file_logging_setup = False
 _file_logging_lock = asyncio.Lock()
+_force_debug_unsub: Callable[[], None] | None = None
+
+
+def _force_component_logger_debug() -> None:
+	logger = logging.getLogger(__package__)
+	logger.disabled = False
+	logger.setLevel(logging.DEBUG)
+	logger.propagate = True
+
+
+def _emit_direct_to_file(msg: str) -> None:
+	"""Write directly to the debug file handler, bypassing logger-level filtering."""
+	if _log_file_handler is None:
+		return
+	try:
+		_log_file_handler.emit(
+			logging.LogRecord(
+				name=__package__,
+				level=logging.INFO,
+				pathname=__file__,
+				lineno=0,
+				msg=msg,
+				args=(),
+				exc_info=None,
+			)
+		)
+		_log_file_handler.flush()
+	except Exception:
+		pass
 
 
 async def _setup_file_logging(hass: HomeAssistant) -> None:
@@ -115,6 +145,14 @@ async def _setup_file_logging(hass: HomeAssistant) -> None:
 
 				# Attach to the component logger so submodule logs propagate into it.
 				_LOGGER.addHandler(_log_file_handler)
+
+				# Force our component logger to DEBUG so INFO/DEBUG records are actually created.
+				_force_component_logger_debug()
+
+				# Marker line written directly to the file so we can confirm runtime code.
+				_emit_direct_to_file(
+					"PBL debug file logging active (uncapped) - commit 6379b86"
+				)
 				_LOGGER.info("File logging enabled at: %s", log_path)
 			except Exception as err:
 				_LOGGER.error("Failed to set up file logging: %s", err)
@@ -125,6 +163,19 @@ async def _setup_file_logging(hass: HomeAssistant) -> None:
 			# If we already have a handler (e.g., reload), ensure it's still attached.
 			if _log_file_handler not in _LOGGER.handlers:
 				_LOGGER.addHandler(_log_file_handler)
+			_force_component_logger_debug()
+
+		global _force_debug_unsub
+		if _force_debug_unsub is None:
+			@callback
+			def _tick(_now: datetime) -> None:
+				_force_component_logger_debug()
+
+			_force_debug_unsub = async_track_time_interval(
+				hass,
+				_tick,
+				timedelta(seconds=30),
+			)
 
 
 SERVICE_RESUME_AUTOMATION = "resume_automation"
