@@ -80,7 +80,8 @@ from .const import (
 from .interceptor import PresenceLockInterceptor, is_interceptor_available
 from .real_last_changed import get_effective_state, is_entity_on, is_entity_off, is_real_last_changed_entity
 
-_LOGGER = logging.getLogger(__package__)
+_LOGGER = logging.getLogger(__name__)
+_BASE_LOGGER_NAME = __name__
 
 _FILE_LOGGING_STATE_KEY = "_file_logging"
 
@@ -183,7 +184,7 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		state["lock"] = lock
 
 	async with lock:
-		logger = logging.getLogger("custom_components.presence_based_lighting")
+		logger = logging.getLogger(_BASE_LOGGER_NAME)
 		# HA's logging config can disable loggers; if that happens, records won't be
 		# emitted at all (even if handlers are attached). Ensure our namespace is
 		# enabled so normal _LOGGER.* calls reach our file handler.
@@ -223,7 +224,7 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		try:
 			handler.emit(
 				logging.LogRecord(
-					name="custom_components.presence_based_lighting",
+					name=_BASE_LOGGER_NAME,
 					level=logging.INFO,
 					pathname=__file__,
 					lineno=0,
@@ -263,7 +264,7 @@ async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
 	if enabled_entries:
 		return
 
-	logger = logging.getLogger("custom_components.presence_based_lighting")
+	logger = logging.getLogger(_BASE_LOGGER_NAME)
 
 	unsub = state.get("unsub_trim")
 	if callable(unsub):
