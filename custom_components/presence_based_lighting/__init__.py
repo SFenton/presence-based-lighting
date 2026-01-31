@@ -245,9 +245,10 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		async def _periodic_trim(_now) -> None:
 			await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
 
+		# Pass the async callback directly; HA will schedule it safely on the loop.
 		state["unsub_trim"] = async_track_time_interval(
 			hass,
-			lambda now: hass.async_create_task(_periodic_trim(now)),
+			_periodic_trim,
 			timedelta(seconds=30),
 		)
 		_LOGGER.info(
