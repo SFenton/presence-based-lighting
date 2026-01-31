@@ -261,6 +261,12 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		# The filter ensures we only capture our component's log records.
 		root_logger = logging.getLogger()
 		root_logger.addHandler(handler)
+
+		# Force the component logger to DEBUG level so messages propagate to root.
+		# HA sets it to WARNING, but we need DEBUG/INFO to reach our file handler.
+		component_logger = logging.getLogger(_FILE_LOGGER_NAME)
+		component_logger.setLevel(logging.DEBUG)
+
 		# Emit diagnostic info directly to the handler (bypasses logger filtering)
 		# so we can debug why normal logger calls aren't appearing.
 		def _emit_direct(msg: str) -> None:
@@ -283,6 +289,7 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 		_emit_direct(f"File logging initialized at {log_path} (capped at {FILE_LOG_MAX_LINES} lines)")
 		_emit_direct(f"Handler attached to root logger with component filter")
 		_emit_direct(f"Root logger handlers: {len(root_logger.handlers)}")
+		_emit_direct(f"Component logger level after setLevel: {logging.getLevelName(component_logger.level)}")
 
 		# Now try logging through the component logger - should propagate to root
 		_LOGGER.info("TEST: This line was logged via _LOGGER.info()")
@@ -293,12 +300,13 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 
 		await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
 		# If HA logging reconfigured while we yielded, our handler may have been
-		# removed; re-attach defensively.
+		# removed; re-attach defensively. Also re-force the component logger level.
 		if handler not in root_logger.handlers:
 			try:
 				root_logger.addHandler(handler)
 			except Exception:
 				pass
+		component_logger.setLevel(logging.DEBUG)
 
 		async def _periodic_trim(_now) -> None:
 			await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
