@@ -482,7 +482,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					vol.Optional(
 						CONF_FILE_LOGGING_ENABLED,
 						default=DEFAULT_FILE_LOGGING_ENABLED,
-					): cv.boolean,
+					): selector.BooleanSelector(),
 					vol.Optional(
 						CONF_OFF_DELAY, default=DEFAULT_OFF_DELAY
 					): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
@@ -1318,7 +1318,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					vol.Optional(
 						CONF_FILE_LOGGING_ENABLED,
 						default=self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
-					): cv.boolean,
+					): selector.BooleanSelector(),
 					vol.Required(
 						CONF_OFF_DELAY,
 						default=self._base_data[CONF_OFF_DELAY],

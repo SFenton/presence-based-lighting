@@ -202,15 +202,15 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 
 		log_path = hass.config.path(FILE_LOG_NAME)
 
-	def _create_handler() -> logging.FileHandler:  # pragma: no cover - executor I/O
-		return _LineCappedFileHandler(
-			log_path,
-			mode="a",
-			encoding="utf-8",
-			hass=hass,
-			max_lines=FILE_LOG_MAX_LINES,
-			trim_every_writes=200,
-		)
+		def _create_handler() -> logging.FileHandler:  # pragma: no cover - executor I/O
+			return _LineCappedFileHandler(
+				log_path,
+				mode="a",
+				encoding="utf-8",
+				hass=hass,
+				max_lines=FILE_LOG_MAX_LINES,
+				trim_every_writes=200,
+			)
 
 		handler = await hass.async_add_executor_job(_create_handler)
 		handler.setLevel(logging.DEBUG)
