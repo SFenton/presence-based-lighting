@@ -205,6 +205,23 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 	)
 
 	logger.addHandler(handler)
+	# Emit a direct line to the handler so the file is never empty even if HA's
+	# logger configuration filters out our log records.
+	try:
+		handler.emit(
+			logging.LogRecord(
+				name="custom_components.presence_based_lighting",
+				level=logging.INFO,
+				pathname=__file__,
+				lineno=0,
+				msg="File logging initialized (capped at %d lines)",
+				args=(FILE_LOG_MAX_LINES,),
+				exc_info=None,
+			)
+		)
+		handler.flush()
+	except Exception:
+		pass
 
 	state["handler"] = handler
 	state["log_path"] = log_path
@@ -516,7 +533,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 			hass.data[DOMAIN] = {}
 			_LOGGER.info(STARTUP_MESSAGE)
 
-		await _update_file_logging_for_entry(hass, entry)
+		# Always enable file logging (no per-entry configuration).
+		await _ensure_file_logging_enabled(hass)
 
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
 		coordinator = PresenceBasedLightingCoordinator(hass, entry)
@@ -541,13 +559,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	
 	try:
 		_LOGGER.info("Unloading Presence Based Lighting entry: %s", entry.entry_id)
-
-		# Always drop this entry from the file logging reference set on unload.
-		state = _get_file_logging_state(hass)
-		enabled_entries: set[str] = state.get("enabled_entries", set())
-		if entry.entry_id in enabled_entries:
-			enabled_entries.discard(entry.entry_id)
-			await _disable_file_logging_if_unused(hass)
 		
 		coordinator: PresenceBasedLightingCoordinator = hass.data[DOMAIN][entry.entry_id]
 		coordinator.async_stop()
