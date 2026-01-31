@@ -22,7 +22,6 @@ from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
 	async_track_state_change_event,
 	async_track_time_change,
-	async_track_time_interval,
 )
 from homeassistant.util import dt as dt_util
 import homeassistant.helpers.config_validation as cv
@@ -69,10 +68,6 @@ from .const import (
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
-	CONF_FILE_LOGGING_ENABLED,
-	DEFAULT_FILE_LOGGING_ENABLED,
-	FILE_LOG_NAME,
-	FILE_LOG_MAX_LINES,
 	DOMAIN,
 	PLATFORMS,
 	STARTUP_MESSAGE,
@@ -80,293 +75,56 @@ from .const import (
 from .interceptor import PresenceLockInterceptor, is_interceptor_available
 from .real_last_changed import get_effective_state, is_entity_on, is_entity_off, is_real_last_changed_entity
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger(__package__)
 
-# Use the package name (not module name) for file logging so all submodules' logs
-# propagate up and get captured. This matches how HA configures component loggers.
-_FILE_LOGGER_NAME = "custom_components.presence_based_lighting"
-
-_FILE_LOGGING_STATE_KEY = "_file_logging"
-
-
-class _AcceptAllFilter(logging.Filter):
-	"""A filter that accepts all log records regardless of level."""
-
-	def filter(self, record: logging.LogRecord) -> bool:
-		return True
+# Persistent debug log file (uncapped)
+_log_file_handler: logging.FileHandler | None = None
+_file_logging_setup = False
+_file_logging_lock = asyncio.Lock()
 
 
-class _ComponentNameFilter(logging.Filter):
-	"""A filter that only accepts records from our component namespace."""
+async def _setup_file_logging(hass: HomeAssistant) -> None:
+	"""Set up a persistent debug log file.
 
-	def __init__(self, component_name: str):
-		super().__init__()
-		self._prefix = component_name
-
-	def filter(self, record: logging.LogRecord) -> bool:
-		# Accept records from our component and all its submodules
-		return record.name.startswith(self._prefix)
-
-
-class _LineCappedFileHandler(logging.FileHandler):
-	"""A FileHandler that periodically trims itself to the last N lines.
-	
-	This handler also forces the parent logger to DEBUG level on every emit
-	to work around Home Assistant resetting logger levels.
+	This restores the behavior that existed before commit d690f40 ("Removing file logging").
+	It is intentionally simple and does not cap or trim the file.
 	"""
+	global _log_file_handler, _file_logging_setup
 
-	def __init__(
-		self,
-		*args,
-		hass: HomeAssistant,
-		max_lines: int,
-		trim_every_writes: int = 200,
-		logger_name: str = "",
-		**kwargs,
-	):
-		super().__init__(*args, **kwargs)
-		self._hass = hass
-		self._max_lines = max_lines
-		self._trim_every_writes = max(1, trim_every_writes)
-		self._writes_since_trim = 0
-		self._trim_pending = False
-		self._logger_name = logger_name
-
-	def emit(self, record) -> None:
-		# Force the target logger to DEBUG level every time we emit.
-		# This works around HA resetting the logger level after we configure it.
-		if self._logger_name:
-			target_logger = logging.getLogger(self._logger_name)
-			if target_logger.level > logging.DEBUG:
-				target_logger.setLevel(logging.DEBUG)
-		super().emit(record)
-		self._writes_since_trim += 1
-		if self._trim_pending or self._writes_since_trim < self._trim_every_writes:
+	async with _file_logging_lock:
+		# Ensure we only set up once, even if multiple entries initialize at once.
+		if _file_logging_setup:
 			return
-		self._writes_since_trim = 0
-		self._trim_pending = True
-		loop = getattr(self._hass, "loop", None)
-		if loop is None:
-			self._trim_pending = False
-			return
+		_file_logging_setup = True
 
-		def _schedule() -> None:
-			async def _do_trim() -> None:
-				try:
-					await _trim_log_file(self._hass, self.baseFilename, self._max_lines)
-				finally:
-					self._trim_pending = False
-
-			create_task = getattr(self._hass, "async_create_task", None)
-			if callable(create_task):
-				create_task(_do_trim())
-			else:
-				# Fallback for HA internals; safest no-op if unavailable.
-				self._trim_pending = False
-
-		try:
-			loop.call_soon_threadsafe(_schedule)
-		except Exception:
-			self._trim_pending = False
-
-
-def _get_file_logging_state(hass: HomeAssistant) -> dict:
-	"""Return (and initialize) shared file-logging state stored in hass.data."""
-	if DOMAIN not in hass.data:
-		hass.data[DOMAIN] = {}
-	state = hass.data[DOMAIN].get(_FILE_LOGGING_STATE_KEY)
-	if isinstance(state, dict):
-		return state
-	state = {
-		"lock": asyncio.Lock(),
-		"handler": None,
-		"unsub_trim": None,
-		"enabled_entries": set(),
-		"log_path": None,
-		"prev_logger_level": None,
-	}
-	hass.data[DOMAIN][_FILE_LOGGING_STATE_KEY] = state
-	return state
-
-
-async def _trim_log_file(hass: HomeAssistant, log_path: str, max_lines: int) -> None:
-	"""Trim the log file to the last max_lines (runs in executor)."""
-	path = Path(log_path)
-	if not path.exists():
-		return
-
-	def _trim() -> None:  # pragma: no cover - executor I/O
-		from collections import deque
-		try:
-			with path.open("r", encoding="utf-8", errors="replace") as file_handle:
-				lines = deque(file_handle, maxlen=max_lines)
-			with path.open("w", encoding="utf-8") as file_handle:
-				file_handle.writelines(lines)
-		except Exception as err:
-			_LOGGER.debug("Failed trimming log file %s: %s", log_path, err)
-
-	await hass.async_add_executor_job(_trim)
-
-
-async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
-	"""Ensure the shared file handler exists and periodic trimming is active."""
-	state = _get_file_logging_state(hass)
-	lock: asyncio.Lock | None = state.get("lock")
-	if lock is None:
-		# Defensive: older state dicts may not have been initialized with a lock.
-		lock = asyncio.Lock()
-		state["lock"] = lock
-
-	async with lock:
-		# We attach our handler to the ROOT logger (not the component logger)
-		# to bypass HA's level restrictions. A filter ensures we only capture
-		# our component's logs.
-		root_logger = logging.getLogger()
-
-		handler = state.get("handler")
-		if handler is not None:
-			# If our handler is missing from the root logger, re-attach it.
-			if handler not in root_logger.handlers:
-				try:
-					root_logger.addHandler(handler)
-				except Exception:
-					pass
-			# If the handler is attached now, nothing else to do.
-			if handler in root_logger.handlers:
-				return
-
-		log_path = hass.config.path(FILE_LOG_NAME)
-
-		def _create_handler() -> logging.FileHandler:  # pragma: no cover - executor I/O
-			return _LineCappedFileHandler(
-				log_path,
-				mode="a",
-				encoding="utf-8",
-				hass=hass,
-				max_lines=FILE_LOG_MAX_LINES,
-				trim_every_writes=200,
-				logger_name=_FILE_LOGGER_NAME,
-			)
-
-		handler = await hass.async_add_executor_job(_create_handler)
-		handler.setLevel(logging.DEBUG)
-		handler.setFormatter(
-			logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-		)
-		# Add a filter so this handler only captures our component's logs
-		handler.addFilter(_ComponentNameFilter(_FILE_LOGGER_NAME))
-
-		# Attach to the ROOT logger instead of the component logger.
-		# This bypasses HA's level restrictions on component loggers.
-		# The filter ensures we only capture our component's log records.
-		root_logger = logging.getLogger()
-		root_logger.addHandler(handler)
-
-		# Force the component logger to DEBUG level so messages propagate to root.
-		# HA sets it to WARNING, but we need DEBUG/INFO to reach our file handler.
-		component_logger = logging.getLogger(_FILE_LOGGER_NAME)
-		component_logger.setLevel(logging.DEBUG)
-
-		# Emit diagnostic info directly to the handler (bypasses logger filtering)
-		# so we can debug why normal logger calls aren't appearing.
-		def _emit_direct(msg: str) -> None:
+		if _log_file_handler is None:
 			try:
-				handler.emit(
-					logging.LogRecord(
-						name=_FILE_LOGGER_NAME,
-						level=logging.INFO,
-						pathname=__file__,
-						lineno=0,
-						msg=msg,
-						args=(),
-						exc_info=None,
-					)
+				log_path = hass.config.path("presence_based_lighting_debug.log")
+
+				# Create FileHandler in executor to avoid blocking I/O.
+				_log_file_handler = await hass.async_add_executor_job(
+					logging.FileHandler,
+					log_path,
+					"a",
 				)
-				handler.flush()
-			except Exception:
-				pass
+				_log_file_handler.setLevel(logging.DEBUG)
+				formatter = logging.Formatter(
+					"%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+				)
+				_log_file_handler.setFormatter(formatter)
 
-		_emit_direct(f"File logging initialized at {log_path} (capped at {FILE_LOG_MAX_LINES} lines)")
-		_emit_direct(f"Handler attached to root logger with component filter")
-		_emit_direct(f"Root logger handlers: {len(root_logger.handlers)}")
-		_emit_direct(f"Component logger level after setLevel: {logging.getLevelName(component_logger.level)}")
-
-		# Now try logging through the component logger - should propagate to root
-		_LOGGER.info("TEST: This line was logged via _LOGGER.info()")
-		handler.flush()
-
-		state["handler"] = handler
-		state["log_path"] = log_path
-
-		await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
-		# If HA logging reconfigured while we yielded, our handler may have been
-		# removed; re-attach defensively. Also re-force the component logger level.
-		if handler not in root_logger.handlers:
-			try:
-				root_logger.addHandler(handler)
-			except Exception:
-				pass
-		component_logger.setLevel(logging.DEBUG)
-
-		async def _periodic_trim(_now) -> None:
-			await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
-
-		# Pass the async callback directly; HA will schedule it safely on the loop.
-		state["unsub_trim"] = async_track_time_interval(
-			hass,
-			_periodic_trim,
-			timedelta(seconds=30),
-		)
-		_LOGGER.info(
-			"File logging enabled at: %s (capped at %d lines)",
-			log_path,
-			FILE_LOG_MAX_LINES,
-		)
-
-
-async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
-	"""Tear down the shared handler if no config entries still need it."""
-	state = _get_file_logging_state(hass)
-	enabled_entries = state.get("enabled_entries")
-	if enabled_entries:
-		return
-
-	root_logger = logging.getLogger()
-
-	unsub = state.get("unsub_trim")
-	if callable(unsub):
-		try:
-			unsub()
-		except Exception:
-			pass
-	state["unsub_trim"] = None
-
-	handler = state.get("handler")
-	if handler is not None:
-		try:
-			root_logger.removeHandler(handler)
-		except Exception:
-			pass
-		await hass.async_add_executor_job(handler.close)
-	state["handler"] = None
-	state["log_path"] = None
-	_LOGGER.info("File logging disabled")
-
-
-async def _update_file_logging_for_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-	"""Apply file logging enable/disable for a single entry based on entry data."""
-	state = _get_file_logging_state(hass)
-	enabled_entries: set[str] = state["enabled_entries"]
-
-	enabled = entry.data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED)
-	if enabled:
-		enabled_entries.add(entry.entry_id)
-		await _ensure_file_logging_enabled(hass)
-		return
-
-	if entry.entry_id in enabled_entries:
-		enabled_entries.discard(entry.entry_id)
-		await _disable_file_logging_if_unused(hass)
+				# Attach to the component logger so submodule logs propagate into it.
+				_LOGGER.addHandler(_log_file_handler)
+				_LOGGER.info("File logging enabled at: %s", log_path)
+			except Exception as err:
+				_LOGGER.error("Failed to set up file logging: %s", err)
+				# Allow retry on next setup attempt.
+				_file_logging_setup = False
+				return
+		else:
+			# If we already have a handler (e.g., reload), ensure it's still attached.
+			if _log_file_handler not in _LOGGER.handlers:
+				_LOGGER.addHandler(_log_file_handler)
 
 
 SERVICE_RESUME_AUTOMATION = "resume_automation"
@@ -613,8 +371,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 			hass.data[DOMAIN] = {}
 			_LOGGER.info(STARTUP_MESSAGE)
 
-		# Always enable file logging (no per-entry configuration).
-		await _ensure_file_logging_enabled(hass)
+		# Enable persistent debug file logging (uncapped).
+		await _setup_file_logging(hass)
 
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
 		coordinator = PresenceBasedLightingCoordinator(hass, entry)
