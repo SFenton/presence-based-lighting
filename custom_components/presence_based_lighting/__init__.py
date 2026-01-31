@@ -143,6 +143,7 @@ def _get_file_logging_state(hass: HomeAssistant) -> dict:
 	if isinstance(state, dict):
 		return state
 	state = {
+		"lock": asyncio.Lock(),
 		"handler": None,
 		"unsub_trim": None,
 		"enabled_entries": set(),
@@ -175,18 +176,30 @@ async def _trim_log_file(hass: HomeAssistant, log_path: str, max_lines: int) -> 
 async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 	"""Ensure the shared file handler exists and periodic trimming is active."""
 	state = _get_file_logging_state(hass)
-	logger = logging.getLogger("custom_components.presence_based_lighting")
-	# Home Assistant commonly sets component loggers to WARNING by default.
-	# If we don't force DEBUG here, the logger can filter everything before the
-	# handler ever sees it, resulting in an empty log file.
-	if state.get("prev_logger_level") is None:
-		state["prev_logger_level"] = logger.level
-	logger.setLevel(logging.DEBUG)
+	lock: asyncio.Lock | None = state.get("lock")
+	if lock is None:
+		# Defensive: older state dicts may not have been initialized with a lock.
+		lock = asyncio.Lock()
+		state["lock"] = lock
 
-	if state.get("handler") is not None:
-		return
+	async with lock:
+		logger = logging.getLogger("custom_components.presence_based_lighting")
+		# HA's logging config can disable loggers; if that happens, records won't be
+		# emitted at all (even if handlers are attached). Ensure our namespace is
+		# enabled so normal _LOGGER.* calls reach our file handler.
+		logger.disabled = False
 
-	log_path = hass.config.path(FILE_LOG_NAME)
+		# Home Assistant commonly sets component loggers to WARNING by default.
+		# If we don't force DEBUG here, the logger can filter everything before the
+		# handler ever sees it, resulting in an empty log file.
+		if state.get("prev_logger_level") is None:
+			state["prev_logger_level"] = logger.level
+		logger.setLevel(logging.DEBUG)
+
+		if state.get("handler") is not None:
+			return
+
+		log_path = hass.config.path(FILE_LOG_NAME)
 
 	def _create_handler() -> logging.FileHandler:  # pragma: no cover - executor I/O
 		return _LineCappedFileHandler(
@@ -198,45 +211,49 @@ async def _ensure_file_logging_enabled(hass: HomeAssistant) -> None:
 			trim_every_writes=200,
 		)
 
-	handler = await hass.async_add_executor_job(_create_handler)
-	handler.setLevel(logging.DEBUG)
-	handler.setFormatter(
-		logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-	)
-
-	logger.addHandler(handler)
-	# Emit a direct line to the handler so the file is never empty even if HA's
-	# logger configuration filters out our log records.
-	try:
-		handler.emit(
-			logging.LogRecord(
-				name="custom_components.presence_based_lighting",
-				level=logging.INFO,
-				pathname=__file__,
-				lineno=0,
-				msg="File logging initialized (capped at %d lines)",
-				args=(FILE_LOG_MAX_LINES,),
-				exc_info=None,
-			)
+		handler = await hass.async_add_executor_job(_create_handler)
+		handler.setLevel(logging.DEBUG)
+		handler.setFormatter(
+			logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 		)
-		handler.flush()
-	except Exception:
-		pass
 
-	state["handler"] = handler
-	state["log_path"] = log_path
+		logger.addHandler(handler)
+		# Emit a direct line to the handler so the file is never empty even if HA's
+		# logger configuration filters out our log records.
+		try:
+			handler.emit(
+				logging.LogRecord(
+					name="custom_components.presence_based_lighting",
+					level=logging.INFO,
+					pathname=__file__,
+					lineno=0,
+					msg="File logging initialized at %s (capped at %d lines)",
+					args=(log_path, FILE_LOG_MAX_LINES),
+					exc_info=None,
+				)
+			)
+			handler.flush()
+		except Exception:
+			pass
 
-	await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
+		state["handler"] = handler
+		state["log_path"] = log_path
 
-	async def _periodic_trim(_now) -> None:
 		await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
 
-	state["unsub_trim"] = async_track_time_interval(
-		hass,
-		lambda now: hass.async_create_task(_periodic_trim(now)),
-		timedelta(seconds=30),
-	)
-	_LOGGER.info("File logging enabled at: %s (capped at %d lines)", log_path, FILE_LOG_MAX_LINES)
+		async def _periodic_trim(_now) -> None:
+			await _trim_log_file(hass, log_path, FILE_LOG_MAX_LINES)
+
+		state["unsub_trim"] = async_track_time_interval(
+			hass,
+			lambda now: hass.async_create_task(_periodic_trim(now)),
+			timedelta(seconds=30),
+		)
+		_LOGGER.info(
+			"File logging enabled at: %s (capped at %d lines)",
+			log_path,
+			FILE_LOG_MAX_LINES,
+		)
 
 
 async def _disable_file_logging_if_unused(hass: HomeAssistant) -> None:
