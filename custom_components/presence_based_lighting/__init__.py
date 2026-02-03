@@ -70,6 +70,7 @@ from .const import (
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
 	DOMAIN,
+	ENABLE_FILE_LOGGING,
 	PLATFORMS,
 	STARTUP_MESSAGE,
 )
@@ -422,8 +423,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 			hass.data[DOMAIN] = {}
 			_LOGGER.info(STARTUP_MESSAGE)
 
-		# Enable persistent debug file logging (uncapped).
-		await _setup_file_logging(hass)
+		# Optional persistent debug file logging (uncapped).
+		if ENABLE_FILE_LOGGING:
+			await _setup_file_logging(hass)
 
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
 		coordinator = PresenceBasedLightingCoordinator(hass, entry)
