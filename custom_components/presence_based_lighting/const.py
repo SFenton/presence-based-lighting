@@ -75,12 +75,6 @@ DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD = 80  # 80% empty threshold
 # File logging (optional)
 CONF_FILE_LOGGING_ENABLED = "file_logging_enabled"
 DEFAULT_FILE_LOGGING_ENABLED = False
-
-# Hard kill-switch for file logging.
-#
-# The integration previously enabled file logging unconditionally from runtime code.
-# Keep this single constant so we can re-enable easily without touching call sites.
-ENABLE_FILE_LOGGING = False
 FILE_LOG_NAME = "presence_based_lighting_debug.log"
 FILE_LOG_MAX_LINES = 10_000
 
