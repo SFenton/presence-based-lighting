@@ -424,7 +424,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 			_LOGGER.info(STARTUP_MESSAGE)
 
 		# Optional persistent debug file logging (uncapped).
-		if ENABLE_FILE_LOGGING:
+		# Check per-entry config toggle; fall back to the hard kill-switch constant.
+		if entry.data.get("file_logging_enabled", ENABLE_FILE_LOGGING):
 			await _setup_file_logging(hass)
 
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
@@ -1378,6 +1379,11 @@ class PresenceBasedLightingCoordinator:
 		- Normal flow: clearing sensor transitioned off -> timer fires -> turn off
 		- Primer flow: presence sensor triggered but clearing sensor was never on
 		              -> timer fires -> clearing sensors already cleared -> turn off
+		
+		If clearing sensors are NOT all clear when the timer fires (transient
+		sensor blip, RLC timing, etc.), the timer polls once per second for
+		up to ``delay`` additional seconds before giving up.  Without this
+		retry the light would stay on indefinitely until the next sensor event.
 		"""
 		entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 		this_task = asyncio.current_task()
@@ -1390,7 +1396,26 @@ class PresenceBasedLightingCoordinator:
 				_LOGGER.debug("Off timer expired for %s, clearing sensors clear, applying cleared action", entity_id)
 				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
 			else:
-				_LOGGER.debug("Off timer expired for %s, but clearing sensors not all clear", entity_id)
+				_LOGGER.debug(
+					"Off timer expired for %s, but clearing sensors not all clear – polling every 1s for up to %ds",
+					entity_id, delay,
+				)
+				cleared = False
+				for tick in range(delay):
+					await asyncio.sleep(1)
+					if self._are_clearing_sensors_clear():
+						_LOGGER.debug(
+							"Clearing sensors now clear for %s after %d extra second(s), applying cleared action",
+							entity_id, tick + 1,
+						)
+						await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
+						cleared = True
+						break
+				if not cleared:
+					_LOGGER.warning(
+						"Clearing sensor retry window exhausted for %s (%ds), sensors still not all clear – light will remain in current state",
+						entity_id, delay,
+					)
 		except asyncio.CancelledError:
 			_LOGGER.debug("Off timer cancelled for %s", entity_id)
 		except Exception as err:
