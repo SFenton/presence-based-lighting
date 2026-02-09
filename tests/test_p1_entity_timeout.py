@@ -57,7 +57,7 @@ async def test_timer_restart_does_not_clear_new_timer_reference(mock_hass):
         ],
     }
 
-    mock_hass.states.set("binary_sensor.motion", STATE_OFF)
+    mock_hass.states.set("binary_sensor.motion", STATE_ON)
     mock_hass.states.set("light.race", STATE_ON)
 
     coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
@@ -65,12 +65,20 @@ async def test_timer_restart_does_not_clear_new_timer_reference(mock_hass):
 
     entity_state = coordinator._entity_states["light.race"]
 
+    # Ensure entity is OCCUPIED so _start_entity_off_timer can be called.
+    # Initial reconciliation may have already started a timer; cancel it first.
+    if entity_state["off_timer"]:
+        entity_state["off_timer"].cancel()
+        entity_state["off_timer"] = None
+    from custom_components.presence_based_lighting import EntityAutomationState
+    entity_state["state"] = EntityAutomationState.OCCUPIED
+
     # Start a timer, then immediately restart it.
-    await coordinator._start_off_timer()
+    await coordinator._start_entity_off_timer("light.race", entity_state)
     first = entity_state["off_timer"]
     assert first is not None
 
-    await coordinator._start_off_timer()
+    await coordinator._start_entity_off_timer("light.race", entity_state)
     second = entity_state["off_timer"]
     assert second is not None
     assert second is not first

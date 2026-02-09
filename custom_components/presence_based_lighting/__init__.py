@@ -6,6 +6,7 @@ import json
 import logging
 from collections import deque
 from datetime import time, datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Dict, Any
 
@@ -78,6 +79,43 @@ from .interceptor import PresenceLockInterceptor, is_interceptor_available
 from .real_last_changed import get_effective_state, is_entity_on, is_entity_off, is_real_last_changed_entity
 
 _LOGGER = logging.getLogger(__package__)
+
+
+class EntityAutomationState(Enum):
+	"""Explicit state machine for per-entity presence automation.
+
+	Every controlled entity is always in exactly one of these states.
+	Each state has well-defined entry/exit actions and transitions,
+	eliminating dead-end states where lights can get stuck.
+
+	State diagram::
+
+	  IDLE ──presence detected──▶ OCCUPIED (or PENDING_ACTIVATION)
+	  OCCUPIED ──clearing sensors clear──▶ CLEARING (timer started)
+	  CLEARING ──timer fires + sensors clear──▶ IDLE
+	  CLEARING ──timer fires + sensors NOT clear──▶ WAITING_FOR_CLEAR
+	  CLEARING ──presence detected──▶ OCCUPIED
+	  WAITING_FOR_CLEAR ──sensors clear──▶ IDLE
+	  WAITING_FOR_CLEAR ──presence detected──▶ OCCUPIED
+	  WAITING_FOR_CLEAR ──safety timeout──▶ IDLE (forced)
+	  PENDING_ACTIVATION ──conditions met──▶ OCCUPIED
+	  PENDING_ACTIVATION ──room empties──▶ IDLE
+	  PAUSED ──resume / state leaves disable list──▶ (reconciled)
+	  Any state ──external manual control──▶ PAUSED
+	"""
+
+	IDLE = "idle"
+	OCCUPIED = "occupied"
+	PENDING_ACTIVATION = "pending_activation"
+	CLEARING = "clearing"
+	WAITING_FOR_CLEAR = "waiting_for_clear"
+	PAUSED = "paused"
+
+
+# Reconciliation interval – safety-net that catches any inconsistency
+_RECONCILIATION_INTERVAL = timedelta(seconds=60)
+# Maximum time an entity can stay in WAITING_FOR_CLEAR before forced IDLE
+_WAITING_FOR_CLEAR_MAX_SECONDS = 300  # 5 minutes
 
 # Persistent debug log file (uncapped)
 _log_file_handler: logging.FileHandler | None = None
@@ -495,6 +533,7 @@ class PresenceBasedLightingCoordinator:
 		self._entity_states: Dict[str, dict] = {}
 		self._interceptor: PresenceLockInterceptor | None = None
 		self._using_interceptor: bool = False
+		self._reconciliation_unsub: Callable[[], None] | None = None
 		
 		# Auto re-enable feature state
 		self._auto_reenable_enabled: bool = False
@@ -543,7 +582,8 @@ class PresenceBasedLightingCoordinator:
 					"presence_allowed": entity.get(
 						CONF_INITIAL_PRESENCE_ALLOWED, DEFAULT_INITIAL_PRESENCE_ALLOWED
 					),
-					"automation_paused": False,  # Transient pause due to manual control
+					"state": EntityAutomationState.IDLE,
+					"state_entered_at": dt_util.utcnow(),
 					"callbacks": set(),
 					"contexts": deque(maxlen=20),
 					"off_timer": None,
@@ -690,6 +730,20 @@ class PresenceBasedLightingCoordinator:
 			
 			# Check if we need to continue tracking after a restart
 			await self._check_auto_reenable_startup()
+
+			# Periodic state reconciliation – safety net that catches any
+			# inconsistency (e.g., missed events, transient sensor blips)
+			self._reconciliation_unsub = async_track_time_interval(
+				self.hass,
+				self._periodic_reconciliation,
+				_RECONCILIATION_INTERVAL,
+			)
+
+			# Initial reconciliation: set each entity's state based on current
+			# room conditions so the state machine starts from reality, not IDLE.
+			for eid, es in self._entity_states.items():
+				if es["presence_allowed"]:
+					await self._reconcile_entity(eid, es)
 			
 			_LOGGER.info("Coordinator started successfully with %d listeners", len(self._listeners))
 		except Exception as err:
@@ -711,6 +765,11 @@ class PresenceBasedLightingCoordinator:
 
 			# Cancel auto-reenable schedules
 			self._cancel_auto_reenable_schedules()
+
+			# Cancel reconciliation timer
+			if self._reconciliation_unsub:
+				self._reconciliation_unsub()
+				self._reconciliation_unsub = None
 
 			# Cancel all per-entity timers
 			cancelled_count = 0
@@ -753,6 +812,10 @@ class PresenceBasedLightingCoordinator:
 	def get_presence_allowed(self, entity_id: str) -> bool:
 		return self._entity_states[entity_id]["presence_allowed"]
 
+	def get_entity_automation_state(self, entity_id: str) -> str:
+		"""Return the current state machine state as a string for UI display."""
+		return self._entity_states[entity_id]["state"].value
+
 	async def async_set_presence_allowed(self, entity_id: str, allowed: bool) -> None:
 		"""Set user-controlled presence_allowed state (persisted by switch)."""
 		entity_state = self._entity_states[entity_id]
@@ -762,38 +825,40 @@ class PresenceBasedLightingCoordinator:
 		entity_state["presence_allowed"] = allowed
 		self._notify_switch(entity_id)
 
-		# If enabling and not paused, check room state and act accordingly
-		if allowed and not entity_state.get("automation_paused", False):
-			if self._is_any_occupied():
-				# Room is occupied, apply detected action
-				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
-			# Always start off timer when re-enabling - this handles the case where
-			# the room is empty and lights should be turned off after the delay
-			await self._start_off_timer()
+		if allowed:
+			# Entering automation control – reconcile to the correct state
+			await self._reconcile_entity(entity_id, entity_state)
+		else:
+			# Leaving automation control – cancel any running timer and go IDLE
+			self._cancel_entity_timer(entity_state)
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "presence_allowed disabled")
 
 	def get_automation_paused(self, entity_id: str) -> bool:
 		"""Get whether automation is temporarily paused for this entity."""
-		return self._entity_states[entity_id].get("automation_paused", False)
+		return self._entity_states[entity_id]["state"] == EntityAutomationState.PAUSED
 
 	def set_automation_paused(self, entity_id: str, paused: bool) -> None:
-		"""Set transient automation pause state (not persisted, based on manual control).
+		"""Transition to/from PAUSED state (transient, based on manual control).
 		
 		This is separate from presence_allowed:
 		- presence_allowed: User-controlled, persisted across reboots
-		- automation_paused: Automatic, transient, based on manual_disable_states
+		- PAUSED state: Automatic, transient, based on manual_disable_states
 		"""
 		entity_state = self._entity_states[entity_id]
-		old_paused = entity_state.get("automation_paused", False)
-		if old_paused == paused:
+		current_state = entity_state["state"]
+		is_paused = current_state == EntityAutomationState.PAUSED
+		
+		if is_paused == paused:
 			return
 		
-		entity_state["automation_paused"] = paused
-		_LOGGER.debug(
-			"Automation %s for %s",
-			"paused" if paused else "resumed",
-			entity_id
-		)
-		# Notify switch so it can update attributes
+		if paused:
+			self._cancel_entity_timer(entity_state)
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.PAUSED, "manual control")
+		else:
+			_LOGGER.debug("Automation resumed for %s, will reconcile state", entity_id)
+			# Don't reconcile here synchronously – the caller may need to await it
+			# Just set to IDLE; the caller or reconciliation will fix it
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "manual control resumed")
 		self._notify_switch(entity_id)
 
 	def _notify_switch(self, entity_id: str) -> None:
@@ -910,37 +975,15 @@ class PresenceBasedLightingCoordinator:
 			if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
 				return
 
-			# Use manual_disable_states for automatic mode behavior
-			# If the new state is in manual_disable_states, pause automation
-			# If the new state is NOT in manual_disable_states, resume automation
-			# If the key exists (even empty), use new behavior. If missing, use legacy.
-			if CONF_MANUAL_DISABLE_STATES in cfg:
-				manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
-				# New behavior: use configured manual_disable_states list
-				# Empty list = no states pause automation
-				if effective_new_state in manual_disable_states:
-					_LOGGER.debug(
-						"Manual control: %s set to %s (in disable list), pausing automation",
-						entity_id, effective_new_state
-					)
-					self.set_automation_paused(entity_id, True)
-				else:
-					_LOGGER.debug(
-						"Manual control: %s set to %s (not in disable list), resuming automation",
-						entity_id, effective_new_state
-					)
-					self.set_automation_paused(entity_id, False)
-					if not self._is_any_occupied():
-						await self._start_off_timer()
+			# Determine whether this external change should pause or resume automation
+			should_pause = self._should_external_change_pause(entity_id, cfg, effective_new_state)
+
+			if should_pause:
+				self.set_automation_paused(entity_id, True)
 			else:
-				# Legacy behavior: no manual_disable_states configured
-				# Any manual change pauses/resumes automation (backward compatible)
-				if effective_new_state == cfg[CONF_PRESENCE_CLEARED_STATE]:
-					self.set_automation_paused(entity_id, True)
-				elif effective_new_state == cfg[CONF_PRESENCE_DETECTED_STATE]:
-					self.set_automation_paused(entity_id, False)
-					if not self._is_any_occupied():
-						await self._start_off_timer()
+				self.set_automation_paused(entity_id, False)
+				# Reconcile into the correct active state
+				await self._reconcile_entity(entity_id, entity_state)
 		except Exception as err:
 			_LOGGER.exception("Error handling controlled entity change for %s: %s", event.data.get("entity_id"), err)
 
@@ -962,36 +1005,14 @@ class PresenceBasedLightingCoordinator:
 		if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
 			return
 
-		# Use manual_disable_states for automatic mode behavior
-		# If the target state is in manual_disable_states, pause automation
-		# If the target state is NOT in manual_disable_states, resume automation
-		# If the key exists (even empty), use new behavior. If missing, use legacy.
-		if CONF_MANUAL_DISABLE_STATES in cfg:
-			manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
-			# New behavior: use configured manual_disable_states list
-			# Empty list = no states pause automation
-			if target_state and target_state in manual_disable_states:
-				_LOGGER.debug(
-					"Manual action: %s targeting %s (in disable list), pausing automation",
-					entity_id, target_state
-				)
-				self.set_automation_paused(entity_id, True)
-			elif target_state:
-				_LOGGER.debug(
-					"Manual action: %s targeting %s (not in disable list), resuming automation",
-					entity_id, target_state
-				)
-				self.set_automation_paused(entity_id, False)
-				if not self._is_any_occupied():
-					await self._start_off_timer()
-		else:
-			# Legacy behavior: based on service type
-			if service == cfg[CONF_PRESENCE_CLEARED_SERVICE]:
-				self.set_automation_paused(entity_id, True)
-			elif service == cfg[CONF_PRESENCE_DETECTED_SERVICE]:
-				self.set_automation_paused(entity_id, False)
-				if not self._is_any_occupied():
-					await self._start_off_timer()
+		# Determine whether this external action should pause or resume automation
+		should_pause = self._should_external_change_pause(entity_id, cfg, target_state)
+
+		if should_pause:
+			self.set_automation_paused(entity_id, True)
+		elif target_state:
+			self.set_automation_paused(entity_id, False)
+			await self._reconcile_entity(entity_id, entity_state)
 
 	async def _check_and_apply_presence_lock(self, entity_state: dict, new_state: str) -> bool:
 		"""Check presence lock conditions and revert state if needed.
@@ -1107,40 +1128,61 @@ class PresenceBasedLightingCoordinator:
 			presence_sensors = getattr(self, '_presence_sensors', set())
 			clearing_sensors = getattr(self, '_clearing_sensors', set())
 			
-			# Trigger detected action if a presence sensor turns on
+			# --- Presence sensor turns ON ---
 			if currently_on and entity_id in presence_sensors:
-				_LOGGER.debug("Presence detected, cancelling timers")
-				# Cancel all per-entity timers when presence detected
-				for entity_state in self._entity_states.values():
-					if entity_state["off_timer"]:
-						entity_state["off_timer"].cancel()
-				await self._apply_presence_action(CONF_PRESENCE_DETECTED_SERVICE)
-				# Start off-timer immediately after presence detected
-				# This handles the case where clearing sensors may already be cleared
-				# (e.g., primer sensor triggers but person never enters main room)
-				# Timer will check clearing sensor state when it fires
-				_LOGGER.debug("Starting off timer after presence detected")
+				_LOGGER.debug("Presence detected via %s", entity_id)
+				for eid, es in self._entity_states.items():
+					if not es["presence_allowed"]:
+						continue
+					cur = es["state"]
+					if cur in (
+						EntityAutomationState.IDLE,
+						EntityAutomationState.CLEARING,
+						EntityAutomationState.WAITING_FOR_CLEAR,
+						EntityAutomationState.PENDING_ACTIVATION,
+					):
+						self._cancel_entity_timer(es)
+						if self._are_activation_conditions_met():
+							self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "presence detected")
+							await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
+						else:
+							self._set_entity_state(eid, es, EntityAutomationState.PENDING_ACTIVATION, "presence detected, conditions not met")
+				# Start off-timer for OCCUPIED entities – handles primer-sensor case
+				# where clearing sensors may already be clear
 				await self._start_off_timer()
-			# Trigger cleared action if a clearing sensor turns off AND all clearing sensors are clear
+
+			# --- Clearing sensor turns OFF ---
 			elif currently_off:
-				# For clearing, use clearing sensors if specified, else fall back to presence sensors
 				effective_clearing = clearing_sensors if clearing_sensors else presence_sensors
-				if entity_id in effective_clearing and self._are_clearing_sensors_clear():
-					_LOGGER.debug("Presence cleared, starting off timer")
-					await self._start_off_timer()
+				if entity_id in effective_clearing:
+					all_clear = self._are_clearing_sensors_clear()
+					if all_clear:
+						_LOGGER.debug("All clearing sensors clear")
+						for eid, es in self._entity_states.items():
+							if not es["presence_allowed"]:
+								continue
+							cur = es["state"]
+							if cur == EntityAutomationState.OCCUPIED:
+								# Start off-timer → CLEARING
+								await self._start_entity_off_timer(eid, es)
+							elif cur == EntityAutomationState.WAITING_FOR_CLEAR:
+								# Sensors finally cleared – turn off immediately
+								_LOGGER.debug("%s: sensors cleared while WAITING_FOR_CLEAR, turning off", eid)
+								self._cancel_entity_timer(es)
+								self._set_entity_state(eid, es, EntityAutomationState.IDLE, "clearing sensors cleared (was waiting)")
+								await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+							elif cur == EntityAutomationState.PENDING_ACTIVATION:
+								# Room emptied while waiting for conditions – turn off if light was on
+								self._set_entity_state(eid, es, EntityAutomationState.IDLE, "room emptied while pending")
+								await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
 		except Exception as err:
 			_LOGGER.exception("Error handling presence change: %s", err)
 
 	async def _handle_activation_condition_change(self, event: Event) -> None:
 		"""Handle state changes on activation condition entities.
 		
-		When an activation condition becomes true while the room is occupied,
-		trigger the detected action (turn on lights).
-		
-		This allows scenarios like:
-		- Motion detected while it's still light outside (lux sensor off)
-		- Sun sets (lux sensor turns on) while room is still occupied
-		- Lights should turn on at that moment
+		When activation conditions become true while entities are in
+		PENDING_ACTIVATION state, transition them to OCCUPIED.
 		"""
 		try:
 			entity_id = event.data.get("entity_id")
@@ -1159,51 +1201,41 @@ class PresenceBasedLightingCoordinator:
 				entity_id, old_state.state, new_state.state
 			)
 			
-			# Check if room is currently occupied AND all activation conditions are now met
-			if self._is_any_occupied() and self._are_activation_conditions_met():
-				_LOGGER.debug(
-					"Activation conditions now met while room is occupied - triggering detected action"
-				)
-				# Cancel any pending off timers since we're activating
-				for entity_state in self._entity_states.values():
-					if entity_state["off_timer"]:
-						entity_state["off_timer"].cancel()
-						entity_state["off_timer"] = None
-				
-				await self._apply_presence_action(CONF_PRESENCE_DETECTED_SERVICE)
-				
-				# Start off-timer in case clearing sensors are already cleared
-				await self._start_off_timer()
-			else:
-				if not self._is_any_occupied():
-					_LOGGER.debug("Activation condition met but room not occupied")
-				else:
-					_LOGGER.debug("Activation condition changed but not all conditions met yet")
+			if not self._are_activation_conditions_met():
+				_LOGGER.debug("Activation condition changed but not all conditions met yet")
+				return
+			
+			# Transition PENDING_ACTIVATION entities to OCCUPIED
+			for eid, es in self._entity_states.items():
+				if not es["presence_allowed"]:
+					continue
+				if es["state"] == EntityAutomationState.PENDING_ACTIVATION:
+					_LOGGER.debug(
+						"Activation conditions now met – transitioning %s from PENDING to OCCUPIED", eid
+					)
+					self._cancel_entity_timer(es)
+					self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "activation conditions met")
+					await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
+			
+			# Start off-timer for newly-OCCUPIED entities in case clearing sensors are already clear
+			await self._start_off_timer()
 		except Exception as err:
 			_LOGGER.exception("Error handling activation condition change: %s", err)
 
 	async def _apply_presence_action(self, service_key: str) -> None:
-		"""Apply presence action to all controlled entities.
+		"""Apply presence action to all controlled entities that should follow presence.
 		
-		For DETECTED actions: only applies if activation conditions are met.
-		For CLEARED actions: always applies (clear regardless of activation conditions).
+		Note: With the state machine, most per-entity transitions are handled
+		inline by the event handlers. This helper remains for bulk operations
+		(e.g., auto-reenable) where we want to apply an action to all eligible entities.
 		"""
 		_LOGGER.debug("Applying presence action %s to %d entities: %s", 
 					 service_key, len(self._entity_states), list(self._entity_states.keys()))
 		
-		# For detected (turn on) actions, check activation conditions
-		if service_key == CONF_PRESENCE_DETECTED_SERVICE:
-			if not self._are_activation_conditions_met():
-				_LOGGER.debug(
-					"Skipping detected action - activation conditions not met. "
-					"Lights will turn on when conditions are satisfied while occupied."
-				)
-				return
-		
 		for entity_state in self._entity_states.values():
 			entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 			if not self._should_follow_presence(entity_state):
-				_LOGGER.debug("Skipping %s - presence_allowed is False", entity_id)
+				_LOGGER.debug("Skipping %s - not following presence", entity_id)
 				continue
 			await self._apply_action_to_entity(entity_state, service_key)
 
@@ -1262,13 +1294,9 @@ class PresenceBasedLightingCoordinator:
 		Returns True if presence automation should affect this entity.
 		Requires both:
 		- presence_allowed: User-controlled toggle (persisted across reboots)
-		- NOT automation_paused: Transient pause due to manual control
-		
-		The presence_allowed flag is controlled by the user via the switch.
-		The automation_paused flag is controlled automatically based on
-		manual_disable_states configuration.
+		- State is not PAUSED: Transient pause due to manual control
 		"""
-		return entity_state["presence_allowed"] and not entity_state.get("automation_paused", False)
+		return entity_state["presence_allowed"] and entity_state["state"] != EntityAutomationState.PAUSED
 
 	def _is_context_ours(self, entity_id: str, context: Context | None) -> bool:
 		if not context:
@@ -1356,75 +1384,241 @@ class PresenceBasedLightingCoordinator:
 		return True
 
 	async def _start_off_timer(self) -> None:
-		"""Start per-entity off timers when presence clears."""
-		# Start individual timers for each entity
-		for entity_state in self._entity_states.values():
-			if entity_state["off_timer"]:
-				entity_state["off_timer"].cancel()
-			
-			if self._should_follow_presence(entity_state):
-				config = entity_state["config"]
-				delay = config.get(CONF_ENTITY_OFF_DELAY)
-				if delay is None:
-					delay = self.entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY)
-				
-				task = asyncio.create_task(self._execute_entity_off_timer(entity_state, delay))
-				entity_state["off_timer"] = task
+		"""Start per-entity off timers for all OCCUPIED entities."""
+		for entity_id, entity_state in self._entity_states.items():
+			if entity_state["state"] == EntityAutomationState.OCCUPIED:
+				await self._start_entity_off_timer(entity_id, entity_state)
 
-	async def _execute_entity_off_timer(self, entity_state: dict, delay: int) -> None:
+	async def _start_entity_off_timer(self, entity_id: str, entity_state: dict) -> None:
+		"""Start (or restart) the off-timer for a single entity → CLEARING."""
+		self._cancel_entity_timer(entity_state)
+
+		config = entity_state["config"]
+		delay = config.get(CONF_ENTITY_OFF_DELAY)
+		if delay is None:
+			delay = self.entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY)
+
+		self._set_entity_state(entity_id, entity_state, EntityAutomationState.CLEARING, f"off-timer started ({delay}s)")
+		task = asyncio.create_task(self._execute_entity_off_timer(entity_id, entity_state, delay))
+		entity_state["off_timer"] = task
+
+	async def _execute_entity_off_timer(self, entity_id: str, entity_state: dict, delay: int) -> None:
 		"""Execute the off timer for a specific entity.
 		
-		When timer fires, checks if all clearing sensors are in cleared state.
-		This handles scenarios where:
-		- Normal flow: clearing sensor transitioned off -> timer fires -> turn off
-		- Primer flow: presence sensor triggered but clearing sensor was never on
-		              -> timer fires -> clearing sensors already cleared -> turn off
-		
-		If clearing sensors are NOT all clear when the timer fires (transient
-		sensor blip, RLC timing, etc.), the timer polls once per second for
-		up to ``delay`` additional seconds before giving up.  Without this
-		retry the light would stay on indefinitely until the next sensor event.
+		When timer fires:
+		- If clearing sensors are clear → transition to IDLE (turn off)
+		- If not clear → transition to WAITING_FOR_CLEAR (event-driven recovery)
 		"""
-		entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 		this_task = asyncio.current_task()
 		try:
-			_LOGGER.debug("Starting off timer for %s with delay %d seconds", entity_id, delay)
+			_LOGGER.debug("[%s] Off timer sleeping %ds (state: CLEARING)", entity_id, delay)
 			await asyncio.sleep(delay)
-			# Check if all clearing sensors are cleared (not just presence sensors)
-			# This allows the timer to work even if clearing sensors were never triggered
+
 			if self._are_clearing_sensors_clear():
-				_LOGGER.debug("Off timer expired for %s, clearing sensors clear, applying cleared action", entity_id)
+				_LOGGER.debug("[%s] Timer fired, clearing sensors clear → IDLE", entity_id)
+				self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "timer fired, sensors clear")
 				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
 			else:
 				_LOGGER.debug(
-					"Off timer expired for %s, but clearing sensors not all clear – polling every 1s for up to %ds",
-					entity_id, delay,
+					"[%s] Timer fired, clearing sensors NOT all clear → WAITING_FOR_CLEAR",
+					entity_id,
 				)
-				cleared = False
-				for tick in range(delay):
-					await asyncio.sleep(1)
-					if self._are_clearing_sensors_clear():
-						_LOGGER.debug(
-							"Clearing sensors now clear for %s after %d extra second(s), applying cleared action",
-							entity_id, tick + 1,
-						)
-						await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
-						cleared = True
-						break
-				if not cleared:
-					_LOGGER.warning(
-						"Clearing sensor retry window exhausted for %s (%ds), sensors still not all clear – light will remain in current state",
-						entity_id, delay,
-					)
+				self._set_entity_state(
+					entity_id, entity_state, EntityAutomationState.WAITING_FOR_CLEAR,
+					"timer fired, sensors not clear"
+				)
+				# No polling – the existing clearing-sensor listener in
+				# _handle_presence_change will transition us to IDLE when sensors
+				# clear.  The periodic reconciliation acts as a safety net.
 		except asyncio.CancelledError:
-			_LOGGER.debug("Off timer cancelled for %s", entity_id)
+			_LOGGER.debug("[%s] Off timer cancelled", entity_id)
 		except Exception as err:
-			_LOGGER.exception("Error in off timer for %s: %s", entity_id, err)
+			_LOGGER.exception("[%s] Error in off timer: %s", entity_id, err)
 		finally:
-			# Avoid clobbering a newly started timer:
-			# if this task was cancelled/replaced, a newer task may already be stored.
 			if entity_state.get("off_timer") is this_task:
 				entity_state["off_timer"] = None
+
+	# -----------------------------------------------------------------
+	# State machine helpers
+	# -----------------------------------------------------------------
+
+	def _set_entity_state(
+		self, entity_id: str, entity_state: dict,
+		new_state: EntityAutomationState, reason: str = "",
+	) -> None:
+		"""Transition an entity to a new state with logging."""
+		old_state = entity_state["state"]
+		if old_state == new_state:
+			return
+		entity_state["state"] = new_state
+		entity_state["state_entered_at"] = dt_util.utcnow()
+		_LOGGER.debug(
+			"[%s] %s → %s (%s)",
+			entity_id, old_state.value, new_state.value, reason,
+		)
+		self._notify_switch(entity_id)
+
+	def _cancel_entity_timer(self, entity_state: dict) -> None:
+		"""Cancel any running off-timer / safety-timer for an entity."""
+		timer = entity_state.get("off_timer")
+		if timer is not None:
+			timer.cancel()
+			entity_state["off_timer"] = None
+
+	def _should_external_change_pause(
+		self, entity_id: str, cfg: dict, effective_new_state: str | None,
+	) -> bool:
+		"""Determine if an external state change should pause automation.
+
+		Unified logic shared by _handle_controlled_entity_change and
+		_handle_external_action.
+		"""
+		if CONF_MANUAL_DISABLE_STATES in cfg:
+			manual_disable_states = cfg[CONF_MANUAL_DISABLE_STATES]
+			should_pause = effective_new_state is not None and effective_new_state in manual_disable_states
+			_LOGGER.debug(
+				"Manual control: %s → %s (%s disable list) → %s",
+				entity_id, effective_new_state,
+				"in" if should_pause else "not in",
+				"pause" if should_pause else "resume",
+			)
+			return should_pause
+		else:
+			# Legacy behaviour: cleared-state service pauses, detected-state resumes
+			if effective_new_state == cfg.get(CONF_PRESENCE_CLEARED_STATE):
+				return True
+			return False
+
+	async def _reconcile_entity(self, entity_id: str, entity_state: dict) -> None:
+		"""Reconcile a single entity to the state it *should* be in given
+		current room conditions.  Called after resume-from-pause, presence_allowed
+		changes, and by the periodic safety net.
+		"""
+		if not entity_state["presence_allowed"]:
+			return
+
+		cur = entity_state["state"]
+		occupied = self._is_any_occupied()
+		conditions_met = self._are_activation_conditions_met()
+		clearing_clear = self._are_clearing_sensors_clear()
+
+		if occupied and conditions_met:
+			if cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING):
+				self._cancel_entity_timer(entity_state)
+				self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: occupied + conditions met")
+				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
+				# If clearing sensors are already clear, start timer immediately
+				if clearing_clear:
+					await self._start_entity_off_timer(entity_id, entity_state)
+		elif occupied and not conditions_met:
+			# Conditions not met, but if the light is already on, treat as OCCUPIED
+			# (conditions only gate *turning on*, not maintaining current state)
+			current_ha_state = self.hass.states.get(entity_state["config"][CONF_ENTITY_ID])
+			light_is_on = current_ha_state and current_ha_state.state == entity_state["config"].get(CONF_PRESENCE_DETECTED_STATE, "on")
+			if light_is_on and cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING):
+				self._cancel_entity_timer(entity_state)
+				self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: occupied, light already on")
+				if clearing_clear:
+					await self._start_entity_off_timer(entity_id, entity_state)
+			elif not light_is_on and cur != EntityAutomationState.PENDING_ACTIVATION:
+				self._cancel_entity_timer(entity_state)
+				self._set_entity_state(entity_id, entity_state, EntityAutomationState.PENDING_ACTIVATION, "reconcile: occupied, conditions not met")
+		else:
+			# Room is empty
+			if cur in (EntityAutomationState.OCCUPIED, EntityAutomationState.PENDING_ACTIVATION):
+				# Start off-timer to turn off after delay
+				if cur == EntityAutomationState.OCCUPIED:
+					await self._start_entity_off_timer(entity_id, entity_state)
+				else:
+					self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "reconcile: room empty")
+			elif cur == EntityAutomationState.WAITING_FOR_CLEAR and clearing_clear:
+				self._cancel_entity_timer(entity_state)
+				self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "reconcile: sensors cleared")
+				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
+			elif cur == EntityAutomationState.IDLE:
+				# Check if light is still on despite room being empty (e.g., after
+				# re-enabling presence_allowed). Start off-timer so it gets turned off.
+				current_ha_state = self.hass.states.get(entity_state["config"][CONF_ENTITY_ID])
+				detected_state = entity_state["config"].get(CONF_PRESENCE_DETECTED_STATE, "on")
+				if current_ha_state and current_ha_state.state == detected_state and clearing_clear:
+					self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: light on but room empty")
+					await self._start_entity_off_timer(entity_id, entity_state)
+
+	async def _periodic_reconciliation(self, _now: datetime) -> None:
+		"""Safety-net called every _RECONCILIATION_INTERVAL.
+
+		Catches any state inconsistency that slipped through event-driven
+		handling (e.g., missed events, transient sensor blips).
+		"""
+		try:
+			now = dt_util.utcnow()
+			for entity_id, es in self._entity_states.items():
+				if not es["presence_allowed"]:
+					continue
+
+				cur = es["state"]
+
+				# WAITING_FOR_CLEAR safety timeout
+				if cur == EntityAutomationState.WAITING_FOR_CLEAR:
+					if self._are_clearing_sensors_clear():
+						_LOGGER.info(
+							"[%s] Reconciliation: WAITING_FOR_CLEAR but sensors are clear → IDLE",
+							entity_id,
+						)
+						self._cancel_entity_timer(es)
+						self._set_entity_state(entity_id, es, EntityAutomationState.IDLE, "reconciliation: sensors cleared")
+						await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+					else:
+						# Check if we've been waiting too long
+						entered = es.get("state_entered_at")
+						if entered and (now - entered).total_seconds() > _WAITING_FOR_CLEAR_MAX_SECONDS:
+							_LOGGER.warning(
+								"[%s] WAITING_FOR_CLEAR for >%ds, forcing IDLE (clearing sensors still not all clear)",
+								entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
+							)
+							self._cancel_entity_timer(es)
+							self._set_entity_state(entity_id, es, EntityAutomationState.IDLE, "reconciliation: safety timeout")
+							await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+
+				# CLEARING but timer somehow lost
+				elif cur == EntityAutomationState.CLEARING and es.get("off_timer") is None:
+					_LOGGER.warning(
+						"[%s] Reconciliation: CLEARING but no timer running – restarting timer",
+						entity_id,
+					)
+					await self._start_entity_off_timer(entity_id, es)
+
+				# OCCUPIED but room is actually empty and clearing sensors clear
+				elif cur == EntityAutomationState.OCCUPIED:
+					if not self._is_any_occupied() and self._are_clearing_sensors_clear():
+						_LOGGER.info(
+							"[%s] Reconciliation: OCCUPIED but room empty + sensors clear → starting off-timer",
+							entity_id,
+						)
+						await self._start_entity_off_timer(entity_id, es)
+
+				# IDLE but room is occupied (missed a presence event?)
+				elif cur == EntityAutomationState.IDLE:
+					if self._is_any_occupied() and self._are_activation_conditions_met():
+						_LOGGER.info(
+							"[%s] Reconciliation: IDLE but room occupied + conditions met → OCCUPIED",
+							entity_id,
+						)
+						await self._reconcile_entity(entity_id, es)
+
+				# PENDING but conditions are actually met
+				elif cur == EntityAutomationState.PENDING_ACTIVATION:
+					if self._are_activation_conditions_met() and self._is_any_occupied():
+						_LOGGER.info(
+							"[%s] Reconciliation: PENDING but conditions met → OCCUPIED",
+							entity_id,
+						)
+						await self._reconcile_entity(entity_id, es)
+					elif not self._is_any_occupied():
+						self._set_entity_state(entity_id, es, EntityAutomationState.IDLE, "reconciliation: room empty")
+
+		except Exception as err:
+			_LOGGER.exception("Error in periodic reconciliation: %s", err)
 
 	# =========================================================================
 	# Auto Re-Enable Feature Methods
@@ -1673,9 +1867,10 @@ class PresenceBasedLightingCoordinator:
 				await self.async_set_presence_allowed(entity_id, True)
 			
 			# Also resume automation if paused
-			if entity_state.get("automation_paused", False):
+			if entity_state["state"] == EntityAutomationState.PAUSED:
 				_LOGGER.info("Resuming automation for %s in %s", entity_id, room_name)
 				self.set_automation_paused(entity_id, False)
+				await self._reconcile_entity(entity_id, entity_state)
 
 	def _is_auto_reenable_sensors_occupied(self) -> bool:
 		"""Check if any auto-reenable presence sensor is occupied."""

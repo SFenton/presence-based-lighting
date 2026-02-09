@@ -131,6 +131,7 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
             CONF_RESPECTS_PRESENCE_ALLOWED: self._entity_config[CONF_RESPECTS_PRESENCE_ALLOWED],
             CONF_DISABLE_ON_EXTERNAL_CONTROL: self._entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL],
             "automation_paused": self._coordinator.get_automation_paused(self._entity_id),
+            "automation_state": self._coordinator.get_entity_automation_state(self._entity_id),
         }
 
     async def async_added_to_hass(self):

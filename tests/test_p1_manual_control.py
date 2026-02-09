@@ -45,6 +45,7 @@ class TestManualOverrides:
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
+        mock_hass.services.clear()
 
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
@@ -63,8 +64,17 @@ class TestManualOverrides:
         )
         assert coordinator.get_automation_paused("light.living_room") is False
 
+        # After resuming, the next presence event should trigger turn_on
+        # First, transition entity to IDLE so presence can re-trigger it
         mock_hass.services.clear()
         mock_hass.states.set("light.living_room", STATE_OFF)
+        mock_hass.states.set("binary_sensor.living_room_motion", STATE_OFF)
+        # Simulate room emptying first
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.living_room_motion", STATE_ON, STATE_OFF)
+        )
+        mock_hass.services.clear()
+        # Now presence detected again should turn the light on
         await coordinator._handle_presence_change(
             _entity_event(mock_hass, "binary_sensor.living_room_motion", STATE_OFF, STATE_ON)
         )
@@ -82,6 +92,13 @@ class TestManualOverrides:
         )
         assert coordinator.get_automation_paused("light.living_room") is False
 
+        # Presence automation should still be active.
+        # Transition through vacancy first so next presence ON triggers turn_on.
+        mock_hass.services.clear()
+        mock_hass.states.set("binary_sensor.living_room_motion", STATE_OFF)
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.living_room_motion", STATE_ON, STATE_OFF)
+        )
         mock_hass.services.clear()
         await coordinator._handle_presence_change(
             _entity_event(mock_hass, "binary_sensor.living_room_motion", STATE_OFF, STATE_ON)

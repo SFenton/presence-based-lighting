@@ -68,6 +68,45 @@ recorder_history_module.get_significant_states = _recorder_get_significant_state
 sys.modules['homeassistant.components.recorder.history'] = recorder_history_module
 recorder_module.history = recorder_history_module
 
+# Create homeassistant.components.switch with SwitchEntity base class
+switch_component_module = types.ModuleType('homeassistant.components.switch')
+
+class _SwitchEntity:
+    """Stub SwitchEntity base class for tests."""
+    _attr_name = None
+    _attr_unique_id = None
+    _attr_icon = None
+    entity_id = None
+    hass = None
+
+    @property
+    def name(self):
+        return self._attr_name
+
+    @property
+    def unique_id(self):
+        return self._attr_unique_id
+
+    @property
+    def icon(self):
+        return self._attr_icon
+
+    def async_write_ha_state(self):
+        """Stub write state."""
+        pass
+
+    async def async_added_to_hass(self):
+        """Stub added_to_hass for MRO chain."""
+        pass
+
+    async def async_get_last_state(self):
+        """Stub restore state — overridden in tests."""
+        return None
+
+switch_component_module.SwitchEntity = _SwitchEntity
+sys.modules['homeassistant.components.switch'] = switch_component_module
+components_module.switch = switch_component_module
+
 config_entries_module = types.ModuleType('homeassistant.config_entries')
 
 # Create base flow classes with async methods
@@ -117,8 +156,45 @@ config_entries_module.OptionsFlow = OptionsFlow
 config_entries_module.ConfigEntry = type("ConfigEntry", (), {})
 sys.modules['homeassistant.config_entries'] = config_entries_module
 sys.modules['homeassistant.helpers.event'] = MagicMock()
-sys.modules['homeassistant.helpers.entity_registry'] = MagicMock()
-sys.modules['homeassistant.helpers.restore_state'] = MagicMock()
+
+# Entity registry stub – provides async_get returning a MagicMock registry
+entity_registry_module = types.ModuleType('homeassistant.helpers.entity_registry')
+
+class _MockRegistryEntry:
+    def __init__(self, entity_id=None, name=None, original_name=None):
+        self.entity_id = entity_id
+        self.name = name
+        self.original_name = original_name
+
+class _MockEntityRegistry:
+    def __init__(self):
+        self._entries = {}
+    def async_get(self, entity_id):
+        return self._entries.get(entity_id)
+    def async_update_entity(self, entity_id, **kwargs):
+        pass
+
+def _er_async_get(hass):
+    if not hasattr(hass, '_entity_registry'):
+        hass._entity_registry = _MockEntityRegistry()
+    return hass._entity_registry
+
+entity_registry_module.async_get = _er_async_get
+entity_registry_module.RegistryEntry = _MockRegistryEntry
+sys.modules['homeassistant.helpers.entity_registry'] = entity_registry_module
+
+# Restore state stub – provides RestoreEntity base class
+restore_state_module = types.ModuleType('homeassistant.helpers.restore_state')
+
+class _RestoreEntity:
+    """Stub RestoreEntity that provides async_get_last_state."""
+    async def async_added_to_hass(self):
+        pass
+    async def async_get_last_state(self):
+        return None
+
+restore_state_module.RestoreEntity = _RestoreEntity
+sys.modules['homeassistant.helpers.restore_state'] = restore_state_module
 
 # Provide a concrete homeassistant.util module with logging helpers
 util_module = types.ModuleType('homeassistant.util')
@@ -160,7 +236,14 @@ from datetime import datetime, timezone
 def _utcnow():
     return datetime.now(timezone.utc)
 
+def _as_utc(dt_obj):
+    """Convert a datetime to UTC."""
+    if dt_obj.tzinfo is None:
+        return dt_obj.replace(tzinfo=timezone.utc)
+    return dt_obj.astimezone(timezone.utc)
+
 dt_module.utcnow = _utcnow
+dt_module.as_utc = _as_utc
 sys.modules['homeassistant.util.dt'] = dt_module
 util_module.dt = dt_module
 
@@ -218,6 +301,7 @@ selector_module.BooleanSelector = _make_selector("boolean")
 selector_module.TextSelector = _make_selector("text")
 selector_module.TextSelectorConfig = _SelectorConfig
 selector_module.TextSelectorType = _TextSelectorType
+selector_module.TimeSelector = _make_selector("time")
 sys.modules['homeassistant.helpers.selector'] = selector_module
 helpers_module.selector = selector_module
 
@@ -538,6 +622,7 @@ class MockServices:
     def __init__(self):
         """Initialize mock services."""
         self.calls = []
+        self._registered = {}  # (domain, service) -> handler
         self._descriptions = {
             "light": {
                 "turn_on": {
@@ -576,6 +661,10 @@ class MockServices:
     async def async_get_all_descriptions(self):
         """Return mocked service descriptions."""
         return self._descriptions
+
+    def async_register(self, domain, service, handler, schema=None):
+        """Register a service handler for later invocation in tests."""
+        self._registered[(domain, service)] = handler
 
     def async_services(self):
         """Return registered services map."""

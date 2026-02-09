@@ -513,6 +513,9 @@ class TestRLCEventHandling:
             coordinator = PresenceBasedLightingCoordinator(mock_hass_with_events, mock_entry_rlc_event)
             await coordinator.async_start()
         
+        # Clear any calls from startup reconciliation
+        mock_hass_with_events.services.async_call.reset_mock()
+        
         # Create event: timestamp changed but attribute stayed the same
         event = self._create_state_change_event(
             "sensor.motion_real_last_changed",
@@ -531,9 +534,10 @@ class TestRLCEventHandling:
     @pytest.mark.asyncio
     async def test_rlc_attribute_change_on_to_off_starts_timer(self, mock_hass_with_events, mock_entry_rlc_event):
         """RLC sensor attribute change from on to off should start the off timer."""
+        # Start with motion ON so reconciliation puts entity in OCCUPIED (no timer yet)
         mock_hass_with_events._states_data["sensor.motion_real_last_changed"] = {
             "state": "2024-01-01T12:00:00+00:00",
-            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},  # Current state after event
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "on"},
         }
         mock_hass_with_events._states_data["light.test_light"] = {
             "state": "on",
@@ -544,9 +548,15 @@ class TestRLCEventHandling:
             coordinator = PresenceBasedLightingCoordinator(mock_hass_with_events, mock_entry_rlc_event)
             await coordinator.async_start()
         
-        # Verify no timer initially
+        # Verify no timer initially (room is occupied, clearing sensors not clear)
         for entity_state in coordinator._entity_states.values():
             assert entity_state["off_timer"] is None
+        
+        # Update sensor state to reflect motion going off
+        mock_hass_with_events._states_data["sensor.motion_real_last_changed"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
         
         # Create event: attribute changed from "on" to "off"
         event = self._create_state_change_event(
