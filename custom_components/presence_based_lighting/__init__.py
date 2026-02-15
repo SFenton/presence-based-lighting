@@ -97,7 +97,8 @@ class EntityAutomationState(Enum):
 	  CLEARING ──presence detected──▶ OCCUPIED
 	  WAITING_FOR_CLEAR ──sensors clear──▶ IDLE
 	  WAITING_FOR_CLEAR ──presence detected──▶ OCCUPIED
-	  WAITING_FOR_CLEAR ──safety timeout──▶ IDLE (forced)
+	  WAITING_FOR_CLEAR ──safety timeout + room empty──▶ IDLE (forced)
+	  WAITING_FOR_CLEAR ──safety timeout + room occupied──▶ OCCUPIED
 	  PENDING_ACTIVATION ──conditions met──▶ OCCUPIED
 	  PENDING_ACTIVATION ──room empties──▶ IDLE
 	  PAUSED ──resume / state leaves disable list──▶ (reconciled)
@@ -1149,9 +1150,13 @@ class PresenceBasedLightingCoordinator:
 							await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
 						else:
 							self._set_entity_state(eid, es, EntityAutomationState.PENDING_ACTIVATION, "presence detected, conditions not met")
-				# Start off-timer for OCCUPIED entities – handles primer-sensor case
-				# where clearing sensors may already be clear
-				await self._start_off_timer()
+				# Start off-timer for OCCUPIED entities ONLY if clearing sensors
+				# are already clear (primer-sensor case: hallway PIR triggers but
+				# nobody enters the room).  When clearing sensors are still active
+				# the entity must stay in OCCUPIED and let the clearing-sensor-OFF
+				# handler manage the transition naturally.
+				if self._are_clearing_sensors_clear():
+					await self._start_off_timer()
 
 			# --- Clearing sensor turns OFF ---
 			elif currently_off:
@@ -1219,8 +1224,11 @@ class PresenceBasedLightingCoordinator:
 					self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "activation conditions met")
 					await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
 			
-			# Start off-timer for newly-OCCUPIED entities in case clearing sensors are already clear
-			await self._start_off_timer()
+			# Start off-timer for newly-OCCUPIED entities ONLY if clearing
+			# sensors are already clear (same primer-sensor guard as in
+			# _handle_presence_change).
+			if self._are_clearing_sensors_clear():
+				await self._start_off_timer()
 		except Exception as err:
 			_LOGGER.exception("Error handling activation condition change: %s", err)
 
@@ -1574,13 +1582,23 @@ class PresenceBasedLightingCoordinator:
 						# Check if we've been waiting too long
 						entered = es.get("state_entered_at")
 						if entered and (now - entered).total_seconds() > _WAITING_FOR_CLEAR_MAX_SECONDS:
-							_LOGGER.warning(
-								"[%s] WAITING_FOR_CLEAR for >%ds, forcing IDLE (clearing sensors still not all clear)",
-								entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
-							)
 							self._cancel_entity_timer(es)
-							self._set_entity_state(entity_id, es, EntityAutomationState.IDLE, "reconciliation: safety timeout")
-							await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+							# If presence sensors still show the room as occupied,
+							# transition back to OCCUPIED instead of forcing IDLE.
+							if self._is_any_occupied():
+								_LOGGER.info(
+									"[%s] WAITING_FOR_CLEAR for >%ds, but room still occupied → OCCUPIED",
+									entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
+								)
+								self._set_entity_state(entity_id, es, EntityAutomationState.OCCUPIED, "reconciliation: safety timeout but still occupied")
+								await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
+							else:
+								_LOGGER.warning(
+									"[%s] WAITING_FOR_CLEAR for >%ds, forcing IDLE (clearing sensors still not all clear)",
+									entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
+								)
+								self._set_entity_state(entity_id, es, EntityAutomationState.IDLE, "reconciliation: safety timeout")
+								await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
 
 				# CLEARING but timer somehow lost
 				elif cur == EntityAutomationState.CLEARING and es.get("off_timer") is None:

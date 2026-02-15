@@ -62,7 +62,7 @@ from custom_components.presence_based_lighting.const import (
     DOMAIN,
     NO_ACTION,
 )
-from tests.conftest import MockHass, setup_entity_states
+from tests.conftest import MockHass, assert_service_called, setup_entity_states
 
 
 # ---------------------------------------------------------------------------
@@ -1232,7 +1232,7 @@ class TestPeriodicReconciliationPaths:
 
     @pytest.mark.asyncio
     async def test_reconciliation_waiting_for_clear_safety_timeout(self):
-        """Lines 1572-1582: WAITING_FOR_CLEAR for >300s → forced IDLE."""
+        """WAITING_FOR_CLEAR for >300s with room still occupied → OCCUPIED (not forced IDLE)."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         hass.states.set("binary_sensor.clearing_1", STATE_ON)
@@ -1247,8 +1247,34 @@ class TestPeriodicReconciliationPaths:
         import custom_components.presence_based_lighting as mod
         es["state_entered_at"] = mod.dt_util.utcnow() - timedelta(seconds=400)
 
+        hass.services.clear()
         await coord._periodic_reconciliation(None)
 
+        # Room is still occupied → should transition to OCCUPIED, not IDLE
+        assert es["state"] == EntityAutomationState.OCCUPIED
+        assert_service_called(hass, "light", "turn_on", "light.living_room")
+
+    @pytest.mark.asyncio
+    async def test_reconciliation_waiting_for_clear_safety_timeout_room_empty(self):
+        """WAITING_FOR_CLEAR for >300s with room empty → forced IDLE."""
+        hass = MockHass()
+        setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+        hass.states.set("binary_sensor.clearing_1", STATE_ON)
+        entry = _make_entry(extra={
+            CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
+        })
+        coord = PresenceBasedLightingCoordinator(hass, entry)
+        await coord.async_start()
+
+        es = coord._entity_states["light.living_room"]
+        es["state"] = EntityAutomationState.WAITING_FOR_CLEAR
+        import custom_components.presence_based_lighting as mod
+        es["state_entered_at"] = mod.dt_util.utcnow() - timedelta(seconds=400)
+
+        hass.services.clear()
+        await coord._periodic_reconciliation(None)
+
+        # Room empty → forced IDLE
         assert es["state"] == EntityAutomationState.IDLE
 
     @pytest.mark.asyncio

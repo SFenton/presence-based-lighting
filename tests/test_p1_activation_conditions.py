@@ -13,9 +13,13 @@ from unittest.mock import MagicMock
 import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
 
-from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting import (
+    PresenceBasedLightingCoordinator,
+    EntityAutomationState,
+)
 from custom_components.presence_based_lighting.const import (
     CONF_ACTIVATION_CONDITIONS,
+    CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
@@ -396,3 +400,108 @@ class TestNoActivationConditions:
         )
 
         assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
+
+
+class TestActivationConditionOffTimerGuard:
+    """Test that activation condition handler respects clearing sensor state.
+
+    When activation conditions become met, entities transition to OCCUPIED.
+    The off-timer should only start if clearing sensors are already clear.
+    """
+
+    @pytest.fixture
+    def mock_config_entry_condition_with_clearing(self):
+        """Config with activation condition AND separate clearing sensor."""
+        entry = MagicMock()
+        entry.domain = DOMAIN
+        entry.version = 6
+        entry.data = {
+            CONF_ROOM_NAME: "Living Room",
+            CONF_PRESENCE_SENSORS: ["binary_sensor.motion"],
+            CONF_CLEARING_SENSORS: ["binary_sensor.occupancy"],
+            CONF_ACTIVATION_CONDITIONS: ["binary_sensor.lux_dark"],
+            CONF_OFF_DELAY: 1,
+            CONF_CONTROLLED_ENTITIES: [
+                {
+                    CONF_ENTITY_ID: "light.living_room",
+                    CONF_PRESENCE_DETECTED_SERVICE: DEFAULT_DETECTED_SERVICE,
+                    CONF_PRESENCE_CLEARED_SERVICE: DEFAULT_CLEARED_SERVICE,
+                    CONF_PRESENCE_DETECTED_STATE: DEFAULT_DETECTED_STATE,
+                    CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
+                    CONF_RESPECTS_PRESENCE_ALLOWED: True,
+                    CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+                    CONF_REQUIRE_VACANCY_FOR_CLEARED: DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+                    CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
+                }
+            ],
+        }
+        entry.entry_id = "test_entry_condition_clearing"
+        entry.unique_id = "Living Room"
+        entry.async_on_unload = MagicMock()
+        entry.add_update_listener = MagicMock()
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_condition_met_stays_occupied_when_clearing_active(
+        self, mock_hass, mock_config_entry_condition_with_clearing
+    ):
+        """When condition becomes true and clearing sensor is ON, entity stays OCCUPIED."""
+        mock_hass.states.set("light.living_room", STATE_OFF)
+        mock_hass.states.set("binary_sensor.motion", STATE_ON)  # room occupied
+        mock_hass.states.set("binary_sensor.occupancy", STATE_ON)  # clearing sensor active
+        mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)  # condition not met
+
+        coordinator = PresenceBasedLightingCoordinator(
+            mock_hass, mock_config_entry_condition_with_clearing
+        )
+        await coordinator.async_start()
+
+        # Trigger presence → PENDING_ACTIVATION (condition not met)
+        await coordinator._handle_presence_change(
+            _event(mock_hass, "binary_sensor.motion", STATE_OFF, STATE_ON)
+        )
+        es = coordinator._entity_states["light.living_room"]
+        assert es["state"] == EntityAutomationState.PENDING_ACTIVATION
+
+        # Now condition becomes true → OCCUPIED
+        mock_hass.services.clear()
+        await coordinator._handle_activation_condition_change(
+            _event(mock_hass, "binary_sensor.lux_dark", STATE_OFF, STATE_ON)
+        )
+        assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
+
+        # Should stay OCCUPIED (NOT CLEARING) because clearing sensor is still active
+        assert es["state"] == EntityAutomationState.OCCUPIED
+        assert es["off_timer"] is None, "Off-timer should not start while clearing sensors are active"
+
+    @pytest.mark.asyncio
+    async def test_condition_met_starts_timer_when_clearing_clear(
+        self, mock_hass, mock_config_entry_condition_with_clearing
+    ):
+        """When condition becomes true and clearing sensor is OFF, timer should start (primer case)."""
+        mock_hass.states.set("light.living_room", STATE_OFF)
+        mock_hass.states.set("binary_sensor.motion", STATE_ON)  # room occupied
+        mock_hass.states.set("binary_sensor.occupancy", STATE_OFF)  # clearing sensor clear
+        mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)  # condition not met
+
+        coordinator = PresenceBasedLightingCoordinator(
+            mock_hass, mock_config_entry_condition_with_clearing
+        )
+        await coordinator.async_start()
+
+        # Trigger presence → PENDING_ACTIVATION
+        await coordinator._handle_presence_change(
+            _event(mock_hass, "binary_sensor.motion", STATE_OFF, STATE_ON)
+        )
+
+        # Now condition becomes true → OCCUPIED → CLEARING (clearing sensor already clear)
+        mock_hass.services.clear()
+        await coordinator._handle_activation_condition_change(
+            _event(mock_hass, "binary_sensor.lux_dark", STATE_OFF, STATE_ON)
+        )
+        assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
+
+        es = coordinator._entity_states["light.living_room"]
+        assert es["state"] == EntityAutomationState.CLEARING
+        assert es["off_timer"] is not None, "Off-timer should start when clearing sensors are clear"

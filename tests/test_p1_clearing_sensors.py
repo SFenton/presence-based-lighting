@@ -1,9 +1,13 @@
 """Tests for separate trigger vs clearing sensors."""
 
+import asyncio
 import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
 
-from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting import (
+    PresenceBasedLightingCoordinator,
+    EntityAutomationState,
+)
 from tests.conftest import assert_service_called, setup_entity_states
 
 
@@ -292,3 +296,128 @@ class TestPrimerSensorScenario:
         
         # Now lights should turn off
         assert_service_called(mock_hass, "light", "turn_off", "light.office")
+
+
+class TestOccupiedDoesNotTransitionToClearingWhileSensorsActive:
+    """Test that OCCUPIED entities do NOT start the off-timer when clearing sensors are still active.
+
+    This was a bug where every presence-ON event unconditionally started the off-timer,
+    pushing the entity through OCCUPIED → CLEARING → WAITING_FOR_CLEAR → safety timeout →
+    IDLE (forced off), even though sensors never indicated absence.
+    """
+
+    @pytest.mark.asyncio
+    async def test_presence_on_stays_occupied_when_clearing_sensors_active(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        """When PIR triggers and occupancy sensor is ON, entity should stay OCCUPIED (no timer)."""
+        mock_hass.states.set("light.office", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_occupancy", STATE_ON)  # clearing sensor active
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_separate_clearing)
+        await coordinator.async_start()
+
+        # PIR triggers detected
+        mock_hass.services.clear()
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.office_pir", STATE_OFF, STATE_ON)
+        )
+        assert_service_called(mock_hass, "light", "turn_on", "light.office")
+
+        es = coordinator._entity_states["light.office"]
+        # Entity should be OCCUPIED, NOT CLEARING, because clearing sensor is still on
+        assert es["state"] == EntityAutomationState.OCCUPIED
+        assert es["off_timer"] is None, "Off-timer should not start while clearing sensors are active"
+
+    @pytest.mark.asyncio
+    async def test_presence_on_starts_timer_when_clearing_sensors_clear(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        """When PIR triggers and occupancy sensor is OFF (primer case), timer should start."""
+        mock_hass.states.set("light.office", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_occupancy", STATE_OFF)  # clearing sensor clear
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_separate_clearing)
+        await coordinator.async_start()
+
+        # PIR triggers detected
+        mock_hass.services.clear()
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.office_pir", STATE_OFF, STATE_ON)
+        )
+        assert_service_called(mock_hass, "light", "turn_on", "light.office")
+
+        es = coordinator._entity_states["light.office"]
+        # Entity should be CLEARING because clearing sensors are already clear (primer case)
+        assert es["state"] == EntityAutomationState.CLEARING
+        assert es["off_timer"] is not None, "Off-timer should start when clearing sensors are clear"
+
+    @pytest.mark.asyncio
+    async def test_same_sensor_for_presence_and_clearing_starts_timer(
+        self, mock_hass, mock_config_entry
+    ):
+        """When same sensor is used for presence AND clearing, ON event should NOT start timer.
+
+        The sensor going ON means the room is occupied. The off-timer should only start
+        when ALL clearing sensors go OFF.
+        """
+        setup_entity_states(mock_hass, lights_state="off", occupancy_state="off")
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        # Motion triggers
+        mock_hass.services.clear()
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.living_room_motion", STATE_OFF, STATE_ON)
+        )
+        assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
+
+        es = coordinator._entity_states["light.living_room"]
+        # Same sensor = presence + clearing. Sensor is ON so clearing is NOT clear.
+        # Entity should stay OCCUPIED.
+        assert es["state"] == EntityAutomationState.OCCUPIED
+        assert es["off_timer"] is None, "Off-timer should not start when the sole sensor (also clearing) is ON"
+
+    @pytest.mark.asyncio
+    async def test_continuous_presence_never_reaches_waiting_for_clear(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        """Simulate continuous presence: repeated PIR events should not push entity into CLEARING.
+
+        This is the core bug scenario: user is in the room, sensors keep firing,
+        but the entity should stay in OCCUPIED the entire time.
+        """
+        mock_hass.states.set("light.office", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_occupancy", STATE_ON)  # person in room
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_separate_clearing)
+        await coordinator.async_start()
+
+        # Initial trigger
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.office_pir", STATE_OFF, STATE_ON)
+        )
+
+        es = coordinator._entity_states["light.office"]
+        assert es["state"] == EntityAutomationState.OCCUPIED
+
+        # Simulate repeated PIR triggers (sensor goes off/on a few times)
+        for _ in range(5):
+            mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+            await coordinator._handle_presence_change(
+                _entity_event(mock_hass, "binary_sensor.office_pir", STATE_ON, STATE_OFF)
+            )
+            mock_hass.states.set("binary_sensor.office_pir", STATE_ON)
+            await coordinator._handle_presence_change(
+                _entity_event(mock_hass, "binary_sensor.office_pir", STATE_OFF, STATE_ON)
+            )
+
+            # Must never leave OCCUPIED while occupancy sensor is active
+            assert es["state"] == EntityAutomationState.OCCUPIED, (
+                f"Entity left OCCUPIED after PIR cycle, got {es['state']}"
+            )
+            assert es["off_timer"] is None, "Off-timer should never start while clearing sensors are active"

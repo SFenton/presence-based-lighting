@@ -614,10 +614,13 @@ class TestApplyActionNoAction:
 class TestPeriodicReconciliation:
     @pytest.mark.asyncio
     async def test_waiting_for_clear_safety_timeout(self):
-        """Entity stuck in WAITING_FOR_CLEAR > 5min should be forced to IDLE."""
+        """Entity stuck in WAITING_FOR_CLEAR > 5min with room empty should be forced to IDLE."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
-        entry = _make_entry()
+        entry = _make_entry(extra={
+            CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
+        })
+        hass.states.set("binary_sensor.clearing_1", STATE_ON)  # clearing sensor stuck on
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
         hass.services.clear()
@@ -627,12 +630,37 @@ class TestPeriodicReconciliation:
         coord._set_entity_state("light.living_room", es, EntityAutomationState.WAITING_FOR_CLEAR, "test")
         # Simulate long wait (> 300 seconds)
         es["state_entered_at"] = datetime.now(timezone.utc) - timedelta(seconds=400)
-        # Keep clearing sensors not clear (occupancy sensor ON means not clear, but our
-        # single sensor is also presence sensor. Let's set it to ON to be "not clear")
+        # Presence sensor OFF → room empty, clearing sensor stuck ON
+        hass.states.set("binary_sensor.living_room_motion", STATE_OFF)
+
+        await coord._periodic_reconciliation(datetime.now(timezone.utc))
+        # Room empty → forced IDLE
+        assert es["state"] == EntityAutomationState.IDLE
+
+    @pytest.mark.asyncio
+    async def test_waiting_for_clear_safety_timeout_room_occupied(self):
+        """Entity stuck in WAITING_FOR_CLEAR > 5min with room still occupied should go to OCCUPIED."""
+        hass = MockHass()
+        setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        entry = _make_entry(extra={
+            CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
+        })
+        hass.states.set("binary_sensor.clearing_1", STATE_ON)  # clearing sensor stuck on
+        coord = PresenceBasedLightingCoordinator(hass, entry)
+        await coord.async_start()
+        hass.services.clear()
+
+        es = coord._entity_states["light.living_room"]
+        # Force into WAITING_FOR_CLEAR
+        coord._set_entity_state("light.living_room", es, EntityAutomationState.WAITING_FOR_CLEAR, "test")
+        # Simulate long wait (> 300 seconds)
+        es["state_entered_at"] = datetime.now(timezone.utc) - timedelta(seconds=400)
+        # Presence sensor ON → room occupied
         hass.states.set("binary_sensor.living_room_motion", STATE_ON)
 
         await coord._periodic_reconciliation(datetime.now(timezone.utc))
-        assert es["state"] == EntityAutomationState.IDLE
+        # Room occupied → should go back to OCCUPIED, not IDLE
+        assert es["state"] == EntityAutomationState.OCCUPIED
 
     @pytest.mark.asyncio
     async def test_clearing_but_no_timer_restarts(self):
