@@ -267,6 +267,8 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 				if target_entity_id is None or entity_id == target_entity_id:
 					_LOGGER.debug("Resuming automation for %s", entity_id)
 					coordinator.set_automation_paused(entity_id, False)
+					entity_state = coordinator._entity_states[entity_id]
+					await coordinator._reconcile_entity(entity_id, entity_state)
 
 	async def handle_pause_automation(call):
 		"""Handle the pause_automation service call."""
