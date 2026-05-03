@@ -66,7 +66,7 @@
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
           "use_interceptor": "When enabled and hass-interceptor is installed, this entity will proactively block conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
-          "manual_disable_states": "When in Automatic mode, manual changes to these states will pause automation. Manual changes to any other state will resume automation. Leave empty to disable automatic re-enabling.",
+          "manual_disable_states": "When in Automatic mode, manual changes to these states will pause automation. Manual changes to any other state will resume automation. Leave empty to disable manual pause behavior.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "rlc_tracking_entity": "Select a Real Last Changed sensor that tracks this entity's state. This helps ignore spurious state changes from reboots or unavailability. Recommended sensors are marked with ⭐."
         }
@@ -184,7 +184,7 @@
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
           "use_interceptor": "When enabled and hass-interceptor is installed, this entity will proactively block conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
-          "manual_disable_states": "When in Automatic mode, manual changes to these states will pause automation. Manual changes to any other state will resume automation. Leave empty to disable automatic re-enabling.",
+          "manual_disable_states": "When in Automatic mode, manual changes to these states will pause automation. Manual changes to any other state will resume automation. Leave empty to disable manual pause behavior.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "rlc_tracking_entity": "Select a Real Last Changed sensor that tracks this entity's state. This helps ignore spurious state changes from reboots or unavailability. Recommended sensors are marked with ⭐."
         }

@@ -340,16 +340,15 @@ async def test_entryway_and_living_room_both_occupied(mock_hass):
     # Wait for Living Room timeout
     await asyncio.sleep(10.5)
     
-    # Living Room lights should turn off from LR coordinator
-    # But Entryway still has presence, so no turn-off from EW coordinator
+    # Entryway still wants the shared Living Room light on, so the LR
+    # coordinator should not clear it while another entry owns it.
     turn_off_count = len([
         c for c in mock_hass.services.calls
         if c["domain"] == "light"
         and c["service"] == "turn_off"
         and c["service_data"].get("entity_id") == "light.living_room"
     ])
-    # Should have at least one turn_off from LR coordinator
-    assert turn_off_count >= 1
+    assert turn_off_count == 0
     
     lr_coord.async_stop()
     ew_coord.async_stop()

@@ -65,7 +65,7 @@ DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED = False
 DEFAULT_REQUIRE_VACANCY_FOR_CLEARED = False
 DEFAULT_AUTOMATION_MODE = AUTOMATION_MODE_AUTOMATIC
 DEFAULT_USE_INTERCEPTOR = True  # Default to using interceptor when available
-DEFAULT_MANUAL_DISABLE_STATES = []  # Empty list means no states disable automation by default
+DEFAULT_MANUAL_DISABLE_STATES = ["off"]  # Manual off pauses automation by default
 
 # Auto re-enable defaults
 DEFAULT_AUTO_REENABLE_START_TIME = "00:00:00"  # Midnight

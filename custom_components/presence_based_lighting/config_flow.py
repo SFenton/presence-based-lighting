@@ -54,6 +54,7 @@ from .const import (
 	DEFAULT_DETECTED_STATE,
 	DEFAULT_DISABLE_ON_EXTERNAL,
 	DEFAULT_INITIAL_PRESENCE_ALLOWED,
+	DEFAULT_MANUAL_DISABLE_STATES,
 	DEFAULT_OFF_DELAY,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
@@ -390,7 +391,10 @@ class _EntityManagementMixin:
 			cleared_state = entity.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
 			respects_toggle = entity.get(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 			automation_mode = entity.get(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
-			manual_disable_states = entity.get(CONF_MANUAL_DISABLE_STATES, [])
+			manual_disable_states = entity.get(
+				CONF_MANUAL_DISABLE_STATES,
+				list(DEFAULT_MANUAL_DISABLE_STATES),
+			)
 			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
 
 			lines = [
@@ -558,7 +562,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		defaults.setdefault(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 		defaults.setdefault(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
 		defaults.setdefault(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
-		defaults.setdefault(CONF_MANUAL_DISABLE_STATES, [])
+		defaults.setdefault(CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES))
 		defaults.setdefault(CONF_RLC_TRACKING_ENTITY, None)
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
@@ -617,7 +621,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
 				
 				# Get manual_disable_states - only relevant for automatic mode
-				manual_disable_states = user_input.get(CONF_MANUAL_DISABLE_STATES, [])
+				manual_disable_states = user_input.get(
+					CONF_MANUAL_DISABLE_STATES,
+					list(DEFAULT_MANUAL_DISABLE_STATES),
+				)
 				
 				# Get RLC tracking entity (optional)
 				rlc_tracking_entity = user_input.get(CONF_RLC_TRACKING_ENTITY)
@@ -1413,7 +1420,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR
 			),
 			CONF_MANUAL_DISABLE_STATES: self._current_entity_config.get(
-				CONF_MANUAL_DISABLE_STATES, []
+				CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES)
 			),
 			CONF_RLC_TRACKING_ENTITY: self._current_entity_config.get(
 				CONF_RLC_TRACKING_ENTITY
@@ -1476,7 +1483,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
 				
 				# Get manual_disable_states - only relevant for automatic mode
-				manual_disable_states = user_input.get(CONF_MANUAL_DISABLE_STATES, [])
+				manual_disable_states = user_input.get(
+					CONF_MANUAL_DISABLE_STATES,
+					list(DEFAULT_MANUAL_DISABLE_STATES),
+				)
 				
 				# Get RLC tracking entity (optional)
 				rlc_tracking_entity = user_input.get(CONF_RLC_TRACKING_ENTITY)
