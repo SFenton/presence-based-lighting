@@ -114,7 +114,7 @@ class TestTwoBooleanInitialization:
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         
         assert coordinator.get_presence_allowed("light.test") is False
-        assert coordinator.get_automation_paused("light.test") is False
+        assert coordinator.get_automation_paused("light.test") is True
 
 
 class TestManualControlSetsAutomationPaused:
@@ -192,10 +192,12 @@ class TestPresenceAllowedOnlyChangedByUser:
         # User turns off presence_allowed
         await coordinator.async_set_presence_allowed("light.test", False)
         assert coordinator.get_presence_allowed("light.test") is False
+        assert coordinator.get_automation_paused("light.test") is True
         
         # User turns it back on
         await coordinator.async_set_presence_allowed("light.test", True)
         assert coordinator.get_presence_allowed("light.test") is True
+        assert coordinator.get_automation_paused("light.test") is False
         
         coordinator.async_stop()
 
@@ -464,7 +466,7 @@ class TestCompleteScenario:
         
         # Automation should STILL be blocked because presence_allowed is False
         assert coordinator.get_presence_allowed("light.test") is False
-        assert coordinator.get_automation_paused("light.test") is False  # Not paused
+        assert coordinator.get_automation_paused("light.test") is True
         assert coordinator._should_follow_presence(entity_state) is False  # But still blocked
         
         coordinator.async_stop()

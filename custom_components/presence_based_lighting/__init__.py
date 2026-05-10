@@ -488,13 +488,21 @@ class PresenceBasedLightingCoordinator:
 				seen_entities.add(entity_id)
 				_LOGGER.debug("Configuring entity %d: %s with config: %s", idx, entity_id, entity)
 				
+				initial_presence_allowed = entity.get(
+					CONF_INITIAL_PRESENCE_ALLOWED, DEFAULT_INITIAL_PRESENCE_ALLOWED
+				)
+				initial_state = EntityAutomationState.IDLE
+				if not initial_presence_allowed and entity.get(
+					CONF_RESPECTS_PRESENCE_ALLOWED,
+					DEFAULT_RESPECTS_PRESENCE_ALLOWED,
+				):
+					initial_state = EntityAutomationState.PAUSED
+
 				self._entity_states[entity_id] = {
 					"config": entity,
 					"domain": entity_id.split(".")[0],
-					"presence_allowed": entity.get(
-						CONF_INITIAL_PRESENCE_ALLOWED, DEFAULT_INITIAL_PRESENCE_ALLOWED
-					),
-					"state": EntityAutomationState.IDLE,
+					"presence_allowed": initial_presence_allowed,
+					"state": initial_state,
 					"state_entered_at": dt_util.utcnow(),
 					"callbacks": set(),
 					"contexts": deque(maxlen=20),
@@ -716,6 +724,23 @@ class PresenceBasedLightingCoordinator:
 
 		entity_state = self._entity_states[entity_id]
 		entity_state["presence_allowed"] = initial_state
+		if self._entity_respects_presence_allowed(entity_state):
+			if initial_state:
+				if entity_state["state"] == EntityAutomationState.PAUSED:
+					self._set_entity_state(
+						entity_id,
+						entity_state,
+						EntityAutomationState.IDLE,
+						"presence_allowed restored enabled",
+					)
+			else:
+				self._cancel_entity_timer(entity_state)
+				self._set_entity_state(
+					entity_id,
+					entity_state,
+					EntityAutomationState.PAUSED,
+					"presence_allowed restored disabled",
+				)
 		entity_state["callbacks"].add(update_callback)
 		update_callback()
 
@@ -746,11 +771,13 @@ class PresenceBasedLightingCoordinator:
 
 		if allowed:
 			# Entering automation control – reconcile to the correct state
+			if entity_state["state"] == EntityAutomationState.PAUSED:
+				self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "presence_allowed enabled")
 			await self._reconcile_entity(entity_id, entity_state)
 		else:
-			# Leaving automation control – cancel any running timer and go IDLE
+			# Leaving automation control – cancel any running timer and hold PAUSED.
 			self._cancel_entity_timer(entity_state)
-			self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "presence_allowed disabled")
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.PAUSED, "presence_allowed disabled")
 
 	def _entity_respects_presence_allowed(self, entity_state: dict) -> bool:
 		return entity_state["config"].get(
@@ -930,6 +957,9 @@ class PresenceBasedLightingCoordinator:
 			if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
 				return
 
+			if not self._presence_switch_allows_entity(entity_state):
+				return
+
 			# Determine whether this external change should pause or resume automation
 			should_pause = self._should_external_change_pause(entity_id, cfg, effective_new_state)
 
@@ -960,6 +990,9 @@ class PresenceBasedLightingCoordinator:
 			return  # Presence lock handled the state change
 
 		if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
+			return
+
+		if not self._presence_switch_allows_entity(entity_state):
 			return
 
 		# Determine whether this external action should pause or resume automation
