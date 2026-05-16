@@ -866,27 +866,8 @@ class PresenceBasedLightingCoordinator:
 			if not target:
 				return
 
-			target_entities = as_entity_list(target)
 			service = event.data.get("service")
-
-			# Expand groups and collect all target entity IDs
-			expanded_entities = []
-			for entity_id in target_entities:
-				# Skip if entity_id is not a string (could be a set or other type)
-				if not isinstance(entity_id, str):
-					_LOGGER.debug("Skipping non-string entity_id: %s (type: %s)", entity_id, type(entity_id))
-					continue
-				if entity_id in self._entity_states:
-					expanded_entities.append(entity_id)
-				else:
-					# Check if this might be a group - expand its members
-					state = self.hass.states.get(entity_id)
-					if state and state.attributes.get("entity_id"):
-						group_members = state.attributes.get("entity_id", [])
-						# group_members could be a list, set, or tuple - iterate safely
-						for member in group_members:
-							if isinstance(member, str) and member in self._entity_states:
-								expanded_entities.append(member)
+			expanded_entities = self._expand_target_entities(target)
 
 			for entity_id in expanded_entities:
 				if self._is_context_ours(entity_id, event.context):
@@ -894,6 +875,34 @@ class PresenceBasedLightingCoordinator:
 				await self._handle_external_action(entity_id, service)
 		except Exception as err:
 			_LOGGER.exception("Error handling service call event: %s", err)
+
+	def _expand_target_entities(self, target: Any) -> list[str]:
+		"""Expand service targets to controlled entities, following nested groups."""
+		matched: list[str] = []
+		seen: set[str] = set()
+		to_visit = as_entity_list(target)
+
+		while to_visit:
+			entity_id = to_visit.pop(0)
+			if not isinstance(entity_id, str):
+				_LOGGER.debug(
+					"Skipping non-string entity_id: %s (type: %s)",
+					entity_id, type(entity_id),
+				)
+				continue
+			if entity_id in seen:
+				continue
+			seen.add(entity_id)
+
+			if entity_id in self._entity_states:
+				matched.append(entity_id)
+				continue
+
+			state = self.hass.states.get(entity_id)
+			if state and state.attributes.get("entity_id"):
+				to_visit.extend(as_entity_list(state.attributes.get("entity_id")))
+
+		return matched
 
 	async def _handle_controlled_entity_change(self, event: Event) -> None:
 		try:
@@ -967,6 +976,10 @@ class PresenceBasedLightingCoordinator:
 				self.set_automation_paused(entity_id, True)
 			else:
 				self.set_automation_paused(entity_id, False)
+				if await self._ensure_external_detected_action_expires(
+					entity_id, entity_state, effective_new_state
+				):
+					return
 				# Reconcile into the correct active state
 				await self._reconcile_entity(entity_id, entity_state)
 		except Exception as err:
@@ -1002,7 +1015,48 @@ class PresenceBasedLightingCoordinator:
 			self.set_automation_paused(entity_id, True)
 		elif target_state:
 			self.set_automation_paused(entity_id, False)
+			if await self._ensure_external_detected_action_expires(
+				entity_id, entity_state, target_state
+			):
+				return
 			await self._reconcile_entity(entity_id, entity_state)
+
+	async def _ensure_external_detected_action_expires(
+		self, entity_id: str, entity_state: dict, target_state: str | None,
+	) -> bool:
+		"""Start an off timer for external turn-on actions while the room is clear.
+
+		External service calls are observed before Home Assistant applies the new
+		state.  If a broad automation turns a light on while the room is already
+		vacant, a plain reconciliation can still see the old off state and miss the
+		expiry path.  Treat the external detected state as a temporary occupied
+		period so normal clearing logic turns it back off.
+		"""
+		config = entity_state["config"]
+		if target_state != config[CONF_PRESENCE_DETECTED_STATE]:
+			return False
+
+		if not self._are_clearing_sensors_clear():
+			return False
+
+		if (
+			entity_state["state"] == EntityAutomationState.CLEARING
+			and entity_state.get("off_timer") is not None
+		):
+			_LOGGER.debug(
+				"[%s] External detected action while sensors clear; existing off timer remains active",
+				entity_id,
+			)
+			return True
+
+		self._set_entity_state(
+			entity_id,
+			entity_state,
+			EntityAutomationState.OCCUPIED,
+			"external detected action while sensors clear",
+		)
+		await self._start_entity_off_timer(entity_id, entity_state)
+		return True
 
 	async def _check_and_apply_presence_lock(
 		self, entity_state: dict, new_state: str, force_fallback: bool = False

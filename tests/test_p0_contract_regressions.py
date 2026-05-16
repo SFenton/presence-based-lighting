@@ -323,6 +323,46 @@ async def test_presence_lock_fallback_still_protects_group_targets_with_intercep
 
 
 @pytest.mark.asyncio
+async def test_external_group_turn_on_in_empty_room_expires_even_before_state_update(
+    mock_hass,
+):
+    """Alarm-style grouped turn_on calls should not leave vacant rooms lit."""
+    entry = _entry(
+        entry_id="alarm_recovery_entry",
+        room_name="Living Room",
+        presence_sensor="binary_sensor.living_room_motion",
+        controlled_entity="light.living_room",
+        off_delay=0,
+        manual_disable_states=[STATE_OFF],
+    )
+    mock_hass.states.set("light.living_room", STATE_OFF)
+    mock_hass.states.set("binary_sensor.living_room_motion", STATE_OFF)
+    mock_hass.states.set(
+        "light.lights",
+        STATE_ON,
+        attributes={"entity_id": ["light.downstairs"]},
+    )
+    mock_hass.states.set(
+        "light.downstairs",
+        STATE_ON,
+        attributes={"entity_id": ["light.living_room"]},
+    )
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    await coordinator.async_start()
+
+    try:
+        mock_hass.services.clear()
+
+        await coordinator._handle_service_call(_service_event("light.lights", "turn_on"))
+        mock_hass.states.set("light.living_room", STATE_ON)
+        await asyncio.sleep(0.05)
+
+        assert_service_called(mock_hass, "light", "turn_off", "light.living_room")
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
 async def test_missing_rlc_tracking_entity_falls_back_to_direct_manual_state(
     mock_hass,
 ):
