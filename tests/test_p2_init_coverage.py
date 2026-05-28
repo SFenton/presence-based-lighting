@@ -634,8 +634,8 @@ class TestPeriodicReconciliation:
         hass.states.set("binary_sensor.living_room_motion", STATE_OFF)
 
         await coord._periodic_reconciliation(datetime.now(timezone.utc))
-        # Room empty → forced IDLE
-        assert es["state"] == EntityAutomationState.IDLE
+        # Room empty → forced cleared actuation; IDLE waits for command confirmation.
+        assert es["state"] == EntityAutomationState.SETTLING_OFF
 
     @pytest.mark.asyncio
     async def test_waiting_for_clear_safety_timeout_room_occupied(self):

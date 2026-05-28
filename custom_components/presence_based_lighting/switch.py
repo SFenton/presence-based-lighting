@@ -126,13 +126,15 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
 
     @property
     def extra_state_attributes(self):
-        return {
+        attributes = {
             "controlled_entity": self._entity_id,
             CONF_RESPECTS_PRESENCE_ALLOWED: self._entity_config[CONF_RESPECTS_PRESENCE_ALLOWED],
             CONF_DISABLE_ON_EXTERNAL_CONTROL: self._entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL],
             "automation_paused": self._coordinator.get_automation_paused(self._entity_id),
             "automation_state": self._coordinator.get_entity_automation_state(self._entity_id),
         }
+        attributes.update(self._coordinator.get_entity_control_state(self._entity_id))
+        return attributes
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()

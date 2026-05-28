@@ -115,13 +115,49 @@ class EntityAutomationState(Enum):
 	PENDING_ACTIVATION = "pending_activation"
 	CLEARING = "clearing"
 	WAITING_FOR_CLEAR = "waiting_for_clear"
+	SETTLING_OFF = "settling_off"
+	SETTLING_ON = "settling_on"
 	PAUSED = "paused"
+
+
+class DesiredState(Enum):
+	"""Logical desired state for a controlled entity."""
+
+	DETECTED = "detected"
+	CLEARED = "cleared"
+	NONE = "none"
+
+
+class IntentReason(Enum):
+	"""Reason PBL currently wants or does not want to control an entity."""
+
+	PRESENCE = "presence"
+	CLEARING = "clearing"
+	PAUSED = "paused"
+	DISABLED = "disabled"
+	OWNERSHIP = "ownership"
+	CONDITIONS = "conditions"
+	NO_ACTION = "no_action"
+	NONE = "none"
+
+
+class ActuationStatus(Enum):
+	"""Closed-loop command status for a controlled entity."""
+
+	IDLE = "idle"
+	PENDING = "pending"
+	CONFIRMED = "confirmed"
+	FAILED = "failed"
+	CANCELED = "canceled"
 
 
 # Reconciliation interval – safety-net that catches any inconsistency
 _RECONCILIATION_INTERVAL = timedelta(seconds=60)
 # Maximum time an entity can stay in WAITING_FOR_CLEAR before forced IDLE
 _WAITING_FOR_CLEAR_MAX_SECONDS = 300  # 5 minutes
+_ACTUATION_CONFIRMATION_SECONDS = 2
+_ACTUATION_RETRY_DELAY_SECONDS = 1
+_ACTUATION_MAX_ATTEMPTS = 3
 
 # Persistent debug log file (uncapped)
 _log_file_handler: logging.FileHandler | None = None
@@ -507,6 +543,8 @@ class PresenceBasedLightingCoordinator:
 					"callbacks": set(),
 					"contexts": deque(maxlen=20),
 					"off_timer": None,
+					"intent": self._new_entity_intent(),
+					"actuation": self._new_actuation_state(),
 					"last_effective_state": None,  # Track RLC effective state for change detection
 				}
 				self._ownership_manager.register_entity(self.entry.entry_id, entity_id)
@@ -525,6 +563,30 @@ class PresenceBasedLightingCoordinator:
 		minute = int(parts[1]) if len(parts) > 1 else 0
 		second = int(parts[2]) if len(parts) > 2 else 0
 		return time(hour=hour, minute=minute, second=second)
+
+	def _new_entity_intent(self) -> dict:
+		return {
+			"desired": DesiredState.NONE,
+			"target_state": None,
+			"service_key": None,
+			"reason": IntentReason.NONE,
+			"authority": False,
+			"force": False,
+			"updated_at": dt_util.utcnow(),
+		}
+
+	def _new_actuation_state(self) -> dict:
+		return {
+			"status": ActuationStatus.IDLE,
+			"target_state": None,
+			"service_key": None,
+			"context_ids": deque(maxlen=10),
+			"attempts": 0,
+			"timer": None,
+			"last_observed_state": None,
+			"last_error": None,
+			"updated_at": dt_util.utcnow(),
+		}
 
 	async def async_start(self) -> None:
 		"""Begin tracking sensors and controlled entities."""
@@ -701,6 +763,7 @@ class PresenceBasedLightingCoordinator:
 					entity_state["off_timer"].cancel()
 					entity_state["off_timer"] = None
 					cancelled_count += 1
+				self._cancel_entity_actuation(entity_state, "coordinator stopped")
 			
 			if cancelled_count > 0:
 				_LOGGER.debug("Cancelled %d per-entity off timers", cancelled_count)
@@ -756,6 +819,392 @@ class PresenceBasedLightingCoordinator:
 		"""Return the current state machine state as a string for UI display."""
 		return self._entity_states[entity_id]["state"].value
 
+	def get_entity_control_state(self, entity_id: str) -> dict:
+		"""Return intent and actuator details for diagnostics/UI attributes."""
+		entity_state = self._entity_states[entity_id]
+		intent = entity_state["intent"]
+		actuation = entity_state["actuation"]
+		return {
+			"desired_state": intent["desired"].value,
+			"desired_target_state": intent["target_state"],
+			"intent_reason": intent["reason"].value,
+			"intent_authority": intent["authority"],
+			"actuation_status": actuation["status"].value,
+			"actuation_target_state": actuation["target_state"],
+			"actuation_attempts": actuation["attempts"],
+			"actuation_last_observed_state": actuation["last_observed_state"],
+			"actuation_last_error": actuation["last_error"],
+		}
+
+	def _set_entity_intent(
+		self,
+		entity_id: str,
+		entity_state: dict,
+		desired: DesiredState,
+		service_key: str | None,
+		target_state: str | None,
+		reason: IntentReason,
+		authority: bool,
+		force: bool = False,
+	) -> dict:
+		intent = entity_state["intent"]
+		intent.update(
+			{
+				"desired": desired,
+				"service_key": service_key,
+				"target_state": target_state,
+				"reason": reason,
+				"authority": authority,
+				"force": force,
+				"updated_at": dt_util.utcnow(),
+			}
+		)
+		_LOGGER.debug(
+			"[%s] intent desired=%s target=%s reason=%s authority=%s",
+			entity_id,
+			desired.value,
+			target_state,
+			reason.value,
+			authority,
+		)
+		self._notify_switch(entity_id)
+		return intent
+
+	def _intent_for_service(
+		self, entity_id: str, entity_state: dict, service_key: str, reason: IntentReason,
+		force: bool = False,
+	) -> dict:
+		config = entity_state["config"]
+		if service_key == CONF_PRESENCE_DETECTED_SERVICE:
+			desired = DesiredState.DETECTED
+			target_state = config[CONF_PRESENCE_DETECTED_STATE]
+		else:
+			desired = DesiredState.CLEARED
+			target_state = config[CONF_PRESENCE_CLEARED_STATE]
+
+		authority = True
+		intent_reason = reason
+		if config[service_key] == NO_ACTION:
+			authority = False
+			intent_reason = IntentReason.NO_ACTION
+		elif not self._presence_switch_allows_entity(entity_state):
+			authority = False
+			intent_reason = IntentReason.DISABLED
+		elif entity_state["state"] == EntityAutomationState.PAUSED:
+			authority = False
+			intent_reason = IntentReason.PAUSED
+		elif (
+			service_key == CONF_PRESENCE_CLEARED_SERVICE
+			and self._ownership_manager.other_entry_wants_on(self.entry.entry_id, entity_id)
+		):
+			authority = False
+			intent_reason = IntentReason.OWNERSHIP
+
+		return self._set_entity_intent(
+			entity_id,
+			entity_state,
+			desired,
+			service_key,
+			target_state,
+			intent_reason,
+			authority,
+			force,
+		)
+
+	async def _apply_service_intent(
+		self, entity_id: str, entity_state: dict, service_key: str, reason: IntentReason,
+		force: bool = False,
+	) -> bool:
+		intent = self._intent_for_service(entity_id, entity_state, service_key, reason, force)
+		return await self._apply_intent(entity_id, entity_state, intent)
+
+	async def _apply_intent(self, entity_id: str, entity_state: dict, intent: dict) -> bool:
+		if not intent["authority"] or not intent["service_key"]:
+			self._cancel_entity_actuation(entity_state, intent["reason"].value)
+			if (
+				intent["desired"] == DesiredState.CLEARED
+				and intent["reason"] in (IntentReason.OWNERSHIP, IntentReason.NO_ACTION)
+			):
+				self._set_entity_state(
+					entity_id,
+					entity_state,
+					EntityAutomationState.IDLE,
+					f"cleared intent suppressed: {intent['reason'].value}",
+				)
+			return False
+
+		actuation = entity_state["actuation"]
+		if (
+			actuation["status"] == ActuationStatus.PENDING
+			and actuation["target_state"] == intent["target_state"]
+			and actuation["service_key"] == intent["service_key"]
+		):
+			if intent["desired"] == DesiredState.CLEARED and entity_state["state"] != EntityAutomationState.SETTLING_OFF:
+				self._set_entity_state(entity_id, entity_state, EntityAutomationState.SETTLING_OFF, "pending cleared intent")
+			return True
+
+		await self._begin_entity_actuation(entity_id, entity_state, intent)
+		return True
+
+	async def _begin_entity_actuation(self, entity_id: str, entity_state: dict, intent: dict) -> None:
+		config = entity_state["config"]
+		service_key = intent["service_key"]
+		target_state = intent["target_state"]
+
+		self._cancel_entity_actuation(entity_state, "new intent")
+		actuation = entity_state["actuation"]
+		actuation.update(
+			{
+				"status": ActuationStatus.PENDING,
+				"target_state": target_state,
+				"service_key": service_key,
+				"context_ids": deque(maxlen=10),
+				"attempts": 0,
+				"last_observed_state": None,
+				"last_error": None,
+				"updated_at": dt_util.utcnow(),
+			}
+		)
+
+		if service_key == CONF_PRESENCE_CLEARED_SERVICE:
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.SETTLING_OFF, "actuating cleared intent")
+		elif entity_state["state"] == EntityAutomationState.IDLE:
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.SETTLING_ON, "actuating detected intent")
+
+		current_state = self.hass.states.get(entity_id)
+		if current_state and current_state.state == target_state:
+			self._confirm_entity_actuation(entity_id, entity_state, target_state)
+			return
+
+		if config[service_key] == NO_ACTION:
+			self._confirm_entity_actuation(entity_id, entity_state, target_state)
+			return
+
+		await self._send_entity_actuation_attempt(entity_id, entity_state)
+
+	def _actuation_target_is_still_valid(self, entity_id: str, entity_state: dict) -> bool:
+		intent = entity_state["intent"]
+		actuation = entity_state["actuation"]
+		if not intent["authority"]:
+			return False
+		if intent["target_state"] != actuation["target_state"]:
+			return False
+		if intent["service_key"] != actuation["service_key"]:
+			return False
+		if entity_state["state"] == EntityAutomationState.PAUSED:
+			return False
+		if not self._presence_switch_allows_entity(entity_state):
+			return False
+		if intent["desired"] == DesiredState.CLEARED:
+			if self._ownership_manager.other_entry_wants_on(self.entry.entry_id, entity_id):
+				return False
+			if not intent.get("force") and not self._are_clearing_sensors_clear():
+				return False
+		elif intent["desired"] == DesiredState.DETECTED:
+			if not self._is_any_occupied() or not self._are_activation_conditions_met():
+				return False
+		return True
+
+	def _cancel_actuation_timer(self, entity_state: dict) -> None:
+		actuation = entity_state["actuation"]
+		timer = actuation.get("timer")
+		if timer is not None:
+			timer.cancel()
+			actuation["timer"] = None
+
+	def _cancel_entity_actuation(self, entity_state: dict, reason: str) -> None:
+		actuation = entity_state["actuation"]
+		self._cancel_actuation_timer(entity_state)
+		if actuation["status"] == ActuationStatus.PENDING:
+			_LOGGER.debug(
+				"[%s] actuation canceled: %s",
+				entity_state["config"].get(CONF_ENTITY_ID, "unknown"),
+				reason,
+			)
+		actuation.update(
+			{
+				"status": ActuationStatus.CANCELED,
+				"target_state": None,
+				"service_key": None,
+				"attempts": 0,
+				"last_error": reason,
+				"updated_at": dt_util.utcnow(),
+			}
+		)
+
+	def _schedule_actuation_timer(self, entity_id: str, entity_state: dict, delay: float, retry: bool) -> None:
+		self._cancel_actuation_timer(entity_state)
+		if retry:
+			task = asyncio.create_task(self._execute_actuation_retry_timer(entity_id, entity_state, delay))
+		else:
+			task = asyncio.create_task(self._execute_actuation_confirmation_timer(entity_id, entity_state, delay))
+		entity_state["actuation"]["timer"] = task
+
+	async def _execute_actuation_confirmation_timer(
+		self, entity_id: str, entity_state: dict, delay: float,
+	) -> None:
+		this_task = asyncio.current_task()
+		try:
+			await asyncio.sleep(delay)
+			actuation = entity_state["actuation"]
+			if actuation["status"] != ActuationStatus.PENDING:
+				return
+			current_state = self.hass.states.get(entity_id)
+			observed = current_state.state if current_state else None
+			actuation["last_observed_state"] = observed
+			if observed == actuation["target_state"]:
+				self._confirm_entity_actuation(entity_id, entity_state, observed)
+			else:
+				await self._retry_or_fail_entity_actuation(entity_id, entity_state, observed)
+		except asyncio.CancelledError:
+			_LOGGER.debug("[%s] Actuation confirmation timer cancelled", entity_id)
+		except Exception as err:
+			_LOGGER.exception("[%s] Error in actuation confirmation timer: %s", entity_id, err)
+		finally:
+			if entity_state["actuation"].get("timer") is this_task:
+				entity_state["actuation"]["timer"] = None
+
+	async def _execute_actuation_retry_timer(
+		self, entity_id: str, entity_state: dict, delay: float,
+	) -> None:
+		this_task = asyncio.current_task()
+		try:
+			await asyncio.sleep(delay)
+			await self._send_entity_actuation_attempt(entity_id, entity_state)
+		except asyncio.CancelledError:
+			_LOGGER.debug("[%s] Actuation retry timer cancelled", entity_id)
+		except Exception as err:
+			_LOGGER.exception("[%s] Error in actuation retry timer: %s", entity_id, err)
+		finally:
+			if entity_state["actuation"].get("timer") is this_task:
+				entity_state["actuation"]["timer"] = None
+
+	async def _send_entity_actuation_attempt(self, entity_id: str, entity_state: dict) -> None:
+		actuation = entity_state["actuation"]
+		if actuation["status"] != ActuationStatus.PENDING:
+			return
+
+		if not self._actuation_target_is_still_valid(entity_id, entity_state):
+			self._cancel_entity_actuation(entity_state, "intent no longer valid")
+			return
+
+		current_state = self.hass.states.get(entity_id)
+		observed = current_state.state if current_state else None
+		actuation["last_observed_state"] = observed
+		if observed == actuation["target_state"]:
+			self._schedule_actuation_timer(entity_id, entity_state, _ACTUATION_CONFIRMATION_SECONDS, retry=False)
+			return
+
+		if actuation["attempts"] >= _ACTUATION_MAX_ATTEMPTS:
+			self._fail_entity_actuation(entity_id, entity_state, observed)
+			return
+
+		config = entity_state["config"]
+		service_key = actuation["service_key"]
+		service = config[service_key]
+		context = Context()
+		entity_state["contexts"].append(context.id)
+		actuation["context_ids"].append(context.id)
+		actuation["attempts"] += 1
+		actuation["updated_at"] = dt_util.utcnow()
+		if not config.get(CONF_RLC_TRACKING_ENTITY):
+			entity_state["last_effective_state"] = actuation["target_state"]
+
+		_LOGGER.debug(
+			"Calling service %s.%s for entity %s (actuation attempt %d/%d, target=%s)",
+			entity_state["domain"],
+			service,
+			entity_id,
+			actuation["attempts"],
+			_ACTUATION_MAX_ATTEMPTS,
+			actuation["target_state"],
+		)
+		await self.hass.services.async_call(
+			entity_state["domain"],
+			service,
+			{"entity_id": entity_id},
+			blocking=True,
+			context=context,
+		)
+		_LOGGER.debug("Service call completed for %s", entity_id)
+		self._schedule_actuation_timer(entity_id, entity_state, _ACTUATION_CONFIRMATION_SECONDS, retry=False)
+
+	async def _handle_actuation_feedback(
+		self, entity_id: str, entity_state: dict, observed_state: str,
+	) -> None:
+		actuation = entity_state["actuation"]
+		actuation["last_observed_state"] = observed_state
+		actuation["updated_at"] = dt_util.utcnow()
+		if actuation["status"] != ActuationStatus.PENDING:
+			return
+		if observed_state == actuation["target_state"]:
+			_LOGGER.debug(
+				"[%s] Actuation observed target state %s; waiting for confirmation window",
+				entity_id,
+				observed_state,
+			)
+			return
+		await self._retry_or_fail_entity_actuation(entity_id, entity_state, observed_state)
+
+	async def _retry_or_fail_entity_actuation(
+		self, entity_id: str, entity_state: dict, observed_state: str | None,
+	) -> None:
+		actuation = entity_state["actuation"]
+		if not self._actuation_target_is_still_valid(entity_id, entity_state):
+			self._cancel_entity_actuation(entity_state, "intent no longer valid")
+			return
+		if actuation["attempts"] >= _ACTUATION_MAX_ATTEMPTS:
+			self._fail_entity_actuation(entity_id, entity_state, observed_state)
+			return
+		_LOGGER.debug(
+			"[%s] Actuation target %s not converged (observed %s); scheduling retry %d/%d",
+			entity_id,
+			actuation["target_state"],
+			observed_state,
+			actuation["attempts"] + 1,
+			_ACTUATION_MAX_ATTEMPTS,
+		)
+		self._schedule_actuation_timer(entity_id, entity_state, _ACTUATION_RETRY_DELAY_SECONDS, retry=True)
+
+	def _confirm_entity_actuation(self, entity_id: str, entity_state: dict, observed_state: str | None) -> None:
+		actuation = entity_state["actuation"]
+		self._cancel_actuation_timer(entity_state)
+		service_key = actuation["service_key"]
+		actuation.update(
+			{
+				"status": ActuationStatus.CONFIRMED,
+				"last_observed_state": observed_state,
+				"last_error": None,
+				"updated_at": dt_util.utcnow(),
+			}
+		)
+		_LOGGER.debug("[%s] Actuation confirmed target=%s", entity_id, actuation["target_state"])
+		if service_key == CONF_PRESENCE_CLEARED_SERVICE:
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "actuation confirmed cleared")
+		elif service_key == CONF_PRESENCE_DETECTED_SERVICE and entity_state["state"] == EntityAutomationState.SETTLING_ON:
+			self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "actuation confirmed detected")
+		self._notify_switch(entity_id)
+
+	def _fail_entity_actuation(
+		self, entity_id: str, entity_state: dict, observed_state: str | None,
+	) -> None:
+		actuation = entity_state["actuation"]
+		self._cancel_actuation_timer(entity_state)
+		message = (
+			f"target {actuation['target_state']} did not converge "
+			f"after {actuation['attempts']} attempts; observed {observed_state}"
+		)
+		actuation.update(
+			{
+				"status": ActuationStatus.FAILED,
+				"last_observed_state": observed_state,
+				"last_error": message,
+				"updated_at": dt_util.utcnow(),
+			}
+		)
+		_LOGGER.warning("[%s] Actuation failed: %s", entity_id, message)
+		self._notify_switch(entity_id)
+
 	async def async_set_presence_allowed(self, entity_id: str, allowed: bool) -> None:
 		"""Set user-controlled presence_allowed state (persisted by switch)."""
 		entity_state = self._entity_states[entity_id]
@@ -777,6 +1226,7 @@ class PresenceBasedLightingCoordinator:
 		else:
 			# Leaving automation control – cancel any running timer and hold PAUSED.
 			self._cancel_entity_timer(entity_state)
+			self._cancel_entity_actuation(entity_state, "presence_allowed disabled")
 			self._set_entity_state(entity_id, entity_state, EntityAutomationState.PAUSED, "presence_allowed disabled")
 
 	def _entity_respects_presence_allowed(self, entity_state: dict) -> bool:
@@ -847,6 +1297,7 @@ class PresenceBasedLightingCoordinator:
 		
 		if paused:
 			self._cancel_entity_timer(entity_state)
+			self._cancel_entity_actuation(entity_state, "manual control")
 			self._set_entity_state(entity_id, entity_state, EntityAutomationState.PAUSED, "manual control")
 		else:
 			_LOGGER.debug("Automation resumed for %s, will reconcile state", entity_id)
@@ -915,11 +1366,9 @@ class PresenceBasedLightingCoordinator:
 			if not new_state or not old_state or new_state.state == old_state.state:
 				return
 
-			if self._is_context_ours(entity_id, new_state.context):
-				return
-
 			entity_state = self._entity_states[entity_id]
 			cfg = entity_state["config"]
+			is_our_context = self._is_context_ours(entity_id, new_state.context)
 
 			# Check if an RLC tracking entity is configured for this entity
 			# If so, use the RLC sensor's state to determine if this is a "real" change
@@ -945,6 +1394,9 @@ class PresenceBasedLightingCoordinator:
 						)
 						return
 					if effective_new_state == last_effective:
+						if is_our_context:
+							await self._handle_actuation_feedback(entity_id, entity_state, new_state.state)
+							return
 						_LOGGER.debug(
 							"RLC tracking entity %s for %s: effective state unchanged (%s), ignoring",
 							rlc_tracking_entity, entity_id, effective_new_state
@@ -958,6 +1410,10 @@ class PresenceBasedLightingCoordinator:
 			else:
 				# No RLC tracking - use the entity's direct state
 				effective_new_state = new_state.state
+
+			if is_our_context:
+				await self._handle_actuation_feedback(entity_id, entity_state, effective_new_state)
+				return
 
 			# Check presence lock first - this takes priority
 			if await self._check_and_apply_presence_lock(entity_state, effective_new_state):
@@ -1186,12 +1642,14 @@ class PresenceBasedLightingCoordinator:
 						EntityAutomationState.IDLE,
 						EntityAutomationState.CLEARING,
 						EntityAutomationState.WAITING_FOR_CLEAR,
+						EntityAutomationState.SETTLING_OFF,
 						EntityAutomationState.PENDING_ACTIVATION,
 					):
 						self._cancel_entity_timer(es)
+						self._cancel_entity_actuation(es, "presence detected")
 						if self._are_activation_conditions_met():
 							self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "presence detected")
-							await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
+							await self._apply_service_intent(eid, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
 						else:
 							self._set_entity_state(eid, es, EntityAutomationState.PENDING_ACTIVATION, "presence detected, conditions not met")
 				# Start off-timer for OCCUPIED entities ONLY if clearing sensors
@@ -1220,12 +1678,10 @@ class PresenceBasedLightingCoordinator:
 								# Sensors finally cleared – turn off immediately
 								_LOGGER.debug("%s: sensors cleared while WAITING_FOR_CLEAR, turning off", eid)
 								self._cancel_entity_timer(es)
-								self._set_entity_state(eid, es, EntityAutomationState.IDLE, "clearing sensors cleared (was waiting)")
-								await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+								await self._apply_service_intent(eid, es, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 							elif cur == EntityAutomationState.PENDING_ACTIVATION:
 								# Room emptied while waiting for conditions – turn off if light was on
-								self._set_entity_state(eid, es, EntityAutomationState.IDLE, "room emptied while pending")
-								await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+								await self._apply_service_intent(eid, es, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 		except Exception as err:
 			_LOGGER.exception("Error handling presence change: %s", err)
 
@@ -1266,7 +1722,7 @@ class PresenceBasedLightingCoordinator:
 					)
 					self._cancel_entity_timer(es)
 					self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "activation conditions met")
-					await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
+					await self._apply_service_intent(eid, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.CONDITIONS)
 			
 			# Start off-timer for newly-OCCUPIED entities ONLY if clearing
 			# sensors are already clear (same primer-sensor guard as in
@@ -1286,12 +1742,14 @@ class PresenceBasedLightingCoordinator:
 		_LOGGER.debug("Applying presence action %s to %d entities: %s", 
 					 service_key, len(self._entity_states), list(self._entity_states.keys()))
 		
-		for entity_state in self._entity_states.values():
+		for entity_id, entity_state in self._entity_states.items():
 			entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 			if not self._should_follow_presence(entity_state):
 				_LOGGER.debug("Skipping %s - not following presence", entity_id)
 				continue
-			await self._apply_action_to_entity(entity_state, service_key)
+			reason = IntentReason.PRESENCE if service_key == CONF_PRESENCE_DETECTED_SERVICE else IntentReason.CLEARING
+			self._cancel_entity_actuation(entity_state, "bulk presence action")
+			await self._apply_service_intent(entity_id, entity_state, service_key, reason)
 
 	async def _apply_action_to_entity(self, entity_state: dict, service_key: str) -> None:
 		try:
@@ -1475,9 +1933,8 @@ class PresenceBasedLightingCoordinator:
 			await asyncio.sleep(delay)
 
 			if self._are_clearing_sensors_clear():
-				_LOGGER.debug("[%s] Timer fired, clearing sensors clear → IDLE", entity_id)
-				self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "timer fired, sensors clear")
-				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
+				_LOGGER.debug("[%s] Timer fired, clearing sensors clear → cleared intent", entity_id)
+				await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 			else:
 				_LOGGER.debug(
 					"[%s] Timer fired, clearing sensors NOT all clear → WAITING_FOR_CLEAR",
@@ -1516,6 +1973,7 @@ class PresenceBasedLightingCoordinator:
 			EntityAutomationState.OCCUPIED,
 			EntityAutomationState.CLEARING,
 			EntityAutomationState.WAITING_FOR_CLEAR,
+			EntityAutomationState.SETTLING_ON,
 		)
 		self._ownership_manager.set_desired_on(self.entry.entry_id, entity_id, desired_on)
 		_LOGGER.debug(
@@ -1569,10 +2027,11 @@ class PresenceBasedLightingCoordinator:
 		clearing_clear = self._are_clearing_sensors_clear()
 
 		if occupied and conditions_met:
-			if cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING):
+			if cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING, EntityAutomationState.SETTLING_ON):
 				self._cancel_entity_timer(entity_state)
+				self._cancel_entity_actuation(entity_state, "reconcile occupied")
 				self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: occupied + conditions met")
-				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
+				await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
 				# If clearing sensors are already clear, start timer immediately
 				if clearing_clear:
 					await self._start_entity_off_timer(entity_id, entity_state)
@@ -1581,8 +2040,9 @@ class PresenceBasedLightingCoordinator:
 			# (conditions only gate *turning on*, not maintaining current state)
 			current_ha_state = self.hass.states.get(entity_state["config"][CONF_ENTITY_ID])
 			light_is_on = current_ha_state and current_ha_state.state == entity_state["config"].get(CONF_PRESENCE_DETECTED_STATE, "on")
-			if light_is_on and cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING):
+			if light_is_on and cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING, EntityAutomationState.SETTLING_ON):
 				self._cancel_entity_timer(entity_state)
+				self._cancel_entity_actuation(entity_state, "reconcile occupied light on")
 				self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: occupied, light already on")
 				if clearing_clear:
 					await self._start_entity_off_timer(entity_id, entity_state)
@@ -1591,19 +2051,19 @@ class PresenceBasedLightingCoordinator:
 				self._set_entity_state(entity_id, entity_state, EntityAutomationState.PENDING_ACTIVATION, "reconcile: occupied, conditions not met")
 		else:
 			# Room is empty
-			if cur in (EntityAutomationState.OCCUPIED, EntityAutomationState.PENDING_ACTIVATION):
+			if cur in (EntityAutomationState.OCCUPIED, EntityAutomationState.PENDING_ACTIVATION, EntityAutomationState.SETTLING_ON):
 				# Start off-timer to turn off after delay
-				if cur == EntityAutomationState.OCCUPIED:
+				if cur in (EntityAutomationState.OCCUPIED, EntityAutomationState.SETTLING_ON):
 					await self._start_entity_off_timer(entity_id, entity_state)
 				else:
-					self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "reconcile: room empty")
+					await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 			elif cur == EntityAutomationState.WAITING_FOR_CLEAR and clearing_clear:
 				self._cancel_entity_timer(entity_state)
-				self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "reconcile: sensors cleared")
-				await self._apply_action_to_entity(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
+				await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 			elif cur == EntityAutomationState.IDLE:
 				# Check if light is still on despite room being empty (e.g., after
-				# re-enabling presence_allowed). Start off-timer so it gets turned off.
+				# re-enabling presence_allowed). Start the normal off-timer so startup
+				# reconciliation keeps the configured delay semantics.
 				current_ha_state = self.hass.states.get(entity_state["config"][CONF_ENTITY_ID])
 				detected_state = entity_state["config"].get(CONF_PRESENCE_DETECTED_STATE, "on")
 				if current_ha_state and current_ha_state.state == detected_state and clearing_clear:
@@ -1632,8 +2092,7 @@ class PresenceBasedLightingCoordinator:
 							entity_id,
 						)
 						self._cancel_entity_timer(es)
-						self._set_entity_state(entity_id, es, EntityAutomationState.IDLE, "reconciliation: sensors cleared")
-						await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+						await self._apply_service_intent(entity_id, es, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 					else:
 						# Check if we've been waiting too long
 						entered = es.get("state_entered_at")
@@ -1647,14 +2106,13 @@ class PresenceBasedLightingCoordinator:
 									entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
 								)
 								self._set_entity_state(entity_id, es, EntityAutomationState.OCCUPIED, "reconciliation: safety timeout but still occupied")
-								await self._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
+								await self._apply_service_intent(entity_id, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
 							else:
 								_LOGGER.warning(
 									"[%s] WAITING_FOR_CLEAR for >%ds, forcing IDLE (clearing sensors still not all clear)",
 									entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
 								)
-								self._set_entity_state(entity_id, es, EntityAutomationState.IDLE, "reconciliation: safety timeout")
-								await self._apply_action_to_entity(es, CONF_PRESENCE_CLEARED_SERVICE)
+								await self._apply_service_intent(entity_id, es, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING, force=True)
 
 				# CLEARING but timer somehow lost
 				elif cur == EntityAutomationState.CLEARING and es.get("off_timer") is None:
@@ -1681,6 +2139,15 @@ class PresenceBasedLightingCoordinator:
 							entity_id,
 						)
 						await self._reconcile_entity(entity_id, es)
+					elif self._are_clearing_sensors_clear():
+						current_state = self.hass.states.get(entity_id)
+						detected_state = es["config"].get(CONF_PRESENCE_DETECTED_STATE, STATE_ON)
+						if current_state and current_state.state == detected_state:
+							_LOGGER.info(
+								"[%s] Reconciliation: IDLE but entity still on + room clear → cleared intent",
+								entity_id,
+							)
+							await self._apply_service_intent(entity_id, es, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 
 				# PENDING but conditions are actually met
 				elif cur == EntityAutomationState.PENDING_ACTIVATION:
@@ -1759,6 +2226,12 @@ class PresenceBasedLightingCoordinator:
 			if path.exists():
 				await self.hass.async_add_executor_job(path.unlink)
 				_LOGGER.debug("Cleared persisted tracking state")
+			tracking = self._auto_reenable_tracking
+			tracking["is_tracking"] = False
+			tracking["window_start"] = None
+			tracking["occupied_seconds"] = 0.0
+			tracking["last_presence_change"] = None
+			tracking["was_occupied"] = False
 		except Exception as err:
 			_LOGGER.debug("Failed to clear tracking state: %s", err)
 

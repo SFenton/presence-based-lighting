@@ -20,6 +20,7 @@ from custom_components.presence_based_lighting import (
     _emit_direct_to_file,
     _setup_file_logging,
     EntityAutomationState,
+    ActuationStatus,
     _RECONCILIATION_INTERVAL,
     _WAITING_FOR_CLEAR_MAX_SECONDS,
 )
@@ -1170,7 +1171,7 @@ class TestReconcileEntityPaths:
 
     @pytest.mark.asyncio
     async def test_reconcile_waiting_for_clear_sensors_cleared(self):
-        """Lines 1535-1537: WAITING_FOR_CLEAR + room empty + sensors clear → IDLE."""
+        """WAITING_FOR_CLEAR + room empty + sensors clear starts cleared actuation."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         entry = _make_entry()
@@ -1183,7 +1184,7 @@ class TestReconcileEntityPaths:
         hass.services.clear()
         await coord._reconcile_entity("light.living_room", es)
 
-        assert es["state"] == EntityAutomationState.IDLE
+        assert es["state"] == EntityAutomationState.SETTLING_OFF
         found = any(c["service"] == "turn_off" for c in hass.services.calls)
         assert found
 
@@ -1213,7 +1214,7 @@ class TestPeriodicReconciliationPaths:
 
     @pytest.mark.asyncio
     async def test_reconciliation_waiting_for_clear_sensors_clear(self):
-        """Lines 1564-1570: WAITING_FOR_CLEAR but sensors are clear → IDLE."""
+        """WAITING_FOR_CLEAR but sensors are clear starts cleared actuation."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         entry = _make_entry()
@@ -1228,7 +1229,7 @@ class TestPeriodicReconciliationPaths:
         hass.services.clear()
         await coord._periodic_reconciliation(None)
 
-        assert es["state"] == EntityAutomationState.IDLE
+        assert es["state"] == EntityAutomationState.SETTLING_OFF
 
     @pytest.mark.asyncio
     async def test_reconciliation_waiting_for_clear_safety_timeout(self):
@@ -1252,7 +1253,8 @@ class TestPeriodicReconciliationPaths:
 
         # Room is still occupied → should transition to OCCUPIED, not IDLE
         assert es["state"] == EntityAutomationState.OCCUPIED
-        assert_service_called(hass, "light", "turn_on", "light.living_room")
+        assert es["actuation"]["status"] == ActuationStatus.CONFIRMED
+        assert es["actuation"]["target_state"] == STATE_ON
 
     @pytest.mark.asyncio
     async def test_reconciliation_waiting_for_clear_safety_timeout_room_empty(self):
@@ -1274,8 +1276,8 @@ class TestPeriodicReconciliationPaths:
         hass.services.clear()
         await coord._periodic_reconciliation(None)
 
-        # Room empty → forced IDLE
-        assert es["state"] == EntityAutomationState.IDLE
+        # Room empty → forced cleared actuation; IDLE waits for command confirmation.
+        assert es["state"] == EntityAutomationState.SETTLING_OFF
 
     @pytest.mark.asyncio
     async def test_reconciliation_clearing_no_timer(self):
