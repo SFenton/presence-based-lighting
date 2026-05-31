@@ -854,3 +854,245 @@ class TestRLCTrackingEntityForManualControl:
         # Presence should STILL be allowed because the RLC effective state
         # didn't actually change - it was already "off" when we last set it
         assert coordinator.get_presence_allowed("light.test_light") is True
+
+    @pytest.mark.asyncio
+    async def test_rlc_stale_read_race_still_pauses_via_rlc_listener(
+        self, mock_hass, mock_entry_with_rlc_tracking
+    ):
+        """Regression: a manual off while the RLC mirror is momentarily stale.
+
+        Reproduces the master-bedroom incident where HomeKit turned the light off
+        while the room was occupied.  The controlled entity's own state_changed
+        event fired before the RLC sensor (sensor.*_rlc) updated, so the
+        synchronous RLC read returned the stale "on" value and the change was
+        deduped as "no effective change".  The dedicated RLC-sensor listener must
+        still catch the manual off (once the mirror updates) and pause automation
+        WITHOUT re-issuing turn_on.
+        """
+        # Room occupied; light currently on; RLC mirror agrees ("on").
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "on"},
+        }
+
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+
+        # The RLC sensor is mapped to the controlled entity.
+        assert coordinator._rlc_to_entity == {"sensor.light_test_light_rlc": "light.test_light"}
+        assert coordinator.get_automation_paused("light.test_light") is False
+        mock_hass.services.async_call.reset_mock()
+
+        # --- Step 1: light reports off, but the RLC mirror is still stale ("on").
+        mock_hass._states_data["light.test_light"] = {"state": "off", "attributes": {}}
+        old_light = MagicMock()
+        old_light.state = "on"
+        old_light.attributes = {}
+        new_light = MagicMock()
+        new_light.state = "off"
+        new_light.attributes = {}
+        new_light.context = MagicMock()
+        new_light.context.id = "external_context"
+        new_light.context.parent_id = None
+        light_event = self._create_state_change_event(
+            "light.test_light", old_state=old_light, new_state=new_light
+        )
+        await coordinator._handle_controlled_entity_change(light_event)
+
+        # The stale read deduped the change: not paused yet, nothing re-issued.
+        assert coordinator.get_automation_paused("light.test_light") is False
+        mock_hass.services.async_call.assert_not_called()
+
+        # --- Step 2: the RLC mirror catches up and reports "off".
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:05+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+        old_rlc = MagicMock()
+        old_rlc.state = "2024-01-01T12:00:00+00:00"
+        old_rlc.attributes = {ATTR_PREVIOUS_VALID_STATE: "on"}
+        new_rlc = MagicMock()
+        new_rlc.state = "2024-01-01T12:00:05+00:00"
+        new_rlc.attributes = {ATTR_PREVIOUS_VALID_STATE: "off"}
+        rlc_event = self._create_state_change_event(
+            "sensor.light_test_light_rlc", old_state=old_rlc, new_state=new_rlc
+        )
+        await coordinator._handle_rlc_tracking_change(rlc_event)
+
+        # Manual off is now detected: automation paused, light NOT turned back on.
+        assert coordinator.get_automation_paused("light.test_light") is True
+        for call in mock_hass.services.async_call.call_args_list:
+            assert call.args[1] != "turn_on", "light must not be re-enabled after manual off"
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_ignores_our_own_change(
+        self, mock_hass, mock_entry_with_rlc_tracking
+    ):
+        """An RLC change caused by our own service call must not pause automation."""
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+
+        # Mark a context as ours and stamp it onto the controlled entity's state.
+        our_ctx = MagicMock()
+        our_ctx.id = "our_context"
+        our_ctx.parent_id = None
+        coordinator._entity_states["light.test_light"]["contexts"].append(our_ctx.id)
+        light_state = MagicMock()
+        light_state.state = "on"
+        light_state.attributes = {}
+        light_state.context = our_ctx
+        mock_hass._states_data["light.test_light"] = {"state": "on", "attributes": {}}
+        original_get = mock_hass.states.get
+        mock_hass.states.get = lambda eid: (
+            light_state if eid == "light.test_light" else original_get(eid)
+        )
+
+        old_rlc = MagicMock()
+        old_rlc.state = "2024-01-01T12:00:00+00:00"
+        old_rlc.attributes = {ATTR_PREVIOUS_VALID_STATE: "off"}
+        new_rlc = MagicMock()
+        new_rlc.state = "2024-01-01T12:00:05+00:00"
+        new_rlc.attributes = {ATTR_PREVIOUS_VALID_STATE: "on"}
+        rlc_event = self._create_state_change_event(
+            "sensor.light_test_light_rlc", old_state=old_rlc, new_state=new_rlc
+        )
+        await coordinator._handle_rlc_tracking_change(rlc_event)
+
+        # Our own change is treated as actuation feedback, never manual control.
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.fixture
+    async def started_rlc_coordinator(self, mock_hass, mock_entry_with_rlc_tracking):
+        """A started coordinator with an occupied room and the light on."""
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "on"},
+        }
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+        coordinator._entity_states["light.test_light"]["last_effective_state"] = "on"
+        return coordinator
+
+    @staticmethod
+    def _rlc_event(creator, old_effective, new_effective, new_state=True):
+        old_rlc = None
+        if old_effective is not None or new_state:
+            old_rlc = MagicMock()
+            old_rlc.attributes = {ATTR_PREVIOUS_VALID_STATE: old_effective}
+        new_rlc = None
+        if new_state:
+            new_rlc = MagicMock()
+            new_rlc.attributes = {ATTR_PREVIOUS_VALID_STATE: new_effective}
+        return creator("sensor.light_test_light_rlc", old_state=old_rlc, new_state=new_rlc)
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_ignores_unmapped_sensor(self, started_rlc_coordinator):
+        """An RLC event for an unmapped sensor is ignored."""
+        coordinator = started_rlc_coordinator
+        event = self._create_state_change_event(
+            "sensor.some_other_rlc", old_state=MagicMock(), new_state=MagicMock()
+        )
+        await coordinator._handle_rlc_tracking_change(event)
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_ignores_missing_new_state(self, started_rlc_coordinator):
+        """An RLC event without a new_state (entity removed) is ignored."""
+        coordinator = started_rlc_coordinator
+        event = self._rlc_event(self._create_state_change_event, "on", None, new_state=False)
+        await coordinator._handle_rlc_tracking_change(event)
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_ignores_timestamp_only_update(self, started_rlc_coordinator):
+        """An RLC event where previous_valid_state did not change is ignored."""
+        coordinator = started_rlc_coordinator
+        event = self._rlc_event(self._create_state_change_event, "on", "on")
+        await coordinator._handle_rlc_tracking_change(event)
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_dedups_already_processed(self, started_rlc_coordinator):
+        """An RLC change already seen by the synchronous read is not reprocessed."""
+        coordinator = started_rlc_coordinator
+        # last_effective_state is already "off" (synchronous read won the race).
+        coordinator._entity_states["light.test_light"]["last_effective_state"] = "off"
+        event = self._rlc_event(self._create_state_change_event, "on", "off")
+        await coordinator._handle_rlc_tracking_change(event)
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_handles_exception(self, started_rlc_coordinator):
+        """A malformed RLC event is caught and logged without raising."""
+        coordinator = started_rlc_coordinator
+        bad_new_state = MagicMock()
+        bad_new_state.attributes = "not-a-dict"  # .get raises -> except branch
+        bad_event = MagicMock()
+        bad_event.data = {
+            "entity_id": "sensor.light_test_light_rlc",
+            "new_state": bad_new_state,
+            "old_state": None,
+        }
+        await coordinator._handle_rlc_tracking_change(bad_event)
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_resume_reconciles(self, started_rlc_coordinator):
+        """An external turn-on (non-pausing change) resumes and reconciles."""
+        coordinator = started_rlc_coordinator
+        # Start paused so the external "on" is a resume; last effective was "off".
+        coordinator.set_automation_paused("light.test_light", True)
+        coordinator._entity_states["light.test_light"]["last_effective_state"] = "off"
+        event = self._rlc_event(self._create_state_change_event, "off", "on")
+        await coordinator._handle_rlc_tracking_change(event)
+        # "on" is not a manual_disable_state, so automation resumes.
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_respects_disable_flag_off(
+        self, mock_hass, mock_entry_with_rlc_tracking
+    ):
+        """With disable_on_external_control off, a manual off does not pause."""
+        mock_entry_with_rlc_tracking.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_DISABLE_ON_EXTERNAL_CONTROL
+        ] = False
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "off", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "on"},
+        }
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+        coordinator._entity_states["light.test_light"]["last_effective_state"] = "on"
+        event = self._rlc_event(self._create_state_change_event, "on", "off")
+        await coordinator._handle_rlc_tracking_change(event)
+        assert coordinator.get_automation_paused("light.test_light") is False
+

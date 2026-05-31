@@ -76,7 +76,13 @@ from .const import (
 from .entity_targeting import as_entity_list, legacy_room_switch_entity_id, slugify_entity_id
 from .interceptor import PresenceLockInterceptor, is_interceptor_available
 from .ownership import get_ownership_manager
-from .real_last_changed import get_effective_state, is_entity_on, is_entity_off, is_real_last_changed_entity
+from .real_last_changed import (
+	ATTR_PREVIOUS_VALID_STATE,
+	get_effective_state,
+	is_entity_on,
+	is_entity_off,
+	is_real_last_changed_entity,
+)
 from .service_handlers import (
 	SERVICE_PAUSE_AUTOMATION,
 	SERVICE_RESUME_AUTOMATION,
@@ -482,6 +488,11 @@ class PresenceBasedLightingCoordinator:
 		self._interceptor: PresenceLockInterceptor | None = None
 		self._using_interceptor: bool = False
 		self._reconciliation_unsub: Callable[[], None] | None = None
+		# Maps an RLC tracking sensor entity_id -> the controlled entity_id it
+		# mirrors.  Used to detect manual/external control from the debounced RLC
+		# signal instead of the racy synchronous read during the controlled
+		# entity's own state_changed event.
+		self._rlc_to_entity: Dict[str, str] = {}
 		
 		# Auto re-enable feature state
 		self._auto_reenable_enabled: bool = False
@@ -639,6 +650,7 @@ class PresenceBasedLightingCoordinator:
 				rlc_tracking_entity = cfg.get(CONF_RLC_TRACKING_ENTITY)
 				_LOGGER.debug("Checking RLC init for %s: tracking_entity=%s", entity_id, rlc_tracking_entity)
 				if rlc_tracking_entity:
+					self._rlc_to_entity[rlc_tracking_entity] = entity_id
 					rlc_state = get_effective_state(self.hass, rlc_tracking_entity)
 					_LOGGER.debug("RLC state for %s from %s: %s", entity_id, rlc_tracking_entity, rlc_state)
 					if rlc_state is not None:
@@ -670,6 +682,24 @@ class PresenceBasedLightingCoordinator:
 					)
 				)
 				_LOGGER.debug("Registered state change listener for controlled entities")
+
+			# RLC tracking sensors are mirrors of controlled entities that update a
+			# fraction of a moment AFTER the controlled entity's own state_changed
+			# event.  Listening to them lets manual/external control be detected from
+			# the debounced signal even when the synchronous RLC read during the
+			# controlled entity's event returned a stale value (listener-order race).
+			if self._rlc_to_entity:
+				self._listeners.append(
+					async_track_state_change_event(
+						self.hass,
+						list(self._rlc_to_entity.keys()),
+						self._handle_rlc_tracking_change,
+					)
+				)
+				_LOGGER.debug(
+					"Registered state change listener for %d RLC tracking sensors: %s",
+					len(self._rlc_to_entity), list(self._rlc_to_entity.keys()),
+				)
 
 			if all_sensors:
 				self._listeners.append(
@@ -1415,31 +1445,95 @@ class PresenceBasedLightingCoordinator:
 				await self._handle_actuation_feedback(entity_id, entity_state, effective_new_state)
 				return
 
-			# Check presence lock first - this takes priority
-			if await self._check_and_apply_presence_lock(entity_state, effective_new_state):
-				return  # Presence lock handled the state change
-
-			if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
-				return
-
-			if not self._presence_switch_allows_entity(entity_state):
-				return
-
-			# Determine whether this external change should pause or resume automation
-			should_pause = self._should_external_change_pause(entity_id, cfg, effective_new_state)
-
-			if should_pause:
-				self.set_automation_paused(entity_id, True)
-			else:
-				self.set_automation_paused(entity_id, False)
-				if await self._ensure_external_detected_action_expires(
-					entity_id, entity_state, effective_new_state
-				):
-					return
-				# Reconcile into the correct active state
-				await self._reconcile_entity(entity_id, entity_state)
+			await self._process_external_controlled_change(entity_id, entity_state, effective_new_state)
 		except Exception as err:
 			_LOGGER.exception("Error handling controlled entity change for %s: %s", event.data.get("entity_id"), err)
+
+	async def _handle_rlc_tracking_change(self, event: Event) -> None:
+		"""Detect manual/external control from an RLC tracking sensor change.
+
+		The controlled entity's own ``state_changed`` event and its RLC mirror are
+		driven by the *same* underlying change, but the RLC sensor is updated by a
+		sibling listener and its ``state_changed`` event is dispatched immediately
+		afterwards.  Reading the RLC mirror synchronously inside
+		``_handle_controlled_entity_change`` can therefore observe a stale
+		``previous_valid_state`` and miss a genuine manual ``off`` (the change is
+		deduped as "no effective change").  Handling the RLC sensor's own change
+		closes that race while still ignoring spurious raw-state blips (reboot /
+		availability) that never move the RLC ``previous_valid_state``.
+		"""
+		try:
+			rlc_entity_id = event.data.get("entity_id")
+			entity_id = self._rlc_to_entity.get(rlc_entity_id)
+			if not entity_id or entity_id not in self._entity_states:
+				return
+
+			new_state = event.data.get("new_state")
+			old_state = event.data.get("old_state")
+			if not new_state:
+				return
+
+			new_effective = new_state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
+			old_effective = old_state.attributes.get(ATTR_PREVIOUS_VALID_STATE) if old_state else None
+			if new_effective is None or new_effective == old_effective:
+				# Timestamp-only update or unavailable RLC sensor - nothing real changed.
+				return
+
+			entity_state = self._entity_states[entity_id]
+			if new_effective == entity_state.get("last_effective_state"):
+				# Already processed (e.g. the synchronous read in
+				# _handle_controlled_entity_change saw the fresh RLC value first).
+				return
+			entity_state["last_effective_state"] = new_effective
+
+			# Ownership is derived from the controlled entity's settled context: if
+			# we issued the change, the light's current context is one of ours.
+			controlled = self.hass.states.get(entity_id)
+			is_our_context = (
+				controlled is not None
+				and self._is_context_ours(entity_id, controlled.context)
+			)
+			if is_our_context:
+				await self._handle_actuation_feedback(entity_id, entity_state, new_effective)
+				return
+
+			await self._process_external_controlled_change(entity_id, entity_state, new_effective)
+		except Exception as err:
+			_LOGGER.exception(
+				"Error handling RLC tracking change for %s: %s",
+				event.data.get("entity_id"), err,
+			)
+
+	async def _process_external_controlled_change(
+		self, entity_id: str, entity_state: dict, effective_new_state: str | None,
+	) -> None:
+		"""Apply manual-control pause/resume logic for an external state change."""
+		cfg = entity_state["config"]
+
+		# Check presence lock first - this takes priority
+		if await self._check_and_apply_presence_lock(entity_state, effective_new_state):
+			return  # Presence lock handled the state change
+
+		if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
+			return
+
+		if not self._presence_switch_allows_entity(entity_state):
+			return
+
+		# Determine whether this external change should pause or resume automation
+		should_pause = self._should_external_change_pause(entity_id, cfg, effective_new_state)
+
+		if should_pause:
+			self.set_automation_paused(entity_id, True)
+		else:
+			self.set_automation_paused(entity_id, False)
+			if await self._ensure_external_detected_action_expires(
+				entity_id, entity_state, effective_new_state
+			):
+				return
+			# Reconcile into the correct active state
+			await self._reconcile_entity(entity_id, entity_state)
+
 
 	async def _handle_external_action(self, entity_id: str, service: str | None) -> None:
 		entity_state = self._entity_states[entity_id]
@@ -1605,7 +1699,6 @@ class PresenceBasedLightingCoordinator:
 			if is_rlc:
 				# For RLC sensors, compare the previous_valid_state attribute
 				# The state itself is a timestamp, so we look at the attribute
-				from .real_last_changed import ATTR_PREVIOUS_VALID_STATE
 				old_effective = old_state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
 				new_effective = new_state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
 				
