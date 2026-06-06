@@ -593,6 +593,7 @@ class PresenceBasedLightingCoordinator:
 			"service_key": None,
 			"context_ids": deque(maxlen=10),
 			"attempts": 0,
+			"force_service_call": False,
 			"timer": None,
 			"last_observed_state": None,
 			"last_error": None,
@@ -980,6 +981,12 @@ class PresenceBasedLightingCoordinator:
 		config = entity_state["config"]
 		service_key = intent["service_key"]
 		target_state = intent["target_state"]
+		previous_actuation = entity_state["actuation"]
+		overrides_opposing_actuation = (
+			previous_actuation["status"] == ActuationStatus.PENDING
+			and previous_actuation["target_state"] is not None
+			and previous_actuation["target_state"] != target_state
+		)
 
 		self._cancel_entity_actuation(entity_state, "new intent")
 		actuation = entity_state["actuation"]
@@ -990,6 +997,7 @@ class PresenceBasedLightingCoordinator:
 				"service_key": service_key,
 				"context_ids": deque(maxlen=10),
 				"attempts": 0,
+				"force_service_call": overrides_opposing_actuation,
 				"last_observed_state": None,
 				"last_error": None,
 				"updated_at": dt_util.utcnow(),
@@ -1002,7 +1010,7 @@ class PresenceBasedLightingCoordinator:
 			self._set_entity_state(entity_id, entity_state, EntityAutomationState.SETTLING_ON, "actuating detected intent")
 
 		current_state = self.hass.states.get(entity_id)
-		if current_state and current_state.state == target_state:
+		if current_state and current_state.state == target_state and not overrides_opposing_actuation:
 			self._confirm_entity_actuation(entity_id, entity_state, target_state)
 			return
 
@@ -1011,6 +1019,13 @@ class PresenceBasedLightingCoordinator:
 			return
 
 		await self._send_entity_actuation_attempt(entity_id, entity_state)
+
+	def _cleared_intent_blocked_by_presence(self, entity_state: dict) -> bool:
+		cfg = entity_state["config"]
+		return (
+			cfg.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
+			and self._is_any_occupied()
+		)
 
 	def _actuation_target_is_still_valid(self, entity_id: str, entity_state: dict) -> bool:
 		intent = entity_state["intent"]
@@ -1028,8 +1043,11 @@ class PresenceBasedLightingCoordinator:
 		if intent["desired"] == DesiredState.CLEARED:
 			if self._ownership_manager.other_entry_wants_on(self.entry.entry_id, entity_id):
 				return False
-			if not intent.get("force") and not self._are_clearing_sensors_clear():
-				return False
+			if not intent.get("force"):
+				if not self._are_clearing_sensors_clear():
+					return False
+				if self._cleared_intent_blocked_by_presence(entity_state):
+					return False
 		elif intent["desired"] == DesiredState.DETECTED:
 			if not self._is_any_occupied() or not self._are_activation_conditions_met():
 				return False
@@ -1057,6 +1075,7 @@ class PresenceBasedLightingCoordinator:
 				"target_state": None,
 				"service_key": None,
 				"attempts": 0,
+				"force_service_call": False,
 				"last_error": reason,
 				"updated_at": dt_util.utcnow(),
 			}
@@ -1121,9 +1140,10 @@ class PresenceBasedLightingCoordinator:
 		current_state = self.hass.states.get(entity_id)
 		observed = current_state.state if current_state else None
 		actuation["last_observed_state"] = observed
-		if observed == actuation["target_state"]:
+		if observed == actuation["target_state"] and not actuation.get("force_service_call"):
 			self._schedule_actuation_timer(entity_id, entity_state, _ACTUATION_CONFIRMATION_SECONDS, retry=False)
 			return
+		actuation["force_service_call"] = False
 
 		if actuation["attempts"] >= _ACTUATION_MAX_ATTEMPTS:
 			self._fail_entity_actuation(entity_id, entity_state, observed)
@@ -2023,12 +2043,22 @@ class PresenceBasedLightingCoordinator:
 		this_task = asyncio.current_task()
 		try:
 			_LOGGER.debug("[%s] Off timer sleeping %ds (state: CLEARING)", entity_id, delay)
-			await asyncio.sleep(delay)
+			while True:
+				await asyncio.sleep(delay)
 
-			if self._are_clearing_sensors_clear():
-				_LOGGER.debug("[%s] Timer fired, clearing sensors clear → cleared intent", entity_id)
-				await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
-			else:
+				if self._are_clearing_sensors_clear():
+					if self._cleared_intent_blocked_by_presence(entity_state):
+						_LOGGER.debug(
+							"[%s] Timer fired, but presence sensors still occupied -> keeping off timer active",
+							entity_id,
+						)
+						if delay <= 0:
+							await asyncio.sleep(1)
+						continue
+					_LOGGER.debug("[%s] Timer fired, clearing sensors clear → cleared intent", entity_id)
+					await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
+					return
+
 				_LOGGER.debug(
 					"[%s] Timer fired, clearing sensors NOT all clear → WAITING_FOR_CLEAR",
 					entity_id,
@@ -2037,6 +2067,7 @@ class PresenceBasedLightingCoordinator:
 					entity_id, entity_state, EntityAutomationState.WAITING_FOR_CLEAR,
 					"timer fired, sensors not clear"
 				)
+				return
 				# No polling – the existing clearing-sensor listener in
 				# _handle_presence_change will transition us to IDLE when sensors
 				# clear.  The periodic reconciliation acts as a safety net.

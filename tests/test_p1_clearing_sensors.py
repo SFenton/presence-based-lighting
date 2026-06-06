@@ -5,8 +5,18 @@ import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
 
 from custom_components.presence_based_lighting import (
+    ActuationStatus,
+    IntentReason,
     PresenceBasedLightingCoordinator,
     EntityAutomationState,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_CONTROLLED_ENTITIES,
+    CONF_OFF_DELAY,
+    CONF_PRESENCE_SENSORS,
+    CONF_PRESENCE_CLEARED_SERVICE,
+    CONF_PRESENCE_DETECTED_SERVICE,
+    CONF_REQUIRE_VACANCY_FOR_CLEARED,
 )
 from tests.conftest import assert_service_called, setup_entity_states
 
@@ -201,7 +211,6 @@ class TestPrimerSensorScenario:
         mock_hass.states.set("light.office", STATE_ON)
         
         # Wait for timer task to complete (delay is 0)
-        # Give it a few event loop iterations
         for _ in range(5):
             await asyncio.sleep(0.01)
         
@@ -247,6 +256,88 @@ class TestPrimerSensorScenario:
         turn_off_calls = [c for c in mock_hass.services.calls 
                          if c["service"] == "turn_off" and c["entity_id"] == "light.office"]
         assert len(turn_off_calls) == 0, "Lights should not turn off when occupancy sensor is on"
+
+    @pytest.mark.asyncio
+    async def test_primer_timer_respects_vacancy_requirement(
+        self, mock_hass, mock_config_entry_primer_scenario
+    ):
+        """A primer sensor that is still on when the timer wakes should defer turn_off."""
+        mock_config_entry_primer_scenario.data[CONF_OFF_DELAY] = 0.01
+        mock_config_entry_primer_scenario.data[CONF_PRESENCE_SENSORS] = [
+            "binary_sensor.office_pir",
+            "binary_sensor.office_occupancy",
+        ]
+        mock_config_entry_primer_scenario.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+
+        mock_hass.states.set("light.office", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_occupancy", STATE_OFF)
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_primer_scenario)
+        await coordinator.async_start()
+
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.office_pir", STATE_OFF, STATE_ON)
+        )
+        assert_service_called(mock_hass, "light", "turn_on", "light.office")
+        mock_hass.states.set("light.office", STATE_ON)
+        mock_hass.services.clear()
+
+        await asyncio.sleep(0.03)
+
+        turn_off_calls = [
+            call for call in mock_hass.services.calls
+            if call["service"] == "turn_off" and call["entity_id"] == "light.office"
+        ]
+        assert turn_off_calls == []
+        assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.CLEARING
+
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        await asyncio.sleep(0.03)
+
+        assert_service_called(mock_hass, "light", "turn_off", "light.office")
+
+    @pytest.mark.asyncio
+    async def test_presence_overrides_inflight_clear_even_when_light_still_reports_on(
+        self, mock_hass, mock_config_entry_primer_scenario
+    ):
+        """Presence should send turn_on when superseding a pending turn_off actuation."""
+        mock_hass.states.set("light.office", STATE_ON)
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_occupancy", STATE_OFF)
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_primer_scenario)
+        await coordinator.async_start()
+
+        entity_state = coordinator._entity_states["light.office"]
+        if entity_state["off_timer"]:
+            entity_state["off_timer"].cancel()
+            entity_state["off_timer"] = None
+
+        mock_hass.states.set("binary_sensor.office_pir", STATE_ON)
+        coordinator._set_entity_state(
+            "light.office",
+            entity_state,
+            EntityAutomationState.SETTLING_OFF,
+            "test pending cleared actuation",
+        )
+        entity_state["actuation"].update(
+            {
+                "status": ActuationStatus.PENDING,
+                "target_state": STATE_OFF,
+                "service_key": CONF_PRESENCE_CLEARED_SERVICE,
+            }
+        )
+
+        mock_hass.services.clear()
+        await coordinator._apply_service_intent(
+            "light.office",
+            entity_state,
+            CONF_PRESENCE_DETECTED_SERVICE,
+            IntentReason.PRESENCE,
+        )
+
+        assert_service_called(mock_hass, "light", "turn_on", "light.office")
 
     @pytest.mark.asyncio
     async def test_clearing_sensor_transition_restarts_timer(self, mock_hass, mock_config_entry_primer_scenario):
