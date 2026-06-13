@@ -483,6 +483,63 @@ class TestCoordinatorWithRLCSensors:
             "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed",
         ]
 
+    @pytest.mark.asyncio
+    async def test_setup_entry_retries_rlc_migration_after_startup(
+        self, mock_hass, mock_entry_with_rlc
+    ):
+        """Setup should retry migration after RLC entities become available."""
+        mock_entry_with_rlc.data[CONF_PRESENCE_SENSORS] = [
+            "binary_sensor.office_presence_motion",
+        ]
+        mock_entry_with_rlc.async_on_unload = MagicMock()
+        mock_entry_with_rlc.add_update_listener = MagicMock(return_value=lambda: None)
+        mock_hass.data = {}
+        mock_hass.config_entries = MagicMock()
+        mock_hass.config_entries.async_forward_entry_setups = AsyncMock(return_value=True)
+        mock_hass.config_entries.async_update_entry = MagicMock(
+            side_effect=lambda entry, data=None, version=None: setattr(entry, "data", data)
+            if data is not None
+            else None
+        )
+        mock_hass._states_data["binary_sensor.office_presence_motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        scheduled_callbacks = []
+
+        def schedule_later(_hass, _delay, action):
+            scheduled_callbacks.append(action)
+            return lambda: None
+
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ), patch(
+            "custom_components.presence_based_lighting.async_track_time_interval",
+            return_value=lambda: None,
+        ), patch(
+            "custom_components.presence_based_lighting.async_call_later",
+            side_effect=schedule_later,
+        ):
+            assert await async_setup_entry(mock_hass, mock_entry_with_rlc)
+
+        assert scheduled_callbacks
+        mock_hass.config_entries.async_update_entry.assert_not_called()
+
+        mock_hass._states_data[
+            "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed"
+        ] = {
+            "state": "2026-06-13T16:08:59+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+
+        scheduled_callbacks[0](None)
+
+        mock_hass.config_entries.async_update_entry.assert_called_once()
+        assert mock_entry_with_rlc.data[CONF_PRESENCE_SENSORS] == [
+            "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed",
+        ]
+
 
 class TestMixedSensorTypes:
     """Tests for mixed RLC and regular sensor configurations."""

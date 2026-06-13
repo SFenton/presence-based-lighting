@@ -19,6 +19,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
+	async_call_later,
 	async_track_state_change_event,
 	async_track_time_change,
 	async_track_time_interval,
@@ -165,6 +166,7 @@ _WAITING_FOR_CLEAR_MAX_SECONDS = 300  # 5 minutes
 _ACTUATION_CONFIRMATION_SECONDS = 2
 _ACTUATION_RETRY_DELAY_SECONDS = 1
 _ACTUATION_MAX_ATTEMPTS = 3
+_RLC_MIGRATION_RETRY_SECONDS = 30
 
 # Persistent debug log file (uncapped)
 _log_file_handler: logging.FileHandler | None = None
@@ -405,7 +407,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 	return True
 
 
-def _migrate_configured_sensors_to_rlc(hass: HomeAssistant, entry: ConfigEntry) -> None:
+def _migrate_configured_sensors_to_rlc(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Persistently replace configured raw sensors with matching RLC sensors."""
 	new_data = {**entry.data}
 	replacements: dict[str, str] = {}
@@ -424,7 +426,7 @@ def _migrate_configured_sensors_to_rlc(hass: HomeAssistant, entry: ConfigEntry) 
 			replacements.update(key_replacements)
 
 	if not replacements:
-		return
+		return False
 
 	hass.config_entries.async_update_entry(entry, data=new_data)
 	_LOGGER.info(
@@ -432,6 +434,18 @@ def _migrate_configured_sensors_to_rlc(hass: HomeAssistant, entry: ConfigEntry) 
 		entry.data.get(CONF_ROOM_NAME, entry.entry_id),
 		replacements,
 	)
+	return True
+
+
+def _schedule_rlc_sensor_migration_retry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+	"""Retry RLC migration after startup so RLC entities have time to load."""
+
+	@callback
+	def _retry_rlc_migration(_now: datetime) -> None:
+		_migrate_configured_sensors_to_rlc(hass, entry)
+
+	unsub = async_call_later(hass, _RLC_MIGRATION_RETRY_SECONDS, _retry_rlc_migration)
+	entry.async_on_unload(unsub)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -449,7 +463,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 		if entry.data.get("file_logging_enabled", ENABLE_FILE_LOGGING):
 			await _setup_file_logging(hass)
 
-		_migrate_configured_sensors_to_rlc(hass, entry)
+		if not _migrate_configured_sensors_to_rlc(hass, entry):
+			_schedule_rlc_sensor_migration_retry(hass, entry)
 
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
 		coordinator = PresenceBasedLightingCoordinator(hass, entry)
