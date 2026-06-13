@@ -22,6 +22,15 @@ REAL_LAST_CHANGED_SUFFIX = "_real_last_changed"
 ATTR_PREVIOUS_VALID_STATE = "previous_valid_state"
 
 
+def _normalized_object_id(entity_id: str) -> str:
+    """Return a comparable object id for raw and RLC sensor entity ids."""
+    object_id = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
+    object_id = object_id.removesuffix(REAL_LAST_CHANGED_SUFFIX)
+    object_id = object_id.replace("_presence_sensor_", "_")
+    object_id = object_id.replace("_sensor_", "_")
+    return "_".join(object_id.lower().replace("-", "_").split("_")).strip("_")
+
+
 def is_real_last_changed_entity(entity_id: str | None, state: "State | None" = None) -> bool:
     """Check if an entity is a real_last_changed sensor.
     
@@ -184,3 +193,56 @@ def get_all_rlc_sensors(hass: "HomeAssistant") -> list[str]:
         for state in hass.states.async_all()
         if state.entity_id.startswith("sensor.") and ATTR_PREVIOUS_VALID_STATE in state.attributes
     ]
+
+
+def get_matching_rlc_sensor_for_entity(
+    hass: "HomeAssistant", target_entity_id: str
+) -> str | None:
+    """Find the RLC sensor that tracks a raw entity, if one is available."""
+    if not target_entity_id:
+        return None
+
+    target_state = hass.states.get(target_entity_id)
+    if is_real_last_changed_entity(target_entity_id, target_state):
+        return target_entity_id
+
+    async_all = getattr(hass.states, "async_all", None)
+    if not callable(async_all):
+        return None
+
+    target_object_id = _normalized_object_id(target_entity_id)
+    matches: list[str] = []
+
+    for state in async_all():
+        if not is_real_last_changed_entity(state.entity_id, state):
+            continue
+
+        tracked_entity = state.attributes.get("entity_id")
+        if tracked_entity == target_entity_id:
+            return state.entity_id
+
+        rlc_object_id = _normalized_object_id(state.entity_id)
+        if rlc_object_id.endswith(target_object_id):
+            matches.append(state.entity_id)
+
+    if not matches:
+        return None
+
+    return sorted(matches, key=lambda entity_id: (len(entity_id), entity_id))[0]
+
+
+def replace_entities_with_matching_rlc_sensors(
+    hass: "HomeAssistant", entity_ids: list[str]
+) -> tuple[list[str], dict[str, str]]:
+    """Replace raw entities with matching RLC sensors where available."""
+    updated: list[str] = []
+    replacements: dict[str, str] = {}
+
+    for entity_id in entity_ids or []:
+        replacement = get_matching_rlc_sensor_for_entity(hass, entity_id) or entity_id
+        if replacement not in updated:
+            updated.append(replacement)
+        if replacement != entity_id:
+            replacements[entity_id] = replacement
+
+    return updated, replacements

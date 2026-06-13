@@ -492,7 +492,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
 					vol.Optional(CONF_AUTO_REENABLE_PRESENCE_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain=["binary_sensor"],
+							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
 						)
 					),
@@ -1335,7 +1335,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						default=self._base_data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
-							domain=["binary_sensor"],
+							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
 						)
 					),

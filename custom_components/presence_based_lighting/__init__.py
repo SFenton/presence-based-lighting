@@ -82,6 +82,7 @@ from .real_last_changed import (
 	is_entity_on,
 	is_entity_off,
 	is_real_last_changed_entity,
+	replace_entities_with_matching_rlc_sensors,
 )
 from .service_handlers import (
 	SERVICE_PAUSE_AUTOMATION,
@@ -404,6 +405,35 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 	return True
 
 
+def _migrate_configured_sensors_to_rlc(hass: HomeAssistant, entry: ConfigEntry) -> None:
+	"""Persistently replace configured raw sensors with matching RLC sensors."""
+	new_data = {**entry.data}
+	replacements: dict[str, str] = {}
+
+	for key in (
+		CONF_PRESENCE_SENSORS,
+		CONF_CLEARING_SENSORS,
+		CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+	):
+		current = list(new_data.get(key, []) or [])
+		updated, key_replacements = replace_entities_with_matching_rlc_sensors(
+			hass, current
+		)
+		if updated != current:
+			new_data[key] = updated
+			replacements.update(key_replacements)
+
+	if not replacements:
+		return
+
+	hass.config_entries.async_update_entry(entry, data=new_data)
+	_LOGGER.info(
+		"Migrated %s Presence Based Lighting sensors to RLC equivalents: %s",
+		entry.data.get(CONF_ROOM_NAME, entry.entry_id),
+		replacements,
+	)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Set up Presence Based Lighting via the UI."""
 	
@@ -418,6 +448,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 		# Check per-entry config toggle; fall back to the hard kill-switch constant.
 		if entry.data.get("file_logging_enabled", ENABLE_FILE_LOGGING):
 			await _setup_file_logging(hass)
+
+		_migrate_configured_sensors_to_rlc(hass, entry)
 
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
 		coordinator = PresenceBasedLightingCoordinator(hass, entry)
@@ -744,6 +776,8 @@ class PresenceBasedLightingCoordinator:
 			
 			# Check if we need to continue tracking after a restart
 			await self._check_auto_reenable_startup()
+
+			await self._load_paused_state()
 
 			# Periodic state reconciliation – safety net that catches any
 			# inconsistency (e.g., missed events, transient sensor blips)
@@ -1299,6 +1333,7 @@ class PresenceBasedLightingCoordinator:
 			self._cancel_entity_timer(entity_state)
 			self._cancel_entity_actuation(entity_state, "presence_allowed disabled")
 			self._set_entity_state(entity_id, entity_state, EntityAutomationState.PAUSED, "presence_allowed disabled")
+		self._schedule_paused_state_save()
 
 	def _entity_respects_presence_allowed(self, entity_state: dict) -> bool:
 		return entity_state["config"].get(
@@ -1376,10 +1411,80 @@ class PresenceBasedLightingCoordinator:
 			# Just set to IDLE; the caller or reconciliation will fix it
 			self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, "manual control resumed")
 		self._notify_switch(entity_id)
+		self._schedule_paused_state_save()
 
 	def _notify_switch(self, entity_id: str) -> None:
 		for callback_fn in list(self._entity_states[entity_id]["callbacks"]):
 			callback_fn()
+
+	def _get_paused_persistence_path(self) -> Path:
+		"""Get the path to the manual pause persistence file."""
+		return Path(self.hass.config.path(".storage")) / f"pbl_paused_{self.entry.entry_id}.json"
+
+	def _schedule_paused_state_save(self) -> None:
+		"""Schedule a save for manual pause state without blocking state handlers."""
+		try:
+			create_task = getattr(self.hass, "async_create_task", None)
+			if create_task:
+				create_task(self._save_paused_state())
+			else:
+				asyncio.get_running_loop().create_task(self._save_paused_state())
+		except RuntimeError:
+			_LOGGER.debug("No running loop available to persist paused state")
+
+	async def _save_paused_state(self) -> None:
+		"""Persist manually paused entities for restart recovery."""
+		try:
+			paused_entities = [
+				entity_id
+				for entity_id, entity_state in self._entity_states.items()
+				if entity_state["state"] == EntityAutomationState.PAUSED
+			]
+			path = self._get_paused_persistence_path()
+
+			if not paused_entities:
+				if path.exists():
+					await self.hass.async_add_executor_job(path.unlink)
+				return
+
+			data = {
+				"paused_entities": paused_entities,
+				"saved_at": dt_util.utcnow().isoformat(),
+			}
+			await self.hass.async_add_executor_job(
+				lambda: path.write_text(json.dumps(data))
+			)
+			_LOGGER.debug("Saved manual pause state: %s", data)
+		except Exception as err:
+			_LOGGER.exception("Failed to save manual pause state: %s", err)
+
+	async def _load_paused_state(self) -> None:
+		"""Restore manually paused entities from storage."""
+		try:
+			path = self._get_paused_persistence_path()
+			if not path.exists():
+				return
+
+			data = await self.hass.async_add_executor_job(
+				lambda: json.loads(path.read_text())
+			)
+			paused_entities = set(data.get("paused_entities", []))
+			for entity_id in paused_entities:
+				entity_state = self._entity_states.get(entity_id)
+				if not entity_state or not self._entity_respects_presence_allowed(entity_state):
+					continue
+				self._cancel_entity_timer(entity_state)
+				self._cancel_entity_actuation(entity_state, "manual pause restored")
+				self._set_entity_state(
+					entity_id,
+					entity_state,
+					EntityAutomationState.PAUSED,
+					"manual pause restored",
+				)
+				self._notify_switch(entity_id)
+			_LOGGER.debug("Loaded manual pause state: %s", data)
+		except Exception as err:
+			_LOGGER.debug("No valid manual pause state to load: %s", err)
 
 	async def _handle_service_call(self, event: Event) -> None:
 		try:
@@ -2170,6 +2275,8 @@ class PresenceBasedLightingCoordinator:
 		"""
 		if not self._presence_switch_allows_entity(entity_state):
 			return
+		if entity_state["state"] == EntityAutomationState.PAUSED:
+			return
 
 		cur = entity_state["state"]
 		occupied = self._is_any_occupied()
@@ -2683,4 +2790,3 @@ class PresenceBasedLightingCoordinator:
 					room_name
 				)
 				await self._clear_tracking_state()
-

@@ -18,12 +18,12 @@
         },
         "data_description": {
           "room_name": "Friendly name for this room (e.g., 'Living Room', 'Kitchen')",
-          "presence_sensors": "Binary sensors that trigger the 'detected' action when any turns on",
-          "clearing_sensors": "Binary sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
+          "presence_sensors": "Sensors that trigger the 'detected' action when any turns on",
+          "clearing_sensors": "Sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
           "activation_conditions": "Binary sensors or input booleans that must ALL be on for lights to activate. If presence is detected while conditions are not met, lights will turn on when conditions become true. Leave empty for no additional conditions.",
           "file_logging_enabled": "When enabled, writes integration logs to presence_based_lighting_debug.log in the Home Assistant config folder (capped at 10,000 lines).",
           "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)",
-          "auto_reenable_presence_sensors": "Binary sensors used to track vacancy for the auto re-enable feature. When the room is empty for the threshold percentage during the configured time window, presence lighting will be automatically re-enabled. Leave empty to use the main trigger sensors.",
+          "auto_reenable_presence_sensors": "Sensors used to track vacancy for the auto re-enable feature. When the room is empty for the threshold percentage during the configured time window, presence lighting will be automatically re-enabled. Leave empty to use the main trigger sensors.",
           "auto_reenable_vacancy_threshold": "Percentage of time the room must be empty during the monitoring window to trigger automatic re-enable (0-100)",
           "auto_reenable_start_time": "Time when the monitoring window starts (default: midnight)",
           "auto_reenable_end_time": "Time when the monitoring window ends and vacancy is evaluated (default: 5 AM)"
@@ -130,12 +130,12 @@
           "auto_reenable_end_time": "Auto Re-Enable Monitoring End Time"
         },
         "data_description": {
-          "presence_sensors": "Binary sensors that trigger the 'detected' action when any turns on",
-          "clearing_sensors": "Binary sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
+          "presence_sensors": "Sensors that trigger the 'detected' action when any turns on",
+          "clearing_sensors": "Sensors that must ALL be off to trigger the 'cleared' action. Leave empty to use the same sensors as triggers.",
           "activation_conditions": "Binary sensors or input booleans that must ALL be on for lights to activate. If presence is detected while conditions are not met, lights will turn on when conditions become true. Leave empty for no additional conditions.",
           "file_logging_enabled": "When enabled, writes integration logs to presence_based_lighting_debug.log in the Home Assistant config folder (capped at 10,000 lines).",
           "off_delay": "Default seconds to wait after presence clears before turning off entities (can be overridden per entity)",
-          "auto_reenable_presence_sensors": "Binary sensors used to track vacancy for the auto re-enable feature. When the room is empty for the threshold percentage during the configured time window, presence lighting will be automatically re-enabled. Leave empty to use the main trigger sensors.",
+          "auto_reenable_presence_sensors": "Sensors used to track vacancy for the auto re-enable feature. When the room is empty for the threshold percentage during the configured time window, presence lighting will be automatically re-enabled. Leave empty to use the main trigger sensors.",
           "auto_reenable_vacancy_threshold": "Percentage of time the room must be empty during the monitoring window to trigger automatic re-enable (0-100)",
           "auto_reenable_start_time": "Time when the monitoring window starts (default: midnight)",
           "auto_reenable_end_time": "Time when the monitoring window ends and vacancy is evaluated (default: 5 AM)"
@@ -271,4 +271,3 @@
     }
   }
 }
-

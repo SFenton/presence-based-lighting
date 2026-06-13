@@ -2,15 +2,21 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from homeassistant.const import STATE_ON, STATE_OFF
-from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting import (
+    PresenceBasedLightingCoordinator,
+    async_setup_entry,
+)
 from custom_components.presence_based_lighting.real_last_changed import (
     is_real_last_changed_entity,
     get_effective_state,
     is_entity_on,
     is_entity_off,
+    get_matching_rlc_sensor_for_entity,
+    replace_entities_with_matching_rlc_sensors,
     ATTR_PREVIOUS_VALID_STATE,
 )
 from custom_components.presence_based_lighting.const import (
+    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_ENTITY_ID,
     CONF_OFF_DELAY,
@@ -209,6 +215,83 @@ class TestIsEntityOff:
         assert not is_entity_off(hass, "sensor.nonexistent_real_last_changed")
 
 
+class TestRLCSensorMatching:
+    """Tests for raw sensor to RLC sensor matching."""
+
+    def test_finds_matching_rlc_sensor_by_suffix(self, mock_hass):
+        """Should match raw sensors to RLC sensors with a matching object suffix."""
+        mock_hass._states_data["binary_sensor.master_bedroom_window_presence_motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data[
+            "sensor.master_bedroom_master_bedroom_window_presence_sensor_master_bedroom_window_presence_motion_real_last_changed"
+        ] = {
+            "state": "2026-06-13T16:08:59+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+
+        assert (
+            get_matching_rlc_sensor_for_entity(
+                mock_hass,
+                "binary_sensor.master_bedroom_window_presence_motion",
+            )
+            == "sensor.master_bedroom_master_bedroom_window_presence_sensor_master_bedroom_window_presence_motion_real_last_changed"
+        )
+
+    def test_does_not_match_sensors_without_rlc_attribute(self, mock_hass):
+        """Should only match sensors that expose previous_valid_state."""
+        mock_hass._states_data["binary_sensor.office_presence_motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data["sensor.office_presence_motion_real_last_changed"] = {
+            "state": "2026-06-13T16:08:59+00:00",
+            "attributes": {},
+        }
+
+        assert (
+            get_matching_rlc_sensor_for_entity(
+                mock_hass,
+                "binary_sensor.office_presence_motion",
+            )
+            is None
+        )
+
+    def test_replace_entities_preserves_unmapped_sensors(self, mock_hass):
+        """Should replace mapped raw sensors and preserve raw sensors without RLC."""
+        mock_hass._states_data["binary_sensor.office_presence_motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data["binary_sensor.unmapped_motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data[
+            "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed"
+        ] = {
+            "state": "2026-06-13T16:08:59+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+
+        updated, replacements = replace_entities_with_matching_rlc_sensors(
+            mock_hass,
+            [
+                "binary_sensor.office_presence_motion",
+                "binary_sensor.unmapped_motion",
+            ],
+        )
+
+        assert updated == [
+            "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed",
+            "binary_sensor.unmapped_motion",
+        ]
+        assert replacements == {
+            "binary_sensor.office_presence_motion": "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed"
+        }
+
+
 @pytest.fixture
 def mock_hass():
     """Create a mock Home Assistant instance."""
@@ -226,11 +309,16 @@ def mock_hass():
             return None
         data = states_data[entity_id]
         state_obj = MagicMock()
+        state_obj.entity_id = entity_id
         state_obj.state = data.get("state", "unknown")
         state_obj.attributes = data.get("attributes", {})
         return state_obj
+
+    def async_all():
+        return [get_state(entity_id) for entity_id in states_data]
     
     hass.states.get = get_state
+    hass.states.async_all = async_all
     hass._states_data = states_data  # For test manipulation
     
     return hass
@@ -323,6 +411,77 @@ class TestCoordinatorWithRLCSensors:
         
         # Should be clear when attribute is "off"
         assert coordinator._are_clearing_sensors_clear()
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_migrates_raw_presence_sensors_to_rlc(
+        self, mock_hass, mock_entry_with_rlc
+    ):
+        """Setup should persist raw sensor replacements before the coordinator starts."""
+        mock_entry_with_rlc.data[CONF_PRESENCE_SENSORS] = [
+            "binary_sensor.office_presence_motion",
+            "binary_sensor.unmapped_motion",
+        ]
+        mock_entry_with_rlc.data[CONF_CLEARING_SENSORS] = [
+            "binary_sensor.office_presence_occupancy",
+        ]
+        mock_entry_with_rlc.data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] = [
+            "binary_sensor.office_presence_motion",
+        ]
+        mock_entry_with_rlc.async_on_unload = MagicMock()
+        mock_entry_with_rlc.add_update_listener = MagicMock(return_value=lambda: None)
+        mock_hass.data = {}
+        mock_hass.config_entries = MagicMock()
+        mock_hass.config_entries.async_forward_entry_setups = AsyncMock(return_value=True)
+        mock_hass.config_entries.async_update_entry = MagicMock(
+            side_effect=lambda entry, data=None, version=None: setattr(entry, "data", data)
+            if data is not None
+            else None
+        )
+        mock_hass._states_data["binary_sensor.office_presence_motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data["binary_sensor.office_presence_occupancy"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data["binary_sensor.unmapped_motion"] = {
+            "state": "off",
+            "attributes": {},
+        }
+        mock_hass._states_data[
+            "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed"
+        ] = {
+            "state": "2026-06-13T16:08:59+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+        mock_hass._states_data[
+            "sensor.office_office_presence_sensor_office_presence_occupancy_real_last_changed"
+        ] = {
+            "state": "2026-06-13T16:08:59+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ), patch(
+            "custom_components.presence_based_lighting.async_track_time_interval",
+            return_value=lambda: None,
+        ):
+            assert await async_setup_entry(mock_hass, mock_entry_with_rlc)
+
+        mock_hass.config_entries.async_update_entry.assert_called()
+        assert mock_entry_with_rlc.data[CONF_PRESENCE_SENSORS] == [
+            "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed",
+            "binary_sensor.unmapped_motion",
+        ]
+        assert mock_entry_with_rlc.data[CONF_CLEARING_SENSORS] == [
+            "sensor.office_office_presence_sensor_office_presence_occupancy_real_last_changed",
+        ]
+        assert mock_entry_with_rlc.data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] == [
+            "sensor.office_office_presence_sensor_office_presence_motion_real_last_changed",
+        ]
 
 
 class TestMixedSensorTypes:
@@ -1095,4 +1254,3 @@ class TestRLCTrackingEntityForManualControl:
         event = self._rlc_event(self._create_state_change_event, "on", "off")
         await coordinator._handle_rlc_tracking_change(event)
         assert coordinator.get_automation_paused("light.test_light") is False
-

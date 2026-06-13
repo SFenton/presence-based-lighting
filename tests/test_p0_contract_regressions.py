@@ -9,6 +9,7 @@ alignment with those contracts.
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -107,6 +108,19 @@ def _service_call(*, target_switches=None, entity_id=None):
         call.data["entity_id"] = entity_id
     call.target = {"entity_id": target_switches} if target_switches else None
     return call
+
+
+def _configure_storage(mock_hass, tmp_path):
+    storage_path = tmp_path / ".storage"
+    storage_path.mkdir()
+    mock_hass.config = MagicMock()
+    mock_hass.config.path = lambda *parts: str(tmp_path.joinpath(*parts))
+
+    async def run_sync(func, *args):
+        return func(*args)
+
+    mock_hass.async_add_executor_job = run_sync
+    return storage_path
 
 
 def _entry(
@@ -228,6 +242,105 @@ async def test_manual_off_pauses_automation_by_default_contract(
         )
 
         assert coordinator.get_automation_paused("light.living_room") is True
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_manual_off_pause_is_persisted_for_restart_recovery(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """Manual-off pauses should survive Home Assistant restarts."""
+    storage_path = _configure_storage(mock_hass, tmp_path)
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+    await coordinator.async_start()
+
+    try:
+        await coordinator._handle_controlled_entity_change(
+            _state_change_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
+        )
+        await asyncio.sleep(0)
+
+        paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
+        data = json.loads(paused_path.read_text())
+        assert data["paused_entities"] == ["light.living_room"]
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_startup_restores_manual_pause_before_reconciliation(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """Startup reconciliation must not turn a manually paused light back on."""
+    storage_path = _configure_storage(mock_hass, tmp_path)
+    paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
+    paused_path.write_text(json.dumps({"paused_entities": ["light.living_room"]}))
+    setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+
+    await coordinator.async_start()
+
+    try:
+        assert coordinator.get_automation_paused("light.living_room") is True
+        assert not [
+            call
+            for call in mock_hass.services.calls
+            if call["domain"] == "light" and call["service"] == "turn_on"
+        ]
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_respects_paused_entities(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """The reconciliation safety net must not override an explicit pause."""
+    _configure_storage(mock_hass, tmp_path)
+    setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+    await coordinator.async_start()
+
+    try:
+        mock_hass.services.clear()
+        coordinator.set_automation_paused("light.living_room", True)
+
+        await coordinator._reconcile_entity(
+            "light.living_room", coordinator._entity_states["light.living_room"]
+        )
+
+        assert coordinator.get_automation_paused("light.living_room") is True
+        assert not [
+            call
+            for call in mock_hass.services.calls
+            if call["domain"] == "light" and call["service"] == "turn_on"
+        ]
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_presence_allowed_reenable_clears_persisted_pause(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """Re-enabling the user switch should clear stale pause persistence."""
+    storage_path = _configure_storage(mock_hass, tmp_path)
+    setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+    await coordinator.async_start()
+
+    try:
+        await coordinator.async_set_presence_allowed("light.living_room", False)
+        await asyncio.sleep(0)
+        paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
+        assert paused_path.exists()
+
+        await coordinator.async_set_presence_allowed("light.living_room", True)
+        await asyncio.sleep(0)
+
+        assert not paused_path.exists()
     finally:
         coordinator.async_stop()
 
