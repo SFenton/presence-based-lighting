@@ -1196,6 +1196,27 @@ class PresenceBasedLightingCoordinator:
 			return
 		await self._retry_or_fail_entity_actuation(entity_id, entity_state, observed_state)
 
+	async def _handle_external_change_matching_actuation_target(
+		self, entity_id: str, entity_state: dict, effective_new_state: str | None,
+	) -> bool:
+		actuation = entity_state["actuation"]
+		if actuation["status"] != ActuationStatus.FAILED:
+			return False
+		if effective_new_state is None or effective_new_state != actuation["target_state"]:
+			return False
+		if actuation["target_state"] is None or actuation["service_key"] is None:
+			return False
+		if not self._actuation_target_is_still_valid(entity_id, entity_state):
+			return False
+
+		_LOGGER.debug(
+			"[%s] External-looking state %s matches failed actuation target; confirming late convergence",
+			entity_id,
+			effective_new_state,
+		)
+		self._confirm_entity_actuation(entity_id, entity_state, effective_new_state)
+		return True
+
 	async def _retry_or_fail_entity_actuation(
 		self, entity_id: str, entity_state: dict, observed_state: str | None,
 	) -> None:
@@ -1529,6 +1550,11 @@ class PresenceBasedLightingCoordinator:
 	) -> None:
 		"""Apply manual-control pause/resume logic for an external state change."""
 		cfg = entity_state["config"]
+
+		if await self._handle_external_change_matching_actuation_target(
+			entity_id, entity_state, effective_new_state
+		):
+			return
 
 		# Check presence lock first - this takes priority
 		if await self._check_and_apply_presence_lock(entity_state, effective_new_state):

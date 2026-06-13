@@ -132,6 +132,27 @@ async def test_failed_convergence_visible_after_max_attempts(mock_hass, mock_con
 
 
 @pytest.mark.asyncio
+async def test_late_target_after_failed_off_is_confirmed_not_manual(mock_hass, mock_config_entry):
+    """A slow light that eventually reaches PBL's off target must not pause automation."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+
+    entity_state = await _start_cleared_actuation(coordinator)
+    entity_state["actuation"]["attempts"] = _ACTUATION_MAX_ATTEMPTS
+    await coordinator._retry_or_fail_entity_actuation("light.living_room", entity_state, STATE_ON)
+
+    external_context = type("Ctx", (), {"id": "late_external", "parent_id": None})()
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_ON, STATE_OFF, external_context)
+    )
+
+    assert entity_state["state"] == EntityAutomationState.IDLE
+    assert entity_state["actuation"]["status"] == ActuationStatus.CONFIRMED
+    assert entity_state["actuation"]["last_error"] is None
+    assert coordinator.get_automation_paused("light.living_room") is False
+
+
+@pytest.mark.asyncio
 async def test_periodic_reconciliation_starts_missing_off_actuation(mock_hass, mock_config_entry):
     """The audit loop starts actuation when IDLE disagrees with actual state."""
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
