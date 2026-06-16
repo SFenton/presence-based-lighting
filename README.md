@@ -77,7 +77,7 @@ Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_pre
   - **Room Name**: e.g., "Living Room"
   - **Trigger Sensors**: Fast motion or presence sensors that should turn entities on
   - **Clearing Sensors**: Optional sensors that must all be clear before entities turn off
-  - **Vacancy Authority Sensors**: Optional stable/fused occupancy sensors that must also be clear before entities turn off. Use these when raw mmWave/PIR occupancy can flap but a room-level occupancy helper is more reliable for vacancy decisions.
+  - **Vacancy Authority Sensors**: Optional stable/fused occupancy sensors that must also be clear before entities turn off. PBL auto-fills an exact room-level occupancy status sensor when one exists; override it here when a room needs a different authority.
   - **Global Turn-Off Delay**: Seconds to wait when presence clears
 5. Add entities to control. For each entity:
   - Select the target entity

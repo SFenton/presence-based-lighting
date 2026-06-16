@@ -42,6 +42,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
+    CONF_VACANCY_AUTHORITY_SENSORS,
     DEFAULT_AUTO_REENABLE_END_TIME,
     DEFAULT_AUTO_REENABLE_START_TIME,
     DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
@@ -309,8 +310,8 @@ class TestMigrations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_migrate_v2_all_the_way_to_v7(self):
-        """Full chain migration from v2 through v7."""
+    async def test_migrate_v2_all_the_way_to_v8(self):
+        """Full chain migration from v2 through v8."""
         hass = MagicMock()
         entry = _make_entry(version=2)
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = False
@@ -329,7 +330,8 @@ class TestMigrations:
 
         result = await async_migrate_entry(hass, entry)
         assert result is True
-        assert versions == [3, 4, 5, 6, 7]
+        assert versions == [3, 4, 5, 6, 7, 8]
+        assert entry.data[CONF_VACANCY_AUTHORITY_SENSORS] == []
 
 
 # ---------------------------------------------------------------------------

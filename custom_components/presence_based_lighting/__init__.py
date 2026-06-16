@@ -53,6 +53,7 @@ from .const import (
 	CONF_RESPECTS_PRESENCE_ALLOWED,
 	CONF_RLC_TRACKING_ENTITY,
 	CONF_ROOM_NAME,
+	CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
 	CONF_VACANCY_AUTHORITY_SENSORS,
 	DEFAULT_AUTOMATION_MODE,
 	DEFAULT_AUTO_REENABLE_END_TIME,
@@ -168,6 +169,7 @@ _ACTUATION_CONFIRMATION_SECONDS = 2
 _ACTUATION_RETRY_DELAY_SECONDS = 1
 _ACTUATION_MAX_ATTEMPTS = 3
 _RLC_MIGRATION_RETRY_SECONDS = 30
+_VACANCY_AUTHORITY_AUTOFILL_RETRY_SECONDS = 30
 
 # Persistent debug log file (uncapped)
 _log_file_handler: logging.FileHandler | None = None
@@ -284,6 +286,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 	Version 4 -> 5: Add presence_sensor_mappings for real_last_changed support.
 	Version 5 -> 6: Add activation_conditions for optional AND gate on light activation.
 	Version 6 -> 7: Add auto_reenable_presence_sensors and auto_reenable_vacancy_threshold.
+	Version 7 -> 8: Add vacancy_authority_sensors for stable/fused clearing authority.
 	"""
 	_LOGGER.debug(
 		"Migrating config entry %s from version %s",
@@ -405,7 +408,74 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 			config_entry.entry_id,
 		)
 
+	if config_entry.version == 7:
+		# Version 7 -> 8: Add vacancy_authority_sensors (empty preserves existing behavior).
+		new_data = {**config_entry.data}
+		if CONF_VACANCY_AUTHORITY_SENSORS not in new_data:
+			new_data[CONF_VACANCY_AUTHORITY_SENSORS] = []
+
+		hass.config_entries.async_update_entry(
+			config_entry, data=new_data, version=8
+		)
+		_LOGGER.info(
+			"Migration of entry %s from version 7 to 8 successful",
+			config_entry.entry_id,
+		)
+
 	return True
+
+
+def _get_exact_room_vacancy_authority_sensor(hass: HomeAssistant, room_name: str) -> str | None:
+	"""Return an exact room-level occupancy status entity for vacancy authority."""
+	room_slug = slugify_entity_id(room_name)
+	candidates = (
+		f"sensor.{room_slug}_{room_slug}_occupancy_status_last_changed",
+		f"sensor.{room_slug}_occupancy_status_last_changed",
+		f"binary_sensor.{room_slug}_{room_slug}_occupancy_status",
+		f"binary_sensor.{room_slug}_occupancy_status",
+	)
+	for candidate in candidates:
+		if hass.states.get(candidate) is not None:
+			return candidate
+	return None
+
+
+def _autofill_vacancy_authority_sensors(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+	"""Persist exact room-level occupancy status as vacancy authority when available."""
+	current = list(entry.data.get(CONF_VACANCY_AUTHORITY_SENSORS, []) or [])
+	if current or entry.data.get(CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED):
+		return False
+
+	room_name = entry.data.get(CONF_ROOM_NAME, "")
+	authority_sensor = _get_exact_room_vacancy_authority_sensor(hass, room_name)
+	if not authority_sensor:
+		return False
+
+	new_data = {**entry.data}
+	new_data[CONF_VACANCY_AUTHORITY_SENSORS] = [authority_sensor]
+	new_data[CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED] = True
+	hass.config_entries.async_update_entry(entry, data=new_data)
+	_LOGGER.info(
+		"Auto-filled %s vacancy authority sensor for %s",
+		authority_sensor,
+		room_name or entry.entry_id,
+	)
+	return True
+
+
+def _schedule_vacancy_authority_autofill_retry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+	"""Retry vacancy authority auto-fill after startup so helper entities can load."""
+
+	@callback
+	def _retry_vacancy_authority_autofill(_now: datetime) -> None:
+		_autofill_vacancy_authority_sensors(hass, entry)
+
+	unsub = async_call_later(
+		hass,
+		_VACANCY_AUTHORITY_AUTOFILL_RETRY_SECONDS,
+		_retry_vacancy_authority_autofill,
+	)
+	entry.async_on_unload(unsub)
 
 
 def _migrate_configured_sensors_to_rlc(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -466,6 +536,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 		if not _migrate_configured_sensors_to_rlc(hass, entry):
 			_schedule_rlc_sensor_migration_retry(hass, entry)
+
+		if not _autofill_vacancy_authority_sensors(hass, entry):
+			_schedule_vacancy_authority_autofill_retry(hass, entry)
 
 		_LOGGER.debug("Creating coordinator for entry: %s with data: %s", entry.entry_id, entry.data)
 		coordinator = PresenceBasedLightingCoordinator(hass, entry)

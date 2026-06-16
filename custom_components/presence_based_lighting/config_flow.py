@@ -423,7 +423,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 7
+	VERSION = 8
 
 	def __init__(self):
 		"""Initialize."""

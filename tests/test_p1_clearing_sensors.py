@@ -9,6 +9,8 @@ from custom_components.presence_based_lighting import (
     IntentReason,
     PresenceBasedLightingCoordinator,
     EntityAutomationState,
+    _autofill_vacancy_authority_sensors,
+    _get_exact_room_vacancy_authority_sensor,
 )
 from custom_components.presence_based_lighting.const import (
     CONF_CONTROLLED_ENTITIES,
@@ -17,6 +19,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_CLEARED_SERVICE,
     CONF_PRESENCE_DETECTED_SERVICE,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
+    CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
     CONF_VACANCY_AUTHORITY_SENSORS,
 )
 from tests.conftest import assert_service_called, setup_entity_states
@@ -235,6 +238,69 @@ class TestSeparateClearingSensors:
         ]
         assert turn_off_calls == []
         assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.OCCUPIED
+
+
+class TestVacancyAuthorityAutoFill:
+    """Test exact room-level vacancy authority auto-discovery."""
+
+    def test_prefers_exact_room_rlc_occupancy_status(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        mock_hass.states.set(
+            "sensor.office_office_occupancy_status_last_changed",
+            "2026-06-16T06:08:28+00:00",
+            attributes={"previous_valid_state": STATE_ON},
+        )
+        mock_hass.states.set("binary_sensor.office_office_occupancy_status", STATE_ON)
+
+        assert _autofill_vacancy_authority_sensors(
+            mock_hass,
+            mock_config_entry_separate_clearing,
+        )
+        assert mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] == [
+            "sensor.office_office_occupancy_status_last_changed"
+        ]
+        assert mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED]
+
+    def test_uses_non_repeated_exact_room_binary_when_needed(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        mock_config_entry_separate_clearing.data["room_name"] = "Upper Deck"
+        mock_hass.states.set("binary_sensor.upper_deck_occupancy_status", STATE_OFF)
+
+        assert _get_exact_room_vacancy_authority_sensor(
+            mock_hass,
+            "Upper Deck",
+        ) == "binary_sensor.upper_deck_occupancy_status"
+
+    def test_does_not_use_parent_room_for_scoped_room(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        mock_config_entry_separate_clearing.data["room_name"] = "Master Bedroom Closet"
+        mock_hass.states.set("sensor.master_bedroom_master_bedroom_occupancy_status_last_changed", STATE_ON)
+
+        assert not _autofill_vacancy_authority_sensors(
+            mock_hass,
+            mock_config_entry_separate_clearing,
+        )
+        assert mock_config_entry_separate_clearing.data.get(CONF_VACANCY_AUTHORITY_SENSORS, []) == []
+
+    def test_manual_clear_after_auto_discovery_is_respected(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] = []
+        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED] = True
+        mock_hass.states.set(
+            "sensor.office_office_occupancy_status_last_changed",
+            "2026-06-16T06:08:28+00:00",
+            attributes={"previous_valid_state": STATE_ON},
+        )
+
+        assert not _autofill_vacancy_authority_sensors(
+            mock_hass,
+            mock_config_entry_separate_clearing,
+        )
+        assert mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] == []
 
 
 class TestPrimerSensorScenario:
