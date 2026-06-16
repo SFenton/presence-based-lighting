@@ -879,7 +879,7 @@ class TestPresenceChangePendingEmpty:
         """Lines 1176-1177: Room empties while entity is PENDING_ACTIVATION → IDLE."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
-        hass.states.set("binary_sensor.clearing_1", STATE_ON)
+        hass.states.set("binary_sensor.clearing_1", STATE_OFF)
 
         entry = _make_entry(extra={
             CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
@@ -1261,7 +1261,7 @@ class TestPeriodicReconciliationPaths:
         """WAITING_FOR_CLEAR for >300s with room empty → forced IDLE."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
-        hass.states.set("binary_sensor.clearing_1", STATE_ON)
+        hass.states.set("binary_sensor.clearing_1", STATE_OFF)
         entry = _make_entry(extra={
             CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
         })

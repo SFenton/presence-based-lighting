@@ -8,7 +8,6 @@
           "room_name": "Romnavn",
           "light_entities": "Lys å kontrollere",
           "presence_sensors": "Tilstedeværelsessensorer",
-          "vacancy_authority_sensors": "Autoritative fraværssensorer (valgfritt)",
           "off_delay": "Slå av forsinkelse (sekunder)"
         }
       }
@@ -28,7 +27,6 @@
         "data": {
           "light_entities": "Lys å kontrollere",
           "presence_sensors": "Tilstedeværelsessensorer",
-          "vacancy_authority_sensors": "Autoritative fraværssensorer (valgfritt)",
           "off_delay": "Slå av forsinkelse (sekunder)"
         }
       },

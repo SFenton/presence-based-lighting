@@ -9,18 +9,18 @@ from custom_components.presence_based_lighting import (
     IntentReason,
     PresenceBasedLightingCoordinator,
     EntityAutomationState,
-    _autofill_vacancy_authority_sensors,
-    _get_exact_room_vacancy_authority_sensor,
+    _autofill_aod_clearing_sensors,
+    _get_exact_room_aod_clearing_sensor,
 )
 from custom_components.presence_based_lighting.const import (
+    CONF_CLEARING_SENSORS,
+    CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
     CONF_CONTROLLED_ENTITIES,
     CONF_OFF_DELAY,
     CONF_PRESENCE_SENSORS,
     CONF_PRESENCE_CLEARED_SERVICE,
     CONF_PRESENCE_DETECTED_SERVICE,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
-    CONF_VACANCY_AUTHORITY_SENSORS,
 )
 from tests.conftest import assert_service_called, setup_entity_states
 
@@ -140,19 +140,23 @@ class TestSeparateClearingSensors:
         assert_service_called(mock_hass, "light", "turn_on", "light.office")
 
     @pytest.mark.asyncio
-    async def test_vacancy_authority_blocks_raw_clearing_flap(
+    async def test_aod_clearing_sensor_blocks_raw_clearing_flap(
         self, mock_hass, mock_config_entry_separate_clearing
     ):
-        """Raw clearing flaps off must not clear while stable room occupancy is still on."""
-        authority = "sensor.office_occupancy_status_last_changed"
+        """Raw trigger flaps off must not clear while the AOD clearing sensor is still on."""
+        aod_clearing = "sensor.office_occupancy_status_last_changed"
         mock_config_entry_separate_clearing.data[CONF_OFF_DELAY] = 0
-        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] = [authority]
+        mock_config_entry_separate_clearing.data[CONF_PRESENCE_SENSORS] = [
+            "binary_sensor.office_pir",
+            "binary_sensor.office_occupancy",
+        ]
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS] = [aod_clearing]
 
         mock_hass.states.set("light.office", STATE_ON)
         mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
         mock_hass.states.set("binary_sensor.office_occupancy", STATE_OFF)
         mock_hass.states.set(
-            authority,
+            aod_clearing,
             "2026-06-16T06:08:28+00:00",
             attributes={"previous_valid_state": STATE_ON},
         )
@@ -184,19 +188,19 @@ class TestSeparateClearingSensors:
         assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.OCCUPIED
 
     @pytest.mark.asyncio
-    async def test_vacancy_authority_occupied_cancels_pending_clear(
+    async def test_aod_clearing_sensor_occupied_cancels_pending_clear(
         self, mock_hass, mock_config_entry_separate_clearing
     ):
-        """Stable occupancy turning on cancels a pending raw-sensor clear."""
-        authority = "sensor.office_occupancy_status_last_changed"
+        """Stable occupancy turning on cancels a pending clear."""
+        aod_clearing = "sensor.office_occupancy_status_last_changed"
         mock_config_entry_separate_clearing.data[CONF_OFF_DELAY] = 10
-        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] = [authority]
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS] = [aod_clearing]
 
         mock_hass.states.set("light.office", STATE_ON)
         mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
         mock_hass.states.set("binary_sensor.office_occupancy", STATE_OFF)
         mock_hass.states.set(
-            authority,
+            aod_clearing,
             "2026-06-16T06:00:06+00:00",
             attributes={"previous_valid_state": STATE_OFF},
         )
@@ -215,7 +219,14 @@ class TestSeparateClearingSensors:
         )
 
         await coordinator._handle_presence_change(
-            _entity_event(mock_hass, "binary_sensor.office_occupancy", STATE_ON, STATE_OFF)
+            _entity_event(
+                mock_hass,
+                aod_clearing,
+                "2026-06-16T06:08:28+00:00",
+                "2026-06-16T06:00:06+00:00",
+                old_attrs={"previous_valid_state": STATE_ON},
+                new_attrs={"previous_valid_state": STATE_OFF},
+            )
         )
         assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.CLEARING
 
@@ -223,7 +234,7 @@ class TestSeparateClearingSensors:
         await coordinator._handle_presence_change(
             _entity_event(
                 mock_hass,
-                authority,
+                aod_clearing,
                 "2026-06-16T06:00:06+00:00",
                 "2026-06-16T06:08:28+00:00",
                 old_attrs={"previous_valid_state": STATE_OFF},
@@ -240,12 +251,14 @@ class TestSeparateClearingSensors:
         assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.OCCUPIED
 
 
-class TestVacancyAuthorityAutoFill:
-    """Test exact room-level vacancy authority auto-discovery."""
+class TestAodClearingAutoFill:
+    """Test exact room-level AOD clearing auto-discovery."""
 
     def test_prefers_exact_room_rlc_occupancy_status(
         self, mock_hass, mock_config_entry_separate_clearing
     ):
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS] = []
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = False
         mock_hass.states.set(
             "sensor.office_office_occupancy_status_last_changed",
             "2026-06-16T06:08:28+00:00",
@@ -253,14 +266,14 @@ class TestVacancyAuthorityAutoFill:
         )
         mock_hass.states.set("binary_sensor.office_office_occupancy_status", STATE_ON)
 
-        assert _autofill_vacancy_authority_sensors(
+        assert _autofill_aod_clearing_sensors(
             mock_hass,
             mock_config_entry_separate_clearing,
         )
-        assert mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] == [
+        assert mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS] == [
             "sensor.office_office_occupancy_status_last_changed"
         ]
-        assert mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED]
+        assert mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED]
 
     def test_uses_non_repeated_exact_room_binary_when_needed(
         self, mock_hass, mock_config_entry_separate_clearing
@@ -268,7 +281,7 @@ class TestVacancyAuthorityAutoFill:
         mock_config_entry_separate_clearing.data["room_name"] = "Upper Deck"
         mock_hass.states.set("binary_sensor.upper_deck_occupancy_status", STATE_OFF)
 
-        assert _get_exact_room_vacancy_authority_sensor(
+        assert _get_exact_room_aod_clearing_sensor(
             mock_hass,
             "Upper Deck",
         ) == "binary_sensor.upper_deck_occupancy_status"
@@ -277,30 +290,32 @@ class TestVacancyAuthorityAutoFill:
         self, mock_hass, mock_config_entry_separate_clearing
     ):
         mock_config_entry_separate_clearing.data["room_name"] = "Master Bedroom Closet"
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS] = []
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = False
         mock_hass.states.set("sensor.master_bedroom_master_bedroom_occupancy_status_last_changed", STATE_ON)
 
-        assert not _autofill_vacancy_authority_sensors(
+        assert not _autofill_aod_clearing_sensors(
             mock_hass,
             mock_config_entry_separate_clearing,
         )
-        assert mock_config_entry_separate_clearing.data.get(CONF_VACANCY_AUTHORITY_SENSORS, []) == []
+        assert mock_config_entry_separate_clearing.data.get(CONF_CLEARING_SENSORS, []) == []
 
     def test_manual_clear_after_auto_discovery_is_respected(
         self, mock_hass, mock_config_entry_separate_clearing
     ):
-        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] = []
-        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED] = True
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS] = []
+        mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = True
         mock_hass.states.set(
             "sensor.office_office_occupancy_status_last_changed",
             "2026-06-16T06:08:28+00:00",
             attributes={"previous_valid_state": STATE_ON},
         )
 
-        assert not _autofill_vacancy_authority_sensors(
+        assert not _autofill_aod_clearing_sensors(
             mock_hass,
             mock_config_entry_separate_clearing,
         )
-        assert mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] == []
+        assert mock_config_entry_separate_clearing.data[CONF_CLEARING_SENSORS] == []
 
 
 class TestPrimerSensorScenario:

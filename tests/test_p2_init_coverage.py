@@ -27,6 +27,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_AUTO_REENABLE_START_TIME,
     CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
     CONF_CLEARING_SENSORS,
+    CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
@@ -42,6 +43,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
+    CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
     CONF_VACANCY_AUTHORITY_SENSORS,
     DEFAULT_AUTO_REENABLE_END_TIME,
     DEFAULT_AUTO_REENABLE_START_TIME,
@@ -310,8 +312,8 @@ class TestMigrations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_migrate_v2_all_the_way_to_v8(self):
-        """Full chain migration from v2 through v8."""
+    async def test_migrate_v2_all_the_way_to_v9(self):
+        """Full chain migration from v2 through v9."""
         hass = MagicMock()
         entry = _make_entry(version=2)
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = False
@@ -319,7 +321,7 @@ class TestMigrations:
 
         # Track version updates
         versions = []
-        original_update = hass.config_entries.async_update_entry
+
         def track_update(e, data=None, version=None):
             if version:
                 e.version = version
@@ -330,8 +332,42 @@ class TestMigrations:
 
         result = await async_migrate_entry(hass, entry)
         assert result is True
-        assert versions == [3, 4, 5, 6, 7, 8]
-        assert entry.data[CONF_VACANCY_AUTHORITY_SENSORS] == []
+        assert versions == [3, 4, 5, 6, 7, 8, 9]
+        assert CONF_VACANCY_AUTHORITY_SENSORS not in entry.data
+        assert entry.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] is False
+
+    @pytest.mark.asyncio
+    async def test_migrate_v8_moves_vacancy_authority_to_clearing_sensors(self):
+        """Legacy vacancy authority becomes the only configured clearing sensor."""
+        hass = MagicMock()
+        entry = _make_entry(
+            version=8,
+            extra={
+                CONF_CLEARING_SENSORS: ["sensor.raw_occupancy_last_changed"],
+                CONF_VACANCY_AUTHORITY_SENSORS: [
+                    "sensor.office_office_occupancy_status_last_changed"
+                ],
+                CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED: True,
+            },
+        )
+
+        def track_update(e, data=None, version=None):
+            if version:
+                e.version = version
+            if data:
+                e.data = data
+        hass.config_entries.async_update_entry = track_update
+
+        result = await async_migrate_entry(hass, entry)
+
+        assert result is True
+        assert entry.version == 9
+        assert entry.data[CONF_CLEARING_SENSORS] == [
+            "sensor.office_office_occupancy_status_last_changed"
+        ]
+        assert entry.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] is True
+        assert CONF_VACANCY_AUTHORITY_SENSORS not in entry.data
+        assert CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED not in entry.data
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +658,7 @@ class TestPeriodicReconciliation:
         entry = _make_entry(extra={
             CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
         })
-        hass.states.set("binary_sensor.clearing_1", STATE_ON)  # clearing sensor stuck on
+        hass.states.set("binary_sensor.clearing_1", STATE_OFF)
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
         hass.services.clear()
@@ -632,7 +668,7 @@ class TestPeriodicReconciliation:
         coord._set_entity_state("light.living_room", es, EntityAutomationState.WAITING_FOR_CLEAR, "test")
         # Simulate long wait (> 300 seconds)
         es["state_entered_at"] = datetime.now(timezone.utc) - timedelta(seconds=400)
-        # Presence sensor OFF → room empty, clearing sensor stuck ON
+        # Presence sensor OFF + clearing sensor OFF → room empty
         hass.states.set("binary_sensor.living_room_motion", STATE_OFF)
 
         await coord._periodic_reconciliation(datetime.now(timezone.utc))

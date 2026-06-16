@@ -8,7 +8,6 @@
           "room_name": "Nom de la pièce",
           "light_entities": "Lumières à contrôler",
           "presence_sensors": "Capteurs de présence",
-          "vacancy_authority_sensors": "Capteurs d'autorité de vacance (facultatif)",
           "off_delay": "Délai d'extinction (secondes)"
         }
       }
@@ -28,7 +27,6 @@
         "data": {
           "light_entities": "Lumières à contrôler",
           "presence_sensors": "Capteurs de présence",
-          "vacancy_authority_sensors": "Capteurs d'autorité de vacance (facultatif)",
           "off_delay": "Délai d'extinction (secondes)"
         }
       },

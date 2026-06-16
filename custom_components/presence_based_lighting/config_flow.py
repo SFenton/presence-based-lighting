@@ -25,6 +25,7 @@ from .const import (
 	CONF_AUTO_REENABLE_PRESENCE_SENSORS,
 	CONF_AUTO_REENABLE_START_TIME,
 	CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
+	CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
 	CONF_CONTROLLED_ENTITIES,
 	CONF_DISABLE_ON_EXTERNAL_CONTROL,
 	CONF_ENTITY_ID,
@@ -44,6 +45,7 @@ from .const import (
 	CONF_RLC_TRACKING_ENTITY,
 	CONF_ROOM_NAME,
 	CONF_USE_INTERCEPTOR,
+	CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
 	CONF_VACANCY_AUTHORITY_SENSORS,
 	DEFAULT_AUTOMATION_MODE,
 	DEFAULT_AUTO_REENABLE_END_TIME,
@@ -423,7 +425,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 8
+	VERSION = 9
 
 	def __init__(self):
 		"""Initialize."""
@@ -448,7 +450,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
 				CONF_PRESENCE_SENSORS: user_input[CONF_PRESENCE_SENSORS],
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
-				CONF_VACANCY_AUTHORITY_SENSORS: user_input.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
+				CONF_CLEARING_SENSORS_AUTO_DISCOVERED: False,
 				CONF_ACTIVATION_CONDITIONS: user_input.get(CONF_ACTIVATION_CONDITIONS, []),
 				CONF_FILE_LOGGING_ENABLED: user_input.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
@@ -474,12 +476,6 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 						)
 					),
 					vol.Optional(CONF_CLEARING_SENSORS): selector.EntitySelector(
-						selector.EntitySelectorConfig(
-							domain=["binary_sensor", "sensor", "input_boolean"],
-							multiple=True,
-						)
-					),
-					vol.Optional(CONF_VACANCY_AUTHORITY_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
@@ -868,7 +864,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			CONF_ROOM_NAME: self._base_data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: self._base_data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
-			CONF_VACANCY_AUTHORITY_SENSORS: self._base_data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
+			CONF_CLEARING_SENSORS_AUTO_DISCOVERED: self._base_data.get(CONF_CLEARING_SENSORS_AUTO_DISCOVERED, False),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
@@ -1054,7 +1050,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: config_entry.data.get(CONF_CLEARING_SENSORS, []),
-			CONF_VACANCY_AUTHORITY_SENSORS: config_entry.data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
+			CONF_CLEARING_SENSORS_AUTO_DISCOVERED: config_entry.data.get(CONF_CLEARING_SENSORS_AUTO_DISCOVERED, False),
 			CONF_ACTIVATION_CONDITIONS: config_entry.data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_FILE_LOGGING_ENABLED: config_entry.data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
@@ -1103,7 +1099,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			**self.config_entry.data,
 			CONF_PRESENCE_SENSORS: self._base_data[CONF_PRESENCE_SENSORS],
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
-			CONF_VACANCY_AUTHORITY_SENSORS: self._base_data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
+			CONF_CLEARING_SENSORS_AUTO_DISCOVERED: self._base_data.get(CONF_CLEARING_SENSORS_AUTO_DISCOVERED, False),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
@@ -1113,6 +1109,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_AUTO_REENABLE_START_TIME: self._base_data.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME),
 			CONF_AUTO_REENABLE_END_TIME: self._base_data.get(CONF_AUTO_REENABLE_END_TIME, DEFAULT_AUTO_REENABLE_END_TIME),
 		}
+		new_data.pop(CONF_VACANCY_AUTHORITY_SENSORS, None)
+		new_data.pop(CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED, None)
 		self.hass.config_entries.async_update_entry(
 			self.config_entry,
 			data=new_data,
@@ -1276,15 +1274,22 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 
 	async def async_step_init(self, user_input=None):
 		"""Manage shared configuration values (OptionsFlow)."""
-		"""Manage shared configuration values."""
 		_LOGGER.debug("async_step_init called with user_input: %s", user_input)
 		self._errors = {}
 
 		if user_input is not None:
 			_LOGGER.debug("Processing user input, updating base_data")
+			previous_clearing = list(self._base_data.get(CONF_CLEARING_SENSORS, []) or [])
+			previous_auto_discovered = bool(
+				self._base_data.get(CONF_CLEARING_SENSORS_AUTO_DISCOVERED, False)
+			)
+			submitted_clearing = list(user_input.get(CONF_CLEARING_SENSORS, []) or [])
 			self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
-			self._base_data[CONF_CLEARING_SENSORS] = user_input.get(CONF_CLEARING_SENSORS, [])
-			self._base_data[CONF_VACANCY_AUTHORITY_SENSORS] = user_input.get(CONF_VACANCY_AUTHORITY_SENSORS, [])
+			self._base_data[CONF_CLEARING_SENSORS] = submitted_clearing
+			if submitted_clearing == previous_clearing:
+				self._base_data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = previous_auto_discovered
+			else:
+				self._base_data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = not submitted_clearing
 			self._base_data[CONF_ACTIVATION_CONDITIONS] = user_input.get(CONF_ACTIVATION_CONDITIONS, [])
 			self._base_data[CONF_FILE_LOGGING_ENABLED] = user_input.get(
 				CONF_FILE_LOGGING_ENABLED,
@@ -1319,15 +1324,6 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					vol.Optional(
 						CONF_CLEARING_SENSORS,
 						default=self._base_data.get(CONF_CLEARING_SENSORS, []),
-					): selector.EntitySelector(
-						selector.EntitySelectorConfig(
-							domain=["binary_sensor", "sensor", "input_boolean"],
-							multiple=True,
-						)
-					),
-					vol.Optional(
-						CONF_VACANCY_AUTHORITY_SENSORS,
-						default=self._base_data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "sensor", "input_boolean"],

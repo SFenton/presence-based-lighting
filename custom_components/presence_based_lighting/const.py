@@ -18,6 +18,7 @@ PLATFORMS = [SWITCH]
 CONF_ROOM_NAME = "room_name"
 CONF_PRESENCE_SENSORS = "presence_sensors"
 CONF_CLEARING_SENSORS = "clearing_sensors"
+CONF_CLEARING_SENSORS_AUTO_DISCOVERED = "clearing_sensors_auto_discovered"
 CONF_VACANCY_AUTHORITY_SENSORS = "vacancy_authority_sensors"
 CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED = "vacancy_authority_auto_discovered"
 CONF_OFF_DELAY = "off_delay"
