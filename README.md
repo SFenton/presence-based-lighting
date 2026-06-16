@@ -75,7 +75,9 @@ Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_pre
 3. Search for **"Presence Based Lighting"**
 4. Configure your room:
   - **Room Name**: e.g., "Living Room"
-  - **Presence Sensors**: Binary sensors that indicate occupancy
+  - **Trigger Sensors**: Fast motion or presence sensors that should turn entities on
+  - **Clearing Sensors**: Optional sensors that must all be clear before entities turn off
+  - **Vacancy Authority Sensors**: Optional stable/fused occupancy sensors that must also be clear before entities turn off. Use these when raw mmWave/PIR occupancy can flap but a room-level occupancy helper is more reliable for vacancy decisions.
   - **Global Turn-Off Delay**: Seconds to wait when presence clears
 5. Add entities to control. For each entity:
   - Select the target entity

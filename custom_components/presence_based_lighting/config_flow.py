@@ -44,6 +44,7 @@ from .const import (
 	CONF_RLC_TRACKING_ENTITY,
 	CONF_ROOM_NAME,
 	CONF_USE_INTERCEPTOR,
+	CONF_VACANCY_AUTHORITY_SENSORS,
 	DEFAULT_AUTOMATION_MODE,
 	DEFAULT_AUTO_REENABLE_END_TIME,
 	DEFAULT_AUTO_REENABLE_START_TIME,
@@ -447,6 +448,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_ROOM_NAME: user_input[CONF_ROOM_NAME],
 				CONF_PRESENCE_SENSORS: user_input[CONF_PRESENCE_SENSORS],
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
+				CONF_VACANCY_AUTHORITY_SENSORS: user_input.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
 				CONF_ACTIVATION_CONDITIONS: user_input.get(CONF_ACTIVATION_CONDITIONS, []),
 				CONF_FILE_LOGGING_ENABLED: user_input.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
@@ -472,6 +474,12 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 						)
 					),
 					vol.Optional(CONF_CLEARING_SENSORS): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain=["binary_sensor", "sensor", "input_boolean"],
+							multiple=True,
+						)
+					),
+					vol.Optional(CONF_VACANCY_AUTHORITY_SENSORS): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "sensor", "input_boolean"],
 							multiple=True,
@@ -860,6 +868,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			CONF_ROOM_NAME: self._base_data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: self._base_data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
+			CONF_VACANCY_AUTHORITY_SENSORS: self._base_data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
@@ -1045,6 +1054,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],
 			CONF_PRESENCE_SENSORS: config_entry.data.get(CONF_PRESENCE_SENSORS, []),
 			CONF_CLEARING_SENSORS: config_entry.data.get(CONF_CLEARING_SENSORS, []),
+			CONF_VACANCY_AUTHORITY_SENSORS: config_entry.data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
 			CONF_ACTIVATION_CONDITIONS: config_entry.data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_FILE_LOGGING_ENABLED: config_entry.data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
@@ -1093,6 +1103,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			**self.config_entry.data,
 			CONF_PRESENCE_SENSORS: self._base_data[CONF_PRESENCE_SENSORS],
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
+			CONF_VACANCY_AUTHORITY_SENSORS: self._base_data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
 			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
@@ -1273,6 +1284,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			_LOGGER.debug("Processing user input, updating base_data")
 			self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
 			self._base_data[CONF_CLEARING_SENSORS] = user_input.get(CONF_CLEARING_SENSORS, [])
+			self._base_data[CONF_VACANCY_AUTHORITY_SENSORS] = user_input.get(CONF_VACANCY_AUTHORITY_SENSORS, [])
 			self._base_data[CONF_ACTIVATION_CONDITIONS] = user_input.get(CONF_ACTIVATION_CONDITIONS, [])
 			self._base_data[CONF_FILE_LOGGING_ENABLED] = user_input.get(
 				CONF_FILE_LOGGING_ENABLED,
@@ -1307,6 +1319,15 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					vol.Optional(
 						CONF_CLEARING_SENSORS,
 						default=self._base_data.get(CONF_CLEARING_SENSORS, []),
+					): selector.EntitySelector(
+						selector.EntitySelectorConfig(
+							domain=["binary_sensor", "sensor", "input_boolean"],
+							multiple=True,
+						)
+					),
+					vol.Optional(
+						CONF_VACANCY_AUTHORITY_SENSORS,
+						default=self._base_data.get(CONF_VACANCY_AUTHORITY_SENSORS, []),
 					): selector.EntitySelector(
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "sensor", "input_boolean"],

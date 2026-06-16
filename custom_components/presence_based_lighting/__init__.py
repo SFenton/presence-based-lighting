@@ -53,6 +53,7 @@ from .const import (
 	CONF_RESPECTS_PRESENCE_ALLOWED,
 	CONF_RLC_TRACKING_ENTITY,
 	CONF_ROOM_NAME,
+	CONF_VACANCY_AUTHORITY_SENSORS,
 	DEFAULT_AUTOMATION_MODE,
 	DEFAULT_AUTO_REENABLE_END_TIME,
 	DEFAULT_AUTO_REENABLE_START_TIME,
@@ -104,11 +105,11 @@ class EntityAutomationState(Enum):
 	State diagram::
 
 	  IDLE ──presence detected──▶ OCCUPIED (or PENDING_ACTIVATION)
-	  OCCUPIED ──clearing sensors clear──▶ CLEARING (timer started)
-	  CLEARING ──timer fires + sensors clear──▶ IDLE
-	  CLEARING ──timer fires + sensors NOT clear──▶ WAITING_FOR_CLEAR
+	  OCCUPIED ──clear conditions met──▶ CLEARING (timer started)
+	  CLEARING ──timer fires + clear conditions met──▶ IDLE
+	  CLEARING ──timer fires + clear conditions NOT met──▶ WAITING_FOR_CLEAR
 	  CLEARING ──presence detected──▶ OCCUPIED
-	  WAITING_FOR_CLEAR ──sensors clear──▶ IDLE
+	  WAITING_FOR_CLEAR ──clear conditions met──▶ IDLE
 	  WAITING_FOR_CLEAR ──presence detected──▶ OCCUPIED
 	  WAITING_FOR_CLEAR ──safety timeout + room empty──▶ IDLE (forced)
 	  WAITING_FOR_CLEAR ──safety timeout + room occupied──▶ OCCUPIED
@@ -677,18 +678,20 @@ class PresenceBasedLightingCoordinator:
 			controlled_ids = list(self._entity_states.keys())
 			presence_sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
 			clearing_sensors = self.entry.data.get(CONF_CLEARING_SENSORS, [])
+			vacancy_authority_sensors = self.entry.data.get(CONF_VACANCY_AUTHORITY_SENSORS, [])
 			activation_conditions = self.entry.data.get(CONF_ACTIVATION_CONDITIONS, [])
 			
 			# Store presence and clearing sensors directly
 			# RLC sensors are handled via their previous_valid_state attribute
 			self._presence_sensors = set(presence_sensors)
 			self._clearing_sensors = set(clearing_sensors) if clearing_sensors else set(presence_sensors)
+			self._vacancy_authority_sensors = set(vacancy_authority_sensors)
 			
 			# Store activation conditions (optional AND gate for light activation)
 			self._activation_conditions = set(activation_conditions)
 			
 			# Combine all sensors for state change tracking
-			all_sensors = list(set(presence_sensors + clearing_sensors))
+			all_sensors = list(set(presence_sensors + clearing_sensors + vacancy_authority_sensors))
 			
 			# Initialize last_effective_state for RLC-tracked entities
 			# This prevents the first state change event from being treated as a "change"
@@ -720,6 +723,11 @@ class PresenceBasedLightingCoordinator:
 			_LOGGER.debug("Setting up listeners for %d clearing sensors: %s", 
 						 len(clearing_sensors) if clearing_sensors else len(presence_sensors), 
 						 clearing_sensors if clearing_sensors else presence_sensors)
+			_LOGGER.debug(
+				"Setting up listeners for %d vacancy authority sensors: %s",
+				len(vacancy_authority_sensors),
+				vacancy_authority_sensors,
+			)
 
 			if controlled_ids:
 				self._listeners.append(
@@ -757,7 +765,7 @@ class PresenceBasedLightingCoordinator:
 						self._handle_presence_change,
 					)
 				)
-				_LOGGER.debug("Registered state change listener for presence/clearing sensors")
+				_LOGGER.debug("Registered state change listener for presence/clearing/vacancy authority sensors")
 
 			# Register listener for activation conditions (AND gate for light activation)
 			if activation_conditions:
@@ -1093,7 +1101,7 @@ class PresenceBasedLightingCoordinator:
 			if self._ownership_manager.other_entry_wants_on(self.entry.entry_id, entity_id):
 				return False
 			if not intent.get("force"):
-				if not self._are_clearing_sensors_clear():
+				if not self._can_clear_room():
 					return False
 				if self._cleared_intent_blocked_by_presence(entity_state):
 					return False
@@ -1752,7 +1760,7 @@ class PresenceBasedLightingCoordinator:
 		if target_state != config[CONF_PRESENCE_DETECTED_STATE]:
 			return False
 
-		if not self._are_clearing_sensors_clear():
+		if not self._can_clear_room():
 			return False
 
 		if (
@@ -1760,7 +1768,7 @@ class PresenceBasedLightingCoordinator:
 			and entity_state.get("off_timer") is not None
 		):
 			_LOGGER.debug(
-				"[%s] External detected action while sensors clear; existing off timer remains active",
+				"[%s] External detected action while clear conditions are met; existing off timer remains active",
 				entity_id,
 			)
 			return True
@@ -1769,7 +1777,7 @@ class PresenceBasedLightingCoordinator:
 			entity_id,
 			entity_state,
 			EntityAutomationState.OCCUPIED,
-			"external detected action while sensors clear",
+			"external detected action while clear conditions are met",
 		)
 		await self._start_entity_off_timer(entity_id, entity_state)
 		return True
@@ -1842,7 +1850,7 @@ class PresenceBasedLightingCoordinator:
 							 config.get(CONF_ENTITY_ID), err)
 
 	async def _handle_presence_change(self, event: Event) -> None:
-		"""Handle state changes on presence/clearing sensors.
+		"""Handle state changes on presence/clearing/vacancy authority sensors.
 		
 		For real_last_changed sensors, the state is a timestamp that changes when
 		the source entity changes. We read the previous_valid_state attribute to
@@ -1889,6 +1897,7 @@ class PresenceBasedLightingCoordinator:
 
 			presence_sensors = getattr(self, '_presence_sensors', set())
 			clearing_sensors = getattr(self, '_clearing_sensors', set())
+			vacancy_authority_sensors = getattr(self, '_vacancy_authority_sensors', set())
 			
 			# --- Presence sensor turns ON ---
 			if currently_on and entity_id in presence_sensors:
@@ -1911,21 +1920,39 @@ class PresenceBasedLightingCoordinator:
 							await self._apply_service_intent(eid, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
 						else:
 							self._set_entity_state(eid, es, EntityAutomationState.PENDING_ACTIVATION, "presence detected, conditions not met")
-				# Start off-timer for OCCUPIED entities ONLY if clearing sensors
-				# are already clear (primer-sensor case: hallway PIR triggers but
-				# nobody enters the room).  When clearing sensors are still active
-				# the entity must stay in OCCUPIED and let the clearing-sensor-OFF
-				# handler manage the transition naturally.
-				if self._are_clearing_sensors_clear():
+				# Start off-timer for OCCUPIED entities ONLY if all clear
+				# conditions are already met (primer-sensor case: hallway PIR
+				# triggers but nobody enters the room). When clear conditions are
+				# not met, the entity must stay in OCCUPIED and let the OFF handler
+				# manage the transition naturally.
+				if self._can_clear_room():
 					await self._start_off_timer()
+
+			# --- Vacancy authority turns ON ---
+			elif currently_on and entity_id in vacancy_authority_sensors:
+				_LOGGER.debug("Vacancy authority occupied via %s", entity_id)
+				for eid, es in self._entity_states.items():
+					if not self._presence_switch_allows_entity(es):
+						continue
+					cur = es["state"]
+					if cur in (
+						EntityAutomationState.CLEARING,
+						EntityAutomationState.WAITING_FOR_CLEAR,
+						EntityAutomationState.SETTLING_OFF,
+					):
+						self._cancel_entity_timer(es)
+						self._cancel_entity_actuation(es, "vacancy authority occupied")
+						self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "vacancy authority occupied")
+						await self._apply_service_intent(eid, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
 
 			# --- Clearing sensor turns OFF ---
 			elif currently_off:
-				effective_clearing = clearing_sensors if clearing_sensors else presence_sensors
+				effective_clearing = set(clearing_sensors if clearing_sensors else presence_sensors)
+				effective_clearing.update(vacancy_authority_sensors)
 				if entity_id in effective_clearing:
-					all_clear = self._are_clearing_sensors_clear()
+					all_clear = self._can_clear_room()
 					if all_clear:
-						_LOGGER.debug("All clearing sensors clear")
+						_LOGGER.debug("All clear conditions met")
 						for eid, es in self._entity_states.items():
 							if not self._presence_switch_allows_entity(es):
 								continue
@@ -1934,8 +1961,8 @@ class PresenceBasedLightingCoordinator:
 								# Start off-timer → CLEARING
 								await self._start_entity_off_timer(eid, es)
 							elif cur == EntityAutomationState.WAITING_FOR_CLEAR:
-								# Sensors finally cleared – turn off immediately
-								_LOGGER.debug("%s: sensors cleared while WAITING_FOR_CLEAR, turning off", eid)
+								# Clear conditions finally met – turn off immediately
+								_LOGGER.debug("%s: clear conditions met while WAITING_FOR_CLEAR, turning off", eid)
 								self._cancel_entity_timer(es)
 								await self._apply_service_intent(eid, es, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 							elif cur == EntityAutomationState.PENDING_ACTIVATION:
@@ -1983,10 +2010,10 @@ class PresenceBasedLightingCoordinator:
 					self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "activation conditions met")
 					await self._apply_service_intent(eid, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.CONDITIONS)
 			
-			# Start off-timer for newly-OCCUPIED entities ONLY if clearing
-			# sensors are already clear (same primer-sensor guard as in
+			# Start off-timer for newly-OCCUPIED entities ONLY if clear
+			# conditions are already met (same primer-sensor guard as in
 			# _handle_presence_change).
-			if self._are_clearing_sensors_clear():
+			if self._can_clear_room():
 				await self._start_off_timer()
 		except Exception as err:
 			_LOGGER.exception("Error handling activation condition change: %s", err)
@@ -2137,6 +2164,40 @@ class PresenceBasedLightingCoordinator:
 		presence = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
 		return all(is_entity_off(self.hass, sensor) for sensor in presence)
 
+	def _are_vacancy_authority_sensors_clear(self) -> bool:
+		"""Check stable/fused vacancy authority sensors before clearing."""
+		sensors = getattr(self, '_vacancy_authority_sensors', set())
+		if not sensors:
+			sensors = set(self.entry.data.get(CONF_VACANCY_AUTHORITY_SENSORS, []))
+		if not sensors:
+			return True
+
+		result = all(is_entity_off(self.hass, sensor) for sensor in sensors)
+		if not result:
+			for sensor in sensors:
+				effective = get_effective_state(self.hass, sensor)
+				if effective != "off":
+					_LOGGER.debug(
+						"Vacancy authority sensor %s blocks clearing: effective_state=%s",
+						sensor,
+						effective,
+					)
+		return result
+
+	def _is_vacancy_authority_occupied(self) -> bool:
+		"""Check whether stable/fused vacancy authority sensors still say occupied."""
+		sensors = getattr(self, '_vacancy_authority_sensors', set())
+		if not sensors:
+			sensors = set(self.entry.data.get(CONF_VACANCY_AUTHORITY_SENSORS, []))
+		return any(is_entity_on(self.hass, sensor) for sensor in sensors)
+
+	def _can_clear_room(self) -> bool:
+		"""Return true only when both raw clearing and stable vacancy authority agree."""
+		return (
+			self._are_clearing_sensors_clear()
+			and self._are_vacancy_authority_sensors_clear()
+		)
+
 	def _are_activation_conditions_met(self) -> bool:
 		"""Check if all activation conditions are satisfied (AND gate).
 		
@@ -2183,7 +2244,7 @@ class PresenceBasedLightingCoordinator:
 		"""Execute the off timer for a specific entity.
 		
 		When timer fires:
-		- If clearing sensors are clear → transition to IDLE (turn off)
+		- If clear conditions are met → transition to IDLE (turn off)
 		- If not clear → transition to WAITING_FOR_CLEAR (event-driven recovery)
 		"""
 		this_task = asyncio.current_task()
@@ -2192,7 +2253,7 @@ class PresenceBasedLightingCoordinator:
 			while True:
 				await asyncio.sleep(delay)
 
-				if self._are_clearing_sensors_clear():
+				if self._can_clear_room():
 					if self._cleared_intent_blocked_by_presence(entity_state):
 						_LOGGER.debug(
 							"[%s] Timer fired, but presence sensors still occupied -> keeping off timer active",
@@ -2201,12 +2262,12 @@ class PresenceBasedLightingCoordinator:
 						if delay <= 0:
 							await asyncio.sleep(1)
 						continue
-					_LOGGER.debug("[%s] Timer fired, clearing sensors clear → cleared intent", entity_id)
+					_LOGGER.debug("[%s] Timer fired, clear conditions met → cleared intent", entity_id)
 					await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING)
 					return
 
 				_LOGGER.debug(
-					"[%s] Timer fired, clearing sensors NOT all clear → WAITING_FOR_CLEAR",
+					"[%s] Timer fired, clear conditions NOT all met → WAITING_FOR_CLEAR",
 					entity_id,
 				)
 				self._set_entity_state(
@@ -2296,7 +2357,7 @@ class PresenceBasedLightingCoordinator:
 		cur = entity_state["state"]
 		occupied = self._is_any_occupied()
 		conditions_met = self._are_activation_conditions_met()
-		clearing_clear = self._are_clearing_sensors_clear()
+		clearing_clear = self._can_clear_room()
 
 		if occupied and conditions_met:
 			if cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING, EntityAutomationState.SETTLING_ON):
@@ -2304,7 +2365,7 @@ class PresenceBasedLightingCoordinator:
 				self._cancel_entity_actuation(entity_state, "reconcile occupied")
 				self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: occupied + conditions met")
 				await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
-				# If clearing sensors are already clear, start timer immediately
+				# If clear conditions are already met, start timer immediately
 				if clearing_clear:
 					await self._start_entity_off_timer(entity_id, entity_state)
 		elif occupied and not conditions_met:
@@ -2358,9 +2419,9 @@ class PresenceBasedLightingCoordinator:
 
 				# WAITING_FOR_CLEAR safety timeout
 				if cur == EntityAutomationState.WAITING_FOR_CLEAR:
-					if self._are_clearing_sensors_clear():
+					if self._can_clear_room():
 						_LOGGER.info(
-							"[%s] Reconciliation: WAITING_FOR_CLEAR but sensors are clear → IDLE",
+							"[%s] Reconciliation: WAITING_FOR_CLEAR but clear conditions are met → IDLE",
 							entity_id,
 						)
 						self._cancel_entity_timer(es)
@@ -2370,9 +2431,9 @@ class PresenceBasedLightingCoordinator:
 						entered = es.get("state_entered_at")
 						if entered and (now - entered).total_seconds() > _WAITING_FOR_CLEAR_MAX_SECONDS:
 							self._cancel_entity_timer(es)
-							# If presence sensors still show the room as occupied,
-							# transition back to OCCUPIED instead of forcing IDLE.
-							if self._is_any_occupied():
+							# If presence or vacancy authority still show the room as
+							# occupied, transition back to OCCUPIED instead of forcing IDLE.
+							if self._is_any_occupied() or self._is_vacancy_authority_occupied():
 								_LOGGER.info(
 									"[%s] WAITING_FOR_CLEAR for >%ds, but room still occupied → OCCUPIED",
 									entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
@@ -2381,7 +2442,7 @@ class PresenceBasedLightingCoordinator:
 								await self._apply_service_intent(entity_id, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
 							else:
 								_LOGGER.warning(
-									"[%s] WAITING_FOR_CLEAR for >%ds, forcing IDLE (clearing sensors still not all clear)",
+									"[%s] WAITING_FOR_CLEAR for >%ds, forcing IDLE (clear conditions still not all met)",
 									entity_id, _WAITING_FOR_CLEAR_MAX_SECONDS,
 								)
 								await self._apply_service_intent(entity_id, es, CONF_PRESENCE_CLEARED_SERVICE, IntentReason.CLEARING, force=True)
@@ -2394,11 +2455,11 @@ class PresenceBasedLightingCoordinator:
 					)
 					await self._start_entity_off_timer(entity_id, es)
 
-				# OCCUPIED but room is actually empty and clearing sensors clear
+				# OCCUPIED but room is actually empty and clear conditions are met
 				elif cur == EntityAutomationState.OCCUPIED:
-					if not self._is_any_occupied() and self._are_clearing_sensors_clear():
+					if not self._is_any_occupied() and self._can_clear_room():
 						_LOGGER.info(
-							"[%s] Reconciliation: OCCUPIED but room empty + sensors clear → starting off-timer",
+							"[%s] Reconciliation: OCCUPIED but room empty + clear conditions met → starting off-timer",
 							entity_id,
 						)
 						await self._start_entity_off_timer(entity_id, es)
@@ -2411,7 +2472,7 @@ class PresenceBasedLightingCoordinator:
 							entity_id,
 						)
 						await self._reconcile_entity(entity_id, es)
-					elif self._are_clearing_sensors_clear():
+					elif self._can_clear_room():
 						current_state = self.hass.states.get(entity_id)
 						detected_state = es["config"].get(CONF_PRESENCE_DETECTED_STATE, STATE_ON)
 						if current_state and current_state.state == detected_state:

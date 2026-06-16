@@ -17,12 +17,13 @@ from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_CLEARED_SERVICE,
     CONF_PRESENCE_DETECTED_SERVICE,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
+    CONF_VACANCY_AUTHORITY_SENSORS,
 )
 from tests.conftest import assert_service_called, setup_entity_states
 
 
 def _entity_event(mock_hass, entity_id, old_state, new_state, old_attrs=None, new_attrs=None):
-    mock_hass.states.set(entity_id, new_state)
+    mock_hass.states.set(entity_id, new_state, attributes=new_attrs or {})
     return type(
         "Event",
         (),
@@ -134,6 +135,106 @@ class TestSeparateClearingSensors:
         )
         # Detected action called
         assert_service_called(mock_hass, "light", "turn_on", "light.office")
+
+    @pytest.mark.asyncio
+    async def test_vacancy_authority_blocks_raw_clearing_flap(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        """Raw clearing flaps off must not clear while stable room occupancy is still on."""
+        authority = "sensor.office_occupancy_status_last_changed"
+        mock_config_entry_separate_clearing.data[CONF_OFF_DELAY] = 0
+        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] = [authority]
+
+        mock_hass.states.set("light.office", STATE_ON)
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_occupancy", STATE_OFF)
+        mock_hass.states.set(
+            authority,
+            "2026-06-16T06:08:28+00:00",
+            attributes={"previous_valid_state": STATE_ON},
+        )
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_separate_clearing)
+        await coordinator.async_start()
+        entity_state = coordinator._entity_states["light.office"]
+        if entity_state["off_timer"]:
+            entity_state["off_timer"].cancel()
+            entity_state["off_timer"] = None
+        coordinator._set_entity_state(
+            "light.office",
+            entity_state,
+            EntityAutomationState.OCCUPIED,
+            "test occupied",
+        )
+
+        mock_hass.services.clear()
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.office_occupancy", STATE_ON, STATE_OFF)
+        )
+        await asyncio.sleep(0.08)
+
+        turn_off_calls = [
+            call for call in mock_hass.services.calls
+            if call["service"] == "turn_off" and call["service_data"]["entity_id"] == "light.office"
+        ]
+        assert turn_off_calls == []
+        assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.OCCUPIED
+
+    @pytest.mark.asyncio
+    async def test_vacancy_authority_occupied_cancels_pending_clear(
+        self, mock_hass, mock_config_entry_separate_clearing
+    ):
+        """Stable occupancy turning on cancels a pending raw-sensor clear."""
+        authority = "sensor.office_occupancy_status_last_changed"
+        mock_config_entry_separate_clearing.data[CONF_OFF_DELAY] = 10
+        mock_config_entry_separate_clearing.data[CONF_VACANCY_AUTHORITY_SENSORS] = [authority]
+
+        mock_hass.states.set("light.office", STATE_ON)
+        mock_hass.states.set("binary_sensor.office_pir", STATE_OFF)
+        mock_hass.states.set("binary_sensor.office_occupancy", STATE_OFF)
+        mock_hass.states.set(
+            authority,
+            "2026-06-16T06:00:06+00:00",
+            attributes={"previous_valid_state": STATE_OFF},
+        )
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_separate_clearing)
+        await coordinator.async_start()
+        entity_state = coordinator._entity_states["light.office"]
+        if entity_state["off_timer"]:
+            entity_state["off_timer"].cancel()
+            entity_state["off_timer"] = None
+        coordinator._set_entity_state(
+            "light.office",
+            entity_state,
+            EntityAutomationState.OCCUPIED,
+            "test occupied",
+        )
+
+        await coordinator._handle_presence_change(
+            _entity_event(mock_hass, "binary_sensor.office_occupancy", STATE_ON, STATE_OFF)
+        )
+        assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.CLEARING
+
+        mock_hass.services.clear()
+        await coordinator._handle_presence_change(
+            _entity_event(
+                mock_hass,
+                authority,
+                "2026-06-16T06:00:06+00:00",
+                "2026-06-16T06:08:28+00:00",
+                old_attrs={"previous_valid_state": STATE_OFF},
+                new_attrs={"previous_valid_state": STATE_ON},
+            )
+        )
+        await asyncio.sleep(0.08)
+
+        turn_off_calls = [
+            call for call in mock_hass.services.calls
+            if call["service"] == "turn_off" and call["service_data"]["entity_id"] == "light.office"
+        ]
+        assert turn_off_calls == []
+        assert coordinator._entity_states["light.office"]["state"] == EntityAutomationState.OCCUPIED
 
 
 class TestPrimerSensorScenario:
