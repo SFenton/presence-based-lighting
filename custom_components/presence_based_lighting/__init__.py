@@ -1899,11 +1899,6 @@ class PresenceBasedLightingCoordinator:
 		trigger (interceptor blocks proactively). When not active, this is the
 		primary mechanism that reverts state reactively after it changes.
 		"""
-		# Skip state-change fallback when using interceptor; service-call fallback
-		# still runs because reaching the listener means the call was not blocked.
-		if self._using_interceptor and not force_fallback:
-			return False
-		
 		cfg = entity_state["config"]
 		entity_id = cfg[CONF_ENTITY_ID]
 		
@@ -2442,6 +2437,16 @@ class PresenceBasedLightingCoordinator:
 				# If clear conditions are already met, start timer immediately
 				if clearing_clear:
 					await self._start_entity_off_timer(entity_id, entity_state)
+			else:
+				current_ha_state = self.hass.states.get(entity_state["config"][CONF_ENTITY_ID])
+				detected_state = entity_state["config"].get(CONF_PRESENCE_DETECTED_STATE, STATE_ON)
+				if current_ha_state and current_ha_state.state != detected_state:
+					_LOGGER.info(
+						"[%s] Reconciliation: occupied but entity is %s, reapplying detected intent",
+						entity_id,
+						current_ha_state.state,
+					)
+					await self._apply_service_intent(entity_id, entity_state, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.PRESENCE)
 		elif occupied and not conditions_met:
 			# Conditions not met, but if the light is already on, treat as OCCUPIED
 			# (conditions only gate *turning on*, not maintaining current state)
@@ -2537,6 +2542,8 @@ class PresenceBasedLightingCoordinator:
 							entity_id,
 						)
 						await self._start_entity_off_timer(entity_id, es)
+					elif self._is_any_occupied() and self._are_activation_conditions_met():
+						await self._reconcile_entity(entity_id, es)
 
 				# IDLE but room is occupied (missed a presence event?)
 				elif cur == EntityAutomationState.IDLE:

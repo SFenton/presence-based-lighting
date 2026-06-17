@@ -771,8 +771,8 @@ class TestControlledEntityChangeRLC:
 class TestPresenceLockEdges:
 
     @pytest.mark.asyncio
-    async def test_presence_lock_with_interceptor_active_skips(self):
-        """Line 1028: When interceptor is active, presence lock fallback is skipped."""
+    async def test_presence_lock_with_interceptor_active_still_falls_back(self):
+        """Interceptor misses still fall back when a conflicting state change arrives."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
         entry = _make_entry(extra={
@@ -794,7 +794,8 @@ class TestPresenceLockEdges:
 
         es = coord._entity_states["light.living_room"]
         result = await coord._check_and_apply_presence_lock(es, "on")
-        assert result is False  # Skipped because interceptor is active
+        assert result is True
+        assert_service_called(hass, "light", "turn_off", "light.living_room")
 
     @pytest.mark.asyncio
     async def test_force_apply_action_no_action(self):

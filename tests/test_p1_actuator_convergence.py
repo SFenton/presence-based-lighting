@@ -6,10 +6,14 @@ from homeassistant.const import STATE_OFF, STATE_ON
 from custom_components.presence_based_lighting import (
     ActuationStatus,
     EntityAutomationState,
+    IntentReason,
     PresenceBasedLightingCoordinator,
     _ACTUATION_MAX_ATTEMPTS,
 )
-from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
 from tests.conftest import MockState, assert_service_called, setup_entity_states
 
 
@@ -165,3 +169,24 @@ async def test_periodic_reconciliation_starts_missing_off_actuation(mock_hass, m
     assert entity_state["state"] == EntityAutomationState.SETTLING_OFF
     assert entity_state["actuation"]["service_key"] == CONF_PRESENCE_CLEARED_SERVICE
     assert_service_called(mock_hass, "light", "turn_off", "light.living_room")
+
+
+@pytest.mark.asyncio
+async def test_periodic_reconciliation_reasserts_occupied_light_drift(mock_hass, mock_config_entry):
+    """The audit loop re-sends detected intent if an occupied entity drifts off."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = coordinator._entity_states["light.living_room"]
+    entity_state["state"] = EntityAutomationState.OCCUPIED
+    await coordinator._apply_service_intent(
+        "light.living_room",
+        entity_state,
+        CONF_PRESENCE_DETECTED_SERVICE,
+        IntentReason.PRESENCE,
+    )
+    mock_hass.states.set("light.living_room", STATE_OFF)
+    mock_hass.services.clear()
+
+    await coordinator._periodic_reconciliation(None)
+
+    assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
