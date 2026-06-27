@@ -1261,6 +1261,60 @@ class TestRLCTrackingEntityForManualControl:
         assert coordinator.get_automation_paused("light.test_light") is False
 
     @pytest.mark.asyncio
+    async def test_rlc_listener_bootstraps_missing_prior_effective_without_pause(
+        self, mock_hass, mock_entry_with_rlc_tracking
+    ):
+        """First RLC event after startup establishes baseline, not manual off."""
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "off", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "off", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+
+        entity_state = coordinator._entity_states["light.test_light"]
+        entity_state["last_effective_state"] = None
+        event = self._rlc_event(self._create_state_change_event, "on", "off")
+
+        await coordinator._handle_rlc_tracking_change(event)
+
+        assert entity_state["last_effective_state"] == "off"
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_rlc_listener_bootstraps_missing_old_state_without_pause(
+        self, mock_hass, mock_entry_with_rlc_tracking
+    ):
+        """Recorder-restore RLC add events should not look like manual off."""
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "off", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "off", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+
+        entity_state = coordinator._entity_states["light.test_light"]
+        entity_state["last_effective_state"] = "on"
+        event = self._rlc_event(self._create_state_change_event, None, "off")
+
+        await coordinator._handle_rlc_tracking_change(event)
+
+        assert entity_state["last_effective_state"] == "off"
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
     async def test_rlc_listener_handles_exception(self, started_rlc_coordinator):
         """A malformed RLC event is caught and logged without raising."""
         coordinator = started_rlc_coordinator
@@ -1311,3 +1365,47 @@ class TestRLCTrackingEntityForManualControl:
         event = self._rlc_event(self._create_state_change_event, "on", "off")
         await coordinator._handle_rlc_tracking_change(event)
         assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_redundant_external_turn_off_service_does_not_pause(
+        self, mock_hass, mock_entry_with_rlc_tracking
+    ):
+        """External turn_off while RLC already says off is startup/retry noise."""
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "off", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "off", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "off"},
+        }
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+
+        await coordinator._handle_external_action("light.test_light", "turn_off")
+
+        assert coordinator.get_automation_paused("light.test_light") is False
+
+    @pytest.mark.asyncio
+    async def test_external_turn_off_service_still_pauses_when_rlc_was_on(
+        self, mock_hass, mock_entry_with_rlc_tracking
+    ):
+        """A non-redundant external turn_off is still treated as manual control."""
+        mock_hass._states_data["binary_sensor.motion"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["light.test_light"] = {"state": "on", "attributes": {}}
+        mock_hass._states_data["sensor.light_test_light_rlc"] = {
+            "state": "2024-01-01T12:00:00+00:00",
+            "attributes": {ATTR_PREVIOUS_VALID_STATE: "on"},
+        }
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_entry_with_rlc_tracking)
+            await coordinator.async_start()
+
+        await coordinator._handle_external_action("light.test_light", "turn_off")
+
+        assert coordinator.get_automation_paused("light.test_light") is True

@@ -13,7 +13,6 @@ from typing import Callable, Dict, Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
 	EVENT_CALL_SERVICE,
-	EVENT_STATE_CHANGED,
 	STATE_OFF,
 	STATE_ON,
 )
@@ -171,6 +170,7 @@ _ACTUATION_RETRY_DELAY_SECONDS = 1
 _ACTUATION_MAX_ATTEMPTS = 3
 _RLC_MIGRATION_RETRY_SECONDS = 30
 _VACANCY_AUTHORITY_AUTOFILL_RETRY_SECONDS = 30
+_UNTRUSTED_STARTUP_STATES = {"unavailable", "unknown"}
 
 # Persistent debug log file (uncapped)
 _log_file_handler: logging.FileHandler | None = None
@@ -1682,6 +1682,15 @@ class PresenceBasedLightingCoordinator:
 				# Get the "real" state from the RLC sensor
 				rlc_state = get_effective_state(self.hass, rlc_tracking_entity)
 				if rlc_state is None:
+					if (
+						old_state.state in _UNTRUSTED_STARTUP_STATES
+						or new_state.state in _UNTRUSTED_STARTUP_STATES
+					):
+						_LOGGER.debug(
+							"RLC tracking entity %s unavailable for %s, ignoring startup state %s -> %s",
+							rlc_tracking_entity, entity_id, old_state.state, new_state.state,
+						)
+						return
 					_LOGGER.debug(
 						"RLC tracking entity %s unavailable for %s, falling back to direct state %s",
 						rlc_tracking_entity, entity_id, new_state.state
@@ -1755,7 +1764,15 @@ class PresenceBasedLightingCoordinator:
 				return
 
 			entity_state = self._entity_states[entity_id]
-			if new_effective == entity_state.get("last_effective_state"):
+			last_effective = entity_state.get("last_effective_state")
+			if last_effective is None or old_effective is None:
+				entity_state["last_effective_state"] = new_effective
+				_LOGGER.debug(
+					"RLC tracking entity %s for %s initialized baseline to %s (old_effective=%s)",
+					rlc_entity_id, entity_id, new_effective, old_effective,
+				)
+				return
+			if new_effective == last_effective:
 				# Already processed (e.g. the synchronous read in
 				# _handle_controlled_entity_change saw the fresh RLC value first).
 				return
@@ -1840,6 +1857,10 @@ class PresenceBasedLightingCoordinator:
 
 		# Determine whether this external action should pause or resume automation
 		should_pause = self._should_external_change_pause(entity_id, cfg, target_state)
+		if should_pause and self._external_pause_action_is_untrusted_or_redundant(
+			entity_id, entity_state, target_state
+		):
+			return
 
 		if should_pause:
 			self.set_automation_paused(entity_id, True)
@@ -1850,6 +1871,40 @@ class PresenceBasedLightingCoordinator:
 			):
 				return
 			await self._reconcile_entity(entity_id, entity_state)
+
+	def _get_trusted_effective_controlled_state(self, entity_state: dict) -> str | None:
+		cfg = entity_state["config"]
+		rlc_tracking_entity = cfg.get(CONF_RLC_TRACKING_ENTITY)
+		if rlc_tracking_entity:
+			return get_effective_state(self.hass, rlc_tracking_entity)
+
+		current_state = self.hass.states.get(cfg[CONF_ENTITY_ID])
+		if current_state and current_state.state not in _UNTRUSTED_STARTUP_STATES:
+			return current_state.state
+		return None
+
+	def _external_pause_action_is_untrusted_or_redundant(
+		self, entity_id: str, entity_state: dict, target_state: str | None,
+	) -> bool:
+		if target_state is None:
+			return False
+		if not entity_state["config"].get(CONF_RLC_TRACKING_ENTITY):
+			return False
+
+		effective_state = self._get_trusted_effective_controlled_state(entity_state)
+		if effective_state is None:
+			_LOGGER.debug(
+				"Ignoring external pause action for %s because no trusted effective state is available",
+				entity_id,
+			)
+			return True
+		if effective_state == target_state:
+			_LOGGER.debug(
+				"Ignoring redundant external pause action for %s: effective state already %s",
+				entity_id, target_state,
+			)
+			return True
+		return False
 
 	async def _ensure_external_detected_action_expires(
 		self, entity_id: str, entity_state: dict, target_state: str | None,
