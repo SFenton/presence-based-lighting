@@ -38,6 +38,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_CLEARED_STATE,
     CONF_PRESENCE_DETECTED_SERVICE,
     CONF_PRESENCE_DETECTED_STATE,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_PRESENCE_SENSORS,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
@@ -312,8 +313,8 @@ class TestMigrations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_migrate_v2_all_the_way_to_v9(self):
-        """Full chain migration from v2 through v9."""
+    async def test_migrate_v2_all_the_way_to_v10(self):
+        """Full chain migration from v2 through v10."""
         hass = MagicMock()
         entry = _make_entry(version=2)
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = False
@@ -332,9 +333,13 @@ class TestMigrations:
 
         result = await async_migrate_entry(hass, entry)
         assert result is True
-        assert versions == [3, 4, 5, 6, 7, 8, 9]
+        assert versions == [3, 4, 5, 6, 7, 8, 9, 10]
         assert CONF_VACANCY_AUTHORITY_SENSORS not in entry.data
         assert entry.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] is False
+        assert (
+            entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE]
+            is True
+        )
 
     @pytest.mark.asyncio
     async def test_migrate_v8_moves_vacancy_authority_to_clearing_sensors(self):
@@ -361,7 +366,7 @@ class TestMigrations:
         result = await async_migrate_entry(hass, entry)
 
         assert result is True
-        assert entry.version == 9
+        assert entry.version == 10
         assert entry.data[CONF_CLEARING_SENSORS] == [
             "sensor.office_office_occupancy_status_last_changed"
         ]
@@ -608,6 +613,7 @@ class TestPresenceLockFallback:
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         entry = _make_entry()
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] = False
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_DISABLE_ON_EXTERNAL_CONTROL] = False
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()

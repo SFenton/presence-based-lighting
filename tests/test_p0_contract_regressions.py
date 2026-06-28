@@ -31,6 +31,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_CLEARED_STATE,
     CONF_PRESENCE_DETECTED_SERVICE,
     CONF_PRESENCE_DETECTED_STATE,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_PRESENCE_SENSORS,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
@@ -134,6 +135,7 @@ def _entry(
     disable_on_external: bool = True,
     require_occupancy: bool = False,
     require_vacancy: bool = False,
+    presence_lock_respects_manual_override: bool = True,
     manual_disable_states: list[str] | None = None,
     rlc_tracking_entity: str | None = None,
 ):
@@ -147,6 +149,7 @@ def _entry(
         CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
         CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: require_occupancy,
         CONF_REQUIRE_VACANCY_FOR_CLEARED: require_vacancy,
+        CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: presence_lock_respects_manual_override,
         CONF_INITIAL_PRESENCE_ALLOWED: True,
     }
     if manual_disable_states is not None:
@@ -411,6 +414,7 @@ async def test_presence_lock_fallback_still_protects_group_targets_with_intercep
         controlled_entity="light.living_room",
         disable_on_external=False,
         require_vacancy=True,
+        presence_lock_respects_manual_override=False,
     )
     mock_hass.states.set("light.living_room", STATE_ON)
     mock_hass.states.set("binary_sensor.living_room_motion", STATE_ON)

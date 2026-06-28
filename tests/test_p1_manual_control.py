@@ -7,6 +7,7 @@ from custom_components.presence_based_lighting import PresenceBasedLightingCoord
 from custom_components.presence_based_lighting.const import (
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_RESPECTS_PRESENCE_ALLOWED,
@@ -33,6 +34,20 @@ def _entity_event(mock_hass, entity_id, old_state, new_state, old_attrs=None, ne
                     },
                 )(),
             }
+        },
+    )()
+
+
+def _service_event(entity_id, service):
+    return type(
+        "Event",
+        (),
+        {
+            "data": {
+                "service_data": {"entity_id": entity_id},
+                "service": service,
+            },
+            "context": type("Ctx", (), {"id": "manual_service", "parent_id": None})(),
         },
     )()
 
@@ -152,6 +167,7 @@ class TestManualOverrides:
     @pytest.mark.asyncio
     async def test_cleared_state_blocked_when_room_occupied(self, mock_hass, mock_config_entry):
         mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] = False
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
@@ -165,6 +181,7 @@ class TestManualOverrides:
     @pytest.mark.asyncio
     async def test_presence_lock_fallback_still_runs_with_interceptor(self, mock_hass, mock_config_entry):
         mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] = False
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
@@ -187,6 +204,75 @@ class TestManualOverrides:
         await coordinator._handle_controlled_entity_change(
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
+        assert mock_hass.services.calls == []
+
+    @pytest.mark.asyncio
+    async def test_presence_lock_manual_off_pauses_instead_of_reverting_when_occupied(
+        self, mock_hass, mock_config_entry
+    ):
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        mock_hass.services.clear()
+        await coordinator._handle_controlled_entity_change(
+            _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
+        )
+
+        assert coordinator.get_automation_paused("light.living_room") is True
+        assert mock_hass.services.calls == []
+
+    @pytest.mark.asyncio
+    async def test_presence_lock_service_turn_off_waits_for_manual_state_change(
+        self, mock_hass, mock_config_entry
+    ):
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        mock_hass.services.clear()
+        await coordinator._handle_service_call(
+            _service_event("light.living_room", "turn_off")
+        )
+
+        assert mock_hass.services.calls == []
+
+    @pytest.mark.asyncio
+    async def test_presence_lock_does_not_force_on_when_presence_allowed_false(
+        self, mock_hass, mock_config_entry
+    ):
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        await coordinator.async_set_presence_allowed("light.living_room", False)
+        mock_hass.services.clear()
+        await coordinator._handle_controlled_entity_change(
+            _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
+        )
+
+        assert coordinator.get_automation_paused("light.living_room") is True
+        assert mock_hass.services.calls == []
+
+    @pytest.mark.asyncio
+    async def test_presence_lock_does_not_force_on_when_automation_paused(
+        self, mock_hass, mock_config_entry
+    ):
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        coordinator.set_automation_paused("light.living_room", True)
+        mock_hass.services.clear()
+        await coordinator._handle_controlled_entity_change(
+            _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
+        )
+
+        assert coordinator.get_automation_paused("light.living_room") is True
         assert mock_hass.services.calls == []
 
     @pytest.mark.asyncio
@@ -214,6 +300,7 @@ class TestManualOverrides:
     @pytest.mark.asyncio
     async def test_group_service_expands_targets_for_presence_lock(self, mock_hass, mock_config_entry):
         mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = True
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] = False
         setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
         mock_hass.states.set(
             "light.important_lights",

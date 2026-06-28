@@ -2,7 +2,7 @@
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 ISSUE_URL = "https://github.com/sfenton/presence_based_lighting/issues"
 
@@ -32,6 +32,7 @@ CONF_RESPECTS_PRESENCE_ALLOWED = "respect_presence_allowed"
 CONF_DISABLE_ON_EXTERNAL_CONTROL = "disable_on_external_control"
 CONF_REQUIRE_OCCUPANCY_FOR_DETECTED = "require_occupancy_for_detected"
 CONF_REQUIRE_VACANCY_FOR_CLEARED = "require_vacancy_for_cleared"
+CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE = "presence_lock_respects_manual_override"
 CONF_INITIAL_PRESENCE_ALLOWED = "initial_presence_allowed"
 CONF_ENTITY_OFF_DELAY = "entity_off_delay"
 CONF_AUTOMATION_MODE = "automation_mode"
@@ -66,6 +67,7 @@ DEFAULT_DISABLE_ON_EXTERNAL = True
 DEFAULT_INITIAL_PRESENCE_ALLOWED = True
 DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED = False
 DEFAULT_REQUIRE_VACANCY_FOR_CLEARED = False
+DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE = True
 DEFAULT_AUTOMATION_MODE = AUTOMATION_MODE_AUTOMATIC
 DEFAULT_USE_INTERCEPTOR = True  # Default to using interceptor when available
 DEFAULT_MANUAL_DISABLE_STATES = ["off"]  # Manual off pauses automation by default

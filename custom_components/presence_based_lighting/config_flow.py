@@ -38,6 +38,7 @@ from .const import (
 	CONF_PRESENCE_CLEARED_STATE,
 	CONF_PRESENCE_DETECTED_SERVICE,
 	CONF_PRESENCE_DETECTED_STATE,
+	CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 	CONF_PRESENCE_SENSORS,
 	CONF_RESPECTS_PRESENCE_ALLOWED,
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
@@ -59,6 +60,7 @@ from .const import (
 	DEFAULT_INITIAL_PRESENCE_ALLOWED,
 	DEFAULT_MANUAL_DISABLE_STATES,
 	DEFAULT_OFF_DELAY,
+	DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
@@ -425,7 +427,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 9
+	VERSION = 10
 
 	def __init__(self):
 		"""Initialize."""
@@ -566,6 +568,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		defaults.setdefault(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 		defaults.setdefault(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
 		defaults.setdefault(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+		defaults.setdefault(
+			CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+			DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+		)
 		defaults.setdefault(CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES))
 		defaults.setdefault(CONF_RLC_TRACKING_ENTITY, None)
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
@@ -623,8 +629,12 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				
 				# Get use_interceptor - only relevant for presence_lock mode
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+				presence_lock_respects_manual_override = user_input.get(
+					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+					DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+				)
 				
-				# Get manual_disable_states - only relevant for automatic mode
+				# Get manual_disable_states - Automatic pauses on these states; Presence Lock yields to them.
 				manual_disable_states = user_input.get(
 					CONF_MANUAL_DISABLE_STATES,
 					list(DEFAULT_MANUAL_DISABLE_STATES),
@@ -642,6 +652,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
 					CONF_AUTOMATION_MODE: automation_mode,
 					CONF_USE_INTERCEPTOR: use_interceptor,
+					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: presence_lock_respects_manual_override,
 					CONF_MANUAL_DISABLE_STATES: manual_disable_states,
 					# Legacy fields for coordinator compatibility
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
@@ -766,10 +777,14 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_USE_INTERCEPTOR,
 				default=defaults[CONF_USE_INTERCEPTOR],
 			): selector.BooleanSelector(),
+			vol.Optional(
+				CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+				default=defaults[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE],
+			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
 
-		# Add manual_disable_states multi-select (only relevant for automatic mode)
+		# Add manual_disable_states multi-select.
 		# Uses the same state options as detected/cleared state fields
 		if use_dropdown and state_option_source.options:
 			disable_state_options = list(state_option_source.options)
@@ -1436,6 +1451,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_USE_INTERCEPTOR: self._current_entity_config.get(
 				CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR
 			),
+			CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: self._current_entity_config.get(
+				CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+				DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+			),
 			CONF_MANUAL_DISABLE_STATES: self._current_entity_config.get(
 				CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES)
 			),
@@ -1498,8 +1517,12 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				
 				# Get use_interceptor - only relevant for presence_lock mode
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+				presence_lock_respects_manual_override = user_input.get(
+					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+					DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+				)
 				
-				# Get manual_disable_states - only relevant for automatic mode
+				# Get manual_disable_states - Automatic pauses on these states; Presence Lock yields to them.
 				manual_disable_states = user_input.get(
 					CONF_MANUAL_DISABLE_STATES,
 					list(DEFAULT_MANUAL_DISABLE_STATES),
@@ -1517,6 +1540,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_RESPECTS_PRESENCE_ALLOWED: user_input[CONF_RESPECTS_PRESENCE_ALLOWED],
 					CONF_AUTOMATION_MODE: automation_mode,
 					CONF_USE_INTERCEPTOR: use_interceptor,
+					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: presence_lock_respects_manual_override,
 					CONF_MANUAL_DISABLE_STATES: manual_disable_states,
 					# Legacy fields for coordinator compatibility
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
@@ -1641,10 +1665,14 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				CONF_USE_INTERCEPTOR,
 				default=defaults[CONF_USE_INTERCEPTOR],
 			): selector.BooleanSelector(),
+			vol.Optional(
+				CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+				default=defaults[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE],
+			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
 
-		# Add manual_disable_states multi-select (only relevant for automatic mode)
+		# Add manual_disable_states multi-select.
 		# Uses the same state options as detected/cleared state fields
 		if use_dropdown and state_option_source.options:
 			disable_state_options = list(state_option_source.options)

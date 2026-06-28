@@ -47,6 +47,7 @@ from .const import (
 	CONF_PRESENCE_CLEARED_STATE,
 	CONF_PRESENCE_DETECTED_SERVICE,
 	CONF_PRESENCE_DETECTED_STATE,
+	CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 	CONF_PRESENCE_SENSORS,
 	CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	CONF_REQUIRE_VACANCY_FOR_CLEARED,
@@ -68,6 +69,7 @@ from .const import (
 	DEFAULT_INITIAL_PRESENCE_ALLOWED,
 	DEFAULT_MANUAL_DISABLE_STATES,
 	DEFAULT_OFF_DELAY,
+	DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
@@ -447,6 +449,31 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 		)
 		_LOGGER.info(
 			"Migration of entry %s from version 8 to 9 successful",
+			config_entry.entry_id,
+		)
+
+	if config_entry.version == 9:
+		# Version 9 -> 10: Presence Lock now respects manual/pause overrides by default.
+		new_data = {**config_entry.data}
+		controlled_entities = new_data.get(CONF_CONTROLLED_ENTITIES, [])
+		updated_entities = []
+
+		for entity_config in controlled_entities:
+			updated_config = {**entity_config}
+			updated_config.setdefault(
+				CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+				DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+			)
+			updated_entities.append(updated_config)
+
+		new_data[CONF_CONTROLLED_ENTITIES] = updated_entities
+		hass.config_entries.async_update_entry(
+			config_entry,
+			data=new_data,
+			version=10,
+		)
+		_LOGGER.info(
+			"Migration of entry %s from version 9 to 10 successful",
 			config_entry.entry_id,
 		)
 
@@ -1475,6 +1502,42 @@ class PresenceBasedLightingCoordinator:
 			return True
 		return entity_state["presence_allowed"]
 
+	def _presence_lock_respects_manual_override(self, entity_state: dict) -> bool:
+		return entity_state["config"].get(
+			CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+			DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+		)
+
+	def _presence_lock_enabled(self, entity_state: dict) -> bool:
+		config = entity_state["config"]
+		return bool(
+			config.get(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
+			or config.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
+		)
+
+	def _manual_disable_state_matches(self, entity_state: dict, state: str | None) -> bool:
+		if state is None:
+			return False
+		manual_disable_states = entity_state["config"].get(
+			CONF_MANUAL_DISABLE_STATES,
+			DEFAULT_MANUAL_DISABLE_STATES,
+		)
+		return state in manual_disable_states
+
+	def _presence_lock_should_yield_to_manual_override(
+		self, entity_state: dict, state: str | None,
+	) -> bool:
+		"""Return whether Presence Lock should stand down for a user override."""
+		if not self._presence_lock_enabled(entity_state):
+			return False
+		if not self._presence_lock_respects_manual_override(entity_state):
+			return False
+		if not self._presence_switch_allows_entity(entity_state):
+			return True
+		if entity_state["state"] == EntityAutomationState.PAUSED:
+			return True
+		return self._manual_disable_state_matches(entity_state, state)
+
 	def _legacy_room_switch_entity_id(self) -> str:
 		room_name = self.entry.data.get(CONF_ROOM_NAME, "")
 		return legacy_room_switch_entity_id(room_name)
@@ -1807,6 +1870,11 @@ class PresenceBasedLightingCoordinator:
 		):
 			return
 
+		if self._presence_lock_should_yield_to_manual_override(entity_state, effective_new_state):
+			if self._manual_disable_state_matches(entity_state, effective_new_state):
+				self.set_automation_paused(entity_id, True)
+			return
+
 		# Check presence lock first - this takes priority
 		if await self._check_and_apply_presence_lock(entity_state, effective_new_state):
 			return  # Presence lock handled the state change
@@ -1844,6 +1912,11 @@ class PresenceBasedLightingCoordinator:
 		elif service == cfg[CONF_PRESENCE_CLEARED_SERVICE]:
 			target_state = cfg[CONF_PRESENCE_CLEARED_STATE]
 		
+		if target_state and self._presence_lock_should_yield_to_manual_override(
+			entity_state, target_state,
+		):
+			return
+
 		if target_state and await self._check_and_apply_presence_lock(
 			entity_state, target_state, force_fallback=True
 		):
@@ -1959,6 +2032,14 @@ class PresenceBasedLightingCoordinator:
 		
 		require_occ = cfg.get(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
 		require_vac = cfg.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
+
+		if self._presence_lock_should_yield_to_manual_override(entity_state, new_state):
+			_LOGGER.debug(
+				"Presence lock: allowing manual override for %s (state=%s)",
+				entity_id,
+				new_state,
+			)
+			return False
 		
 		# If entity is being turned ON (detected state) but room is empty and lock is enabled
 		if new_state == cfg[CONF_PRESENCE_DETECTED_STATE] and require_occ and not self._is_any_occupied():

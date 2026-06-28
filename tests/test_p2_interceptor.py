@@ -7,8 +7,11 @@ import sys
 from custom_components.presence_based_lighting.const import (
     CONF_CONTROLLED_ENTITIES,
     CONF_ENTITY_ID,
+    CONF_MANUAL_DISABLE_STATES,
     CONF_PRESENCE_CLEARED_SERVICE,
+    CONF_PRESENCE_CLEARED_STATE,
     CONF_PRESENCE_DETECTED_SERVICE,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_USE_INTERCEPTOR,
@@ -21,7 +24,13 @@ from custom_components.presence_based_lighting.interceptor import (
 )
 
 
-def _make_entry(entity_id="light.living_room", req_occ=True, req_vac=True, use_interceptor=True):
+def _make_entry(
+    entity_id="light.living_room",
+    req_occ=True,
+    req_vac=True,
+    use_interceptor=True,
+    respects_manual_override=True,
+):
     entry = MagicMock()
     entry.entry_id = "test_entry_id"
     entry.data = {
@@ -30,9 +39,12 @@ def _make_entry(entity_id="light.living_room", req_occ=True, req_vac=True, use_i
                 CONF_ENTITY_ID: entity_id,
                 CONF_PRESENCE_DETECTED_SERVICE: "turn_on",
                 CONF_PRESENCE_CLEARED_SERVICE: "turn_off",
+                CONF_PRESENCE_CLEARED_STATE: "off",
                 CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: req_occ,
                 CONF_REQUIRE_VACANCY_FOR_CLEARED: req_vac,
                 CONF_USE_INTERCEPTOR: use_interceptor,
+                CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: respects_manual_override,
+                CONF_MANUAL_DISABLE_STATES: ["off"],
             }
         ],
     }
@@ -104,7 +116,7 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=True, req_vac=True)
+            entry = _make_entry(req_occ=True, req_vac=True, respects_manual_override=False)
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             result = interceptor.setup()
             assert result is True
@@ -245,7 +257,7 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=False, req_vac=True)
+            entry = _make_entry(req_occ=False, req_vac=True, respects_manual_override=False)
             is_occupied = MagicMock(return_value=True)
             interceptor = PresenceLockInterceptor(hass, entry, is_occupied)
             interceptor.setup()
@@ -258,11 +270,23 @@ class TestPresenceLockInterceptorWithLib:
         finally:
             self._unpatch()
 
+    def test_setup_skips_turn_off_interceptor_when_manual_override_allowed(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(req_occ=False, req_vac=True)
+            interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
+            result = interceptor.setup()
+            assert result is False
+            assert self._register_calls == []
+        finally:
+            self._unpatch()
+
     def test_teardown_calls_unregister(self):
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=True, req_vac=True)
+            entry = _make_entry(req_occ=True, req_vac=True, respects_manual_override=False)
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             interceptor.setup()
 
@@ -300,7 +324,7 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=False, req_vac=True)
+            entry = _make_entry(req_occ=False, req_vac=True, respects_manual_override=False)
             is_occupied = MagicMock(return_value=True)
             interceptor = PresenceLockInterceptor(hass, entry, is_occupied)
             interceptor.setup()
@@ -349,7 +373,7 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=True, req_vac=True)
+            entry = _make_entry(req_occ=True, req_vac=True, respects_manual_override=False)
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             interceptor.setup()
 

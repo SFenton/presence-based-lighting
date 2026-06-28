@@ -14,11 +14,17 @@ from typing import TYPE_CHECKING, Callable
 from .const import (
     CONF_CONTROLLED_ENTITIES,
     CONF_ENTITY_ID,
+    CONF_MANUAL_DISABLE_STATES,
     CONF_PRESENCE_CLEARED_SERVICE,
+    CONF_PRESENCE_CLEARED_STATE,
     CONF_PRESENCE_DETECTED_SERVICE,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_USE_INTERCEPTOR,
+    DEFAULT_CLEARED_STATE,
+    DEFAULT_MANUAL_DISABLE_STATES,
+    DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
     DEFAULT_USE_INTERCEPTOR,
@@ -47,6 +53,22 @@ except ImportError:
 def is_interceptor_available() -> bool:
     """Check if hass-interceptor is available."""
     return HAS_INTERCEPTOR
+
+
+def _presence_lock_respects_manual_override(entity_config: dict) -> bool:
+    return entity_config.get(
+        CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+        DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+    )
+
+
+def _cleared_state_is_manual_override(entity_config: dict) -> bool:
+    cleared_state = entity_config.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
+    manual_disable_states = entity_config.get(
+        CONF_MANUAL_DISABLE_STATES,
+        DEFAULT_MANUAL_DISABLE_STATES,
+    )
+    return cleared_state in manual_disable_states
 
 
 class PresenceLockInterceptor:
@@ -135,12 +157,21 @@ class PresenceLockInterceptor:
             if require_vac:
                 cleared_service = entity_config.get(CONF_PRESENCE_CLEARED_SERVICE)
                 if cleared_service and cleared_service != "none":
-                    self._register_for_service(
-                        domain,
-                        cleared_service,
-                        entity_id,
-                        block_when_empty=False,
-                    )
+                    if (
+                        _presence_lock_respects_manual_override(entity_config)
+                        and _cleared_state_is_manual_override(entity_config)
+                    ):
+                        _LOGGER.debug(
+                            "Skipping cleared-state interceptor for %s because manual override is allowed",
+                            entity_id,
+                        )
+                    else:
+                        self._register_for_service(
+                            domain,
+                            cleared_service,
+                            entity_id,
+                            block_when_empty=False,
+                        )
         
         if self._unregister_funcs:
             _LOGGER.info(
