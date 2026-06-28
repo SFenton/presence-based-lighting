@@ -2,7 +2,7 @@
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"
-VERSION = "2.0.1"
+VERSION = "2.0.2-dev"
 
 ISSUE_URL = "https://github.com/sfenton/presence_based_lighting/issues"
 

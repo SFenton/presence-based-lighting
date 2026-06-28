@@ -1814,6 +1814,20 @@ class TestApplyActionEdges:
         # Light is already off, so should be skipped
         assert len(hass.services.calls) == 0
 
+    @pytest.mark.asyncio
+    async def test_apply_detected_action_already_in_target_state(self):
+        """Detected no-op actions should be skipped in the legacy helper path."""
+        hass = MockHass()
+        setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        entry = _make_entry()
+        coord = PresenceBasedLightingCoordinator(hass, entry)
+        es = coord._entity_states["light.living_room"]
+        hass.services.clear()
+
+        await coord._apply_action_to_entity(es, CONF_PRESENCE_DETECTED_SERVICE)
+
+        assert len(hass.services.calls) == 0
+
 
 # ===========================================================================
 # _handle_presence_change – null states guard – Line 1093

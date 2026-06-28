@@ -169,6 +169,8 @@ _RECONCILIATION_INTERVAL = timedelta(seconds=60)
 _WAITING_FOR_CLEAR_MAX_SECONDS = 300  # 5 minutes
 _ACTUATION_CONFIRMATION_SECONDS = 2
 _ACTUATION_RETRY_DELAY_SECONDS = 1
+_ACTUATION_RETRY_DELAYS_SECONDS = (1.0, 3.0, 7.0)
+_ACTUATION_RETRY_JITTER_MAX_SECONDS = 0.75
 _ACTUATION_MAX_ATTEMPTS = 3
 _RLC_MIGRATION_RETRY_SECONDS = 30
 _VACANCY_AUTHORITY_AUTOFILL_RETRY_SECONDS = 30
@@ -778,6 +780,7 @@ class PresenceBasedLightingCoordinator:
 			"attempts": 0,
 			"force_service_call": False,
 			"timer": None,
+			"next_retry_delay": None,
 			"last_observed_state": None,
 			"last_error": None,
 			"updated_at": dt_util.utcnow(),
@@ -1053,6 +1056,7 @@ class PresenceBasedLightingCoordinator:
 			"actuation_status": actuation["status"].value,
 			"actuation_target_state": actuation["target_state"],
 			"actuation_attempts": actuation["attempts"],
+			"actuation_next_retry_delay": actuation.get("next_retry_delay"),
 			"actuation_last_observed_state": actuation["last_observed_state"],
 			"actuation_last_error": actuation["last_error"],
 		}
@@ -1188,6 +1192,7 @@ class PresenceBasedLightingCoordinator:
 				"context_ids": deque(maxlen=10),
 				"attempts": 0,
 				"force_service_call": overrides_opposing_actuation,
+				"next_retry_delay": None,
 				"last_observed_state": None,
 				"last_error": None,
 				"updated_at": dt_util.utcnow(),
@@ -1266,6 +1271,7 @@ class PresenceBasedLightingCoordinator:
 				"service_key": None,
 				"attempts": 0,
 				"force_service_call": False,
+				"next_retry_delay": None,
 				"last_error": reason,
 				"updated_at": dt_util.utcnow(),
 			}
@@ -1278,6 +1284,17 @@ class PresenceBasedLightingCoordinator:
 		else:
 			task = asyncio.create_task(self._execute_actuation_confirmation_timer(entity_id, entity_state, delay))
 		entity_state["actuation"]["timer"] = task
+
+	def _actuation_retry_delay(self, entity_id: str, attempt_number: int) -> float:
+		delay = _ACTUATION_RETRY_DELAYS_SECONDS[
+			min(max(attempt_number - 1, 0), len(_ACTUATION_RETRY_DELAYS_SECONDS) - 1)
+		]
+		jitter_slots = int(_ACTUATION_RETRY_JITTER_MAX_SECONDS * 1000)
+		if jitter_slots <= 0:
+			return delay
+		stable_hash = sum(ord(ch) for ch in entity_id) + attempt_number * 97
+		jitter = (stable_hash % (jitter_slots + 1)) / 1000
+		return delay + jitter
 
 	async def _execute_actuation_confirmation_timer(
 		self, entity_id: str, entity_state: dict, delay: float,
@@ -1331,6 +1348,7 @@ class PresenceBasedLightingCoordinator:
 		observed = current_state.state if current_state else None
 		actuation["last_observed_state"] = observed
 		if observed == actuation["target_state"] and not actuation.get("force_service_call"):
+			actuation["next_retry_delay"] = None
 			self._schedule_actuation_timer(entity_id, entity_state, _ACTUATION_CONFIRMATION_SECONDS, retry=False)
 			return
 		actuation["force_service_call"] = False
@@ -1417,15 +1435,19 @@ class PresenceBasedLightingCoordinator:
 		if actuation["attempts"] >= _ACTUATION_MAX_ATTEMPTS:
 			self._fail_entity_actuation(entity_id, entity_state, observed_state)
 			return
+		next_attempt = actuation["attempts"] + 1
+		retry_delay = self._actuation_retry_delay(entity_id, next_attempt)
+		actuation["next_retry_delay"] = retry_delay
 		_LOGGER.debug(
-			"[%s] Actuation target %s not converged (observed %s); scheduling retry %d/%d",
+			"[%s] Actuation target %s not converged (observed %s); scheduling retry %d/%d in %.3fs",
 			entity_id,
 			actuation["target_state"],
 			observed_state,
-			actuation["attempts"] + 1,
+			next_attempt,
 			_ACTUATION_MAX_ATTEMPTS,
+			retry_delay,
 		)
-		self._schedule_actuation_timer(entity_id, entity_state, _ACTUATION_RETRY_DELAY_SECONDS, retry=True)
+		self._schedule_actuation_timer(entity_id, entity_state, retry_delay, retry=True)
 
 	def _confirm_entity_actuation(self, entity_id: str, entity_state: dict, observed_state: str | None) -> None:
 		actuation = entity_state["actuation"]
@@ -1434,6 +1456,7 @@ class PresenceBasedLightingCoordinator:
 		actuation.update(
 			{
 				"status": ActuationStatus.CONFIRMED,
+				"next_retry_delay": None,
 				"last_observed_state": observed_state,
 				"last_error": None,
 				"updated_at": dt_util.utcnow(),
@@ -1458,6 +1481,7 @@ class PresenceBasedLightingCoordinator:
 		actuation.update(
 			{
 				"status": ActuationStatus.FAILED,
+				"next_retry_delay": None,
 				"last_observed_state": observed_state,
 				"last_error": message,
 				"updated_at": dt_util.utcnow(),
@@ -2291,8 +2315,13 @@ class PresenceBasedLightingCoordinator:
 			target_state = config[target_state_key]
 			current_state = self.hass.states.get(entity_id)
 			
-			# For turn_on (detected), always send the command to interrupt any transition
-			# This fixes the bug where re-entering during light fade-off wouldn't turn lights back on
+			# For detected, suppress exact-state no-ops in this legacy helper path.
+			# The closed-loop actuator still uses force_service_call for real re-entry
+			# during opposing transitions, so first useful actions remain immediate.
+			if service_key == CONF_PRESENCE_DETECTED_SERVICE and current_state and current_state.state == target_state:
+				_LOGGER.debug("Entity %s already in detected target state %s", entity_id, target_state)
+				return
+
 			# For turn_off (cleared), we can skip if already off since there's no transition to interrupt
 			if service_key == CONF_PRESENCE_CLEARED_SERVICE:
 				if self._ownership_manager.other_entry_wants_on(self.entry.entry_id, entity_id):

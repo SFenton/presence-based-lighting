@@ -136,6 +136,31 @@ async def test_failed_convergence_visible_after_max_attempts(mock_hass, mock_con
 
 
 @pytest.mark.asyncio
+async def test_retry_delay_uses_progressive_backoff(mock_hass, mock_config_entry):
+    """Retries should back off after the immediate first actuation attempt."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _start_cleared_actuation(coordinator)
+    captured = []
+
+    def capture_timer(entity_id, state, delay, retry):
+        captured.append((entity_id, delay, retry))
+
+    coordinator._schedule_actuation_timer = capture_timer
+
+    entity_state["actuation"]["attempts"] = 1
+    await coordinator._retry_or_fail_entity_actuation("light.living_room", entity_state, STATE_ON)
+    entity_state["actuation"]["attempts"] = 2
+    await coordinator._retry_or_fail_entity_actuation("light.living_room", entity_state, STATE_ON)
+
+    assert captured[0][2] is True
+    assert 3.0 <= captured[0][1] <= 3.75
+    assert captured[1][2] is True
+    assert 7.0 <= captured[1][1] <= 7.75
+    assert entity_state["actuation"]["next_retry_delay"] == captured[-1][1]
+
+
+@pytest.mark.asyncio
 async def test_late_target_after_failed_off_is_confirmed_not_manual(mock_hass, mock_config_entry):
     """A slow light that eventually reaches PBL's off target must not pause automation."""
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
