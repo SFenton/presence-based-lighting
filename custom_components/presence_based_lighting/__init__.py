@@ -1217,6 +1217,8 @@ class PresenceBasedLightingCoordinator:
 
 	def _cleared_intent_blocked_by_presence(self, entity_state: dict) -> bool:
 		cfg = entity_state["config"]
+		if self.entry.data.get(CONF_CLEARING_SENSORS):
+			return False
 		return (
 			cfg.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
 			and self._is_any_occupied()
