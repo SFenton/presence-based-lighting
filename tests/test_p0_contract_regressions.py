@@ -45,6 +45,7 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_MANUAL_DISABLE_STATES,
     DOMAIN,
 )
+from custom_components.presence_based_lighting.real_last_changed import ATTR_PREVIOUS_VALID_STATE
 from tests.conftest import assert_service_called, setup_entity_states
 
 
@@ -320,6 +321,149 @@ async def test_reconciliation_respects_paused_entities(
             for call in mock_hass.services.calls
             if call["domain"] == "light" and call["service"] == "turn_on"
         ]
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_raw_controlled_unavailable_to_off_does_not_pause(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """Raw startup availability recovery must not look like a manual off."""
+    _configure_storage(mock_hass, tmp_path)
+    setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+    await coordinator.async_start()
+
+    try:
+        await coordinator._handle_controlled_entity_change(
+            _state_change_event(mock_hass, "light.living_room", "unavailable", STATE_OFF)
+        )
+
+        assert coordinator.get_automation_paused("light.living_room") is False
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_raw_presence_unavailable_to_off_does_not_clear(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """Raw sensor restore to off should not start a clearing timer."""
+    _configure_storage(mock_hass, tmp_path)
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+    await coordinator.async_start()
+
+    try:
+        mock_hass.services.clear()
+        await coordinator._handle_presence_change(
+            _state_change_event(
+                mock_hass,
+                "binary_sensor.living_room_motion",
+                "unavailable",
+                STATE_OFF,
+            )
+        )
+
+        assert coordinator.get_entity_automation_state("light.living_room") == "occupied"
+        assert not [
+            call
+            for call in mock_hass.services.calls
+            if call["domain"] == "light" and call["service"] == "turn_off"
+        ]
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_stale_external_pause_clears_on_startup_when_room_clear(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """Startup should self-heal stale external pauses when the room is already clear."""
+    storage_path = _configure_storage(mock_hass, tmp_path)
+    paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
+    paused_path.write_text(json.dumps({
+        "paused_entities": ["light.living_room"],
+        "paused": {
+            "light.living_room": {
+                "source": "external_state",
+                "reason": "startup flake",
+                "controlled_state": STATE_OFF,
+            }
+        },
+    }))
+    setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+
+    await coordinator.async_start()
+
+    try:
+        await asyncio.sleep(0)
+        assert coordinator.get_automation_paused("light.living_room") is False
+        assert not paused_path.exists()
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_explicit_service_pause_survives_startup_when_room_clear(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """Explicit pause service state should survive restart even if the room is clear."""
+    storage_path = _configure_storage(mock_hass, tmp_path)
+    paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
+    paused_path.write_text(json.dumps({
+        "paused_entities": ["light.living_room"],
+        "paused": {
+            "light.living_room": {
+                "source": "service",
+                "reason": "pause_automation service",
+                "controlled_state": STATE_OFF,
+            }
+        },
+    }))
+    setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+
+    await coordinator.async_start()
+
+    try:
+        assert coordinator.get_automation_paused("light.living_room") is True
+        assert coordinator.get_entity_control_state("light.living_room")["pause_source"] == "service"
+    finally:
+        coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_invalid_controlled_rlc_effective_state_is_ignored(
+    mock_hass, tmp_path
+):
+    """Timestamp-valued RLC helpers must not be trusted as controlled on/off state."""
+    _configure_storage(mock_hass, tmp_path)
+    entry = _entry(
+        entry_id="invalid_rlc",
+        room_name="Bathroom",
+        presence_sensor="binary_sensor.bathroom_motion",
+        controlled_entity="light.bathroom",
+        rlc_tracking_entity="sensor.bathroom_dimmer_switch",
+    )
+    mock_hass.states.set("binary_sensor.bathroom_motion", STATE_OFF)
+    mock_hass.states.set("light.bathroom", STATE_OFF)
+    mock_hass.states.set(
+        "sensor.bathroom_dimmer_switch",
+        "2026-07-04T16:42:06+00:00",
+        attributes={ATTR_PREVIOUS_VALID_STATE: "2026-07-04T16:42:06.245+00:00"},
+    )
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    await coordinator.async_start()
+
+    try:
+        assert coordinator._entity_states["light.bathroom"]["last_effective_state"] is None
+        await coordinator._handle_controlled_entity_change(
+            _state_change_event(mock_hass, "light.bathroom", "unavailable", STATE_OFF)
+        )
+        assert coordinator.get_automation_paused("light.bathroom") is False
     finally:
         coordinator.async_stop()
 

@@ -574,6 +574,11 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		)
 		defaults.setdefault(CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES))
 		defaults.setdefault(CONF_RLC_TRACKING_ENTITY, None)
+		valid_rlc_effective_states = {
+			defaults[CONF_PRESENCE_DETECTED_STATE],
+			defaults[CONF_PRESENCE_CLEARED_STATE],
+			*(defaults[CONF_MANUAL_DISABLE_STATES] or []),
+		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
@@ -581,7 +586,15 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		
 		# Check if RLC integration is available and find potential RLC sensors for this entity
 		rlc_available = is_rlc_integration_available(self.hass)
-		rlc_sensors_for_entity = get_rlc_sensors_for_entity(self.hass, entity_id) if rlc_available else []
+		rlc_sensors_for_entity = (
+			get_rlc_sensors_for_entity(
+				self.hass,
+				entity_id,
+				valid_effective_states=valid_rlc_effective_states,
+			)
+			if rlc_available
+			else []
+		)
 		all_rlc_sensors = get_all_rlc_sensors(self.hass) if rlc_available else []
 
 		state_option_source = await _build_state_option_dicts(
@@ -1462,6 +1475,11 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				CONF_RLC_TRACKING_ENTITY
 			),
 		}
+		valid_rlc_effective_states = {
+			defaults[CONF_PRESENCE_DETECTED_STATE],
+			defaults[CONF_PRESENCE_CLEARED_STATE],
+			*(defaults[CONF_MANUAL_DISABLE_STATES] or []),
+		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
@@ -1469,7 +1487,15 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		
 		# Check if RLC integration is available and find potential RLC sensors for this entity
 		rlc_available = is_rlc_integration_available(self.hass)
-		rlc_sensors_for_entity = get_rlc_sensors_for_entity(self.hass, entity_id) if rlc_available else []
+		rlc_sensors_for_entity = (
+			get_rlc_sensors_for_entity(
+				self.hass,
+				entity_id,
+				valid_effective_states=valid_rlc_effective_states,
+			)
+			if rlc_available
+			else []
+		)
 		all_rlc_sensors = get_all_rlc_sensors(self.hass) if rlc_available else []
 
 		state_option_source = await _build_state_option_dicts(

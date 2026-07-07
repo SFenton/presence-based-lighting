@@ -121,6 +121,60 @@ async def test_rebound_does_not_retry_when_presence_returns(mock_hass, mock_conf
 
 
 @pytest.mark.asyncio
+async def test_stale_off_timer_after_pause_resume_does_not_turn_off(mock_hass, mock_config_entry):
+    """A canceled off timer must not fire after pause/resume makes automation active again."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = coordinator._entity_states["light.living_room"]
+    entity_state["state"] = EntityAutomationState.OCCUPIED
+
+    await coordinator._start_entity_off_timer("light.living_room", entity_state)
+    stale_generation = entity_state["work_generation"]
+    if entity_state["off_timer"] is not None:
+        entity_state["off_timer"].cancel()
+        entity_state["off_timer"] = None
+
+    coordinator.set_automation_paused("light.living_room", True)
+    coordinator.set_automation_paused("light.living_room", False)
+    mock_hass.services.clear()
+
+    await coordinator._execute_entity_off_timer(
+        "light.living_room",
+        entity_state,
+        0,
+        stale_generation,
+    )
+
+    turn_off_calls = [call for call in mock_hass.services.calls if call["service"] == "turn_off"]
+    assert turn_off_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stale_actuation_retry_after_generation_change_does_not_call_service(
+    mock_hass, mock_config_entry
+):
+    """A retry captured by an older generation must not act on newer work."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+
+    entity_state = await _start_cleared_actuation(coordinator)
+    stale_generation = entity_state["actuation"]["generation"]
+    current_generation = coordinator._bump_entity_work_generation(entity_state, "test newer work")
+    entity_state["actuation"]["generation"] = current_generation
+    mock_hass.services.clear()
+
+    await coordinator._execute_actuation_retry_timer(
+        "light.living_room",
+        entity_state,
+        0,
+        stale_generation,
+    )
+
+    turn_off_calls = [call for call in mock_hass.services.calls if call["service"] == "turn_off"]
+    assert turn_off_calls == []
+
+
+@pytest.mark.asyncio
 async def test_failed_convergence_visible_after_max_attempts(mock_hass, mock_config_entry):
     """A still-on entity after max attempts is marked failed instead of hidden."""
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)

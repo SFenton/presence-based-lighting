@@ -137,7 +137,19 @@ def is_rlc_integration_available(hass: "HomeAssistant") -> bool:
     return False
 
 
-def get_rlc_sensors_for_entity(hass: "HomeAssistant", target_entity_id: str) -> list[str]:
+def _effective_state_matches(
+    state: "State", valid_effective_states: set[str] | None
+) -> bool:
+    if valid_effective_states is None:
+        return True
+    return state.attributes.get(ATTR_PREVIOUS_VALID_STATE) in valid_effective_states
+
+
+def get_rlc_sensors_for_entity(
+    hass: "HomeAssistant",
+    target_entity_id: str,
+    valid_effective_states: set[str] | None = None,
+) -> list[str]:
     """Find RLC sensors that might track a given entity.
     
     RLC sensors track when another entity last changed state. This function
@@ -163,6 +175,9 @@ def get_rlc_sensors_for_entity(hass: "HomeAssistant", target_entity_id: str) -> 
         if ATTR_PREVIOUS_VALID_STATE not in state.attributes:
             continue
             
+        if not _effective_state_matches(state, valid_effective_states):
+            continue
+
         # Check if this RLC sensor tracks our target entity
         # Method 1: Check the 'entity_id' attribute (if RLC stores the source entity)
         tracked_entity = state.attributes.get("entity_id")
@@ -196,14 +211,18 @@ def get_all_rlc_sensors(hass: "HomeAssistant") -> list[str]:
 
 
 def get_matching_rlc_sensor_for_entity(
-    hass: "HomeAssistant", target_entity_id: str
+    hass: "HomeAssistant",
+    target_entity_id: str,
+    valid_effective_states: set[str] | None = None,
 ) -> str | None:
     """Find the RLC sensor that tracks a raw entity, if one is available."""
     if not target_entity_id:
         return None
 
     target_state = hass.states.get(target_entity_id)
-    if is_real_last_changed_entity(target_entity_id, target_state):
+    if is_real_last_changed_entity(target_entity_id, target_state) and (
+        target_state is None or _effective_state_matches(target_state, valid_effective_states)
+    ):
         return target_entity_id
 
     async_all = getattr(hass.states, "async_all", None)
@@ -215,6 +234,8 @@ def get_matching_rlc_sensor_for_entity(
 
     for state in async_all():
         if not is_real_last_changed_entity(state.entity_id, state):
+            continue
+        if not _effective_state_matches(state, valid_effective_states):
             continue
 
         tracked_entity = state.attributes.get("entity_id")
@@ -232,14 +253,21 @@ def get_matching_rlc_sensor_for_entity(
 
 
 def replace_entities_with_matching_rlc_sensors(
-    hass: "HomeAssistant", entity_ids: list[str]
+    hass: "HomeAssistant",
+    entity_ids: list[str],
+    valid_effective_states: set[str] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Replace raw entities with matching RLC sensors where available."""
     updated: list[str] = []
     replacements: dict[str, str] = {}
 
     for entity_id in entity_ids or []:
-        replacement = get_matching_rlc_sensor_for_entity(hass, entity_id) or entity_id
+        replacement = (
+            get_matching_rlc_sensor_for_entity(
+                hass, entity_id, valid_effective_states=valid_effective_states
+            )
+            or entity_id
+        )
         if replacement not in updated:
             updated.append(replacement)
         if replacement != entity_id:
