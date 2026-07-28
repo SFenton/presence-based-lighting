@@ -9,12 +9,20 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
 from .const import (
+    CONF_AUTOMATION_MODE,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
     CONF_INITIAL_PRESENCE_ALLOWED,
+    CONF_MANUAL_DISABLE_STATES,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
+    CONF_USE_INTERCEPTOR,
+    DEFAULT_AUTOMATION_MODE,
+    DEFAULT_MANUAL_DISABLE_STATES,
+    DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+    DEFAULT_USE_INTERCEPTOR,
     DOMAIN,
     ICON,
     ICON_AUTO_REENABLE,
@@ -130,6 +138,22 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
             "controlled_entity": self._entity_id,
             CONF_RESPECTS_PRESENCE_ALLOWED: self._entity_config[CONF_RESPECTS_PRESENCE_ALLOWED],
             CONF_DISABLE_ON_EXTERNAL_CONTROL: self._entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+            CONF_AUTOMATION_MODE: self._entity_config.get(
+                CONF_AUTOMATION_MODE,
+                DEFAULT_AUTOMATION_MODE,
+            ),
+            CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: self._entity_config.get(
+                CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+                DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+            ),
+            CONF_MANUAL_DISABLE_STATES: self._entity_config.get(
+                CONF_MANUAL_DISABLE_STATES,
+                list(DEFAULT_MANUAL_DISABLE_STATES),
+            ),
+            CONF_USE_INTERCEPTOR: self._entity_config.get(
+                CONF_USE_INTERCEPTOR,
+                DEFAULT_USE_INTERCEPTOR,
+            ),
             "automation_paused": self._coordinator.get_automation_paused(self._entity_id),
             "automation_state": self._coordinator.get_entity_automation_state(self._entity_id),
         }

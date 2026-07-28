@@ -86,6 +86,7 @@ class PresenceLockInterceptor:
         hass: HomeAssistant,
         entry: ConfigEntry,
         is_occupied_func: Callable[[], bool],
+        entity_may_enforce_func: Callable[[str], bool] | None = None,
     ) -> None:
         """Initialize the interceptor manager.
         
@@ -93,10 +94,13 @@ class PresenceLockInterceptor:
             hass: Home Assistant instance
             entry: Config entry for this room
             is_occupied_func: Callable that returns True if any presence sensor is on
+            entity_may_enforce_func: Callable that returns whether this entry may
+                currently enforce Presence Lock for an entity
         """
         self.hass = hass
         self.entry = entry
         self._is_occupied = is_occupied_func
+        self._entity_may_enforce = entity_may_enforce_func or (lambda _entity_id: True)
         self._unregister_funcs: list[Callable[[], None]] = []
         self._registered_services: set[tuple[str, str]] = set()
     
@@ -211,6 +215,9 @@ class PresenceLockInterceptor:
             
             # Check if our protected entity is in the call
             if entity_id not in target_entities:
+                return InterceptResult.ALLOW
+
+            if not self._entity_may_enforce(entity_id):
                 return InterceptResult.ALLOW
             
             # Check presence state

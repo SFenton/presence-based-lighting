@@ -1118,8 +1118,8 @@ class TestReconcileEntityPaths:
         assert found
 
     @pytest.mark.asyncio
-    async def test_reconcile_occupied_no_conditions_light_on(self):
-        """Lines 1522: occupied, conditions not met, but light already on → stay OCCUPIED."""
+    async def test_reconcile_occupied_no_conditions_light_on_releases_control(self):
+        """An inactive entry leaves the light on but relinquishes ownership."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         hass.states.set("binary_sensor.condition_1", STATE_OFF)
@@ -1135,7 +1135,10 @@ class TestReconcileEntityPaths:
 
         await coord._reconcile_entity("light.living_room", es)
 
-        assert es["state"] in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING)
+        assert es["state"] == EntityAutomationState.PENDING_ACTIVATION
+        assert coord._ownership_manager.other_entry_wants_on(
+            "other_entry", "light.living_room"
+        ) is False
 
     @pytest.mark.asyncio
     async def test_reconcile_empty_room_occupied_starts_timer(self):
