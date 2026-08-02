@@ -15,10 +15,13 @@ _LOGGER = logging.getLogger(__package__)
 
 SERVICE_RESUME_AUTOMATION = "resume_automation"
 SERVICE_PAUSE_AUTOMATION = "pause_automation"
+SERVICE_RESUME_ALL_AUTOMATION = "resume_all_automation"
 
 SERVICE_SCHEMA = vol.Schema({
 	vol.Optional("entity_id"): vol.Any(cv.entity_id, [cv.entity_id]),
 })
+
+RESUME_ALL_SCHEMA = vol.Schema({})
 
 
 def _target_switches_from_call(call: Any) -> list[str]:
@@ -98,10 +101,48 @@ async def async_register_services(hass: HomeAssistant, coordinator_type: type) -
 		"""Handle the pause_automation service call."""
 		await _apply_to_service_targets(call, paused=True)
 
+	async def handle_resume_all_automation(_call: Any) -> None:
+		"""Clear every pause and quieted hold across all config entries.
+
+		Escape hatch: pauses are entry-local while external overrides are
+		entity-scoped, so unsticking a house-wide problem otherwise means
+		targeting each room switch individually.
+		"""
+		cleared = 0
+		for _entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+			if not isinstance(coordinator, coordinator_type):
+				continue
+			for entity_id in list(coordinator._entity_states):
+				clear_override = getattr(coordinator, "_clear_external_override", None)
+				if clear_override is not None:
+					clear_override(entity_id, "resume_all_automation")
+				if coordinator.get_automation_paused(entity_id):
+					coordinator.set_automation_paused(
+						entity_id,
+						False,
+						reason="resume_all_automation",
+						source="service",
+					)
+				entity_state = coordinator._entity_states[entity_id]
+				await coordinator._reconcile_entity(entity_id, entity_state)
+				cleared += 1
+		_LOGGER.info("resume_all_automation processed %d controlled entities", cleared)
+
 	hass.services.async_register(
 		DOMAIN, SERVICE_RESUME_AUTOMATION, handle_resume_automation, schema=SERVICE_SCHEMA
 	)
 	hass.services.async_register(
 		DOMAIN, SERVICE_PAUSE_AUTOMATION, handle_pause_automation, schema=SERVICE_SCHEMA
 	)
-	_LOGGER.debug("Registered %s and %s services", SERVICE_RESUME_AUTOMATION, SERVICE_PAUSE_AUTOMATION)
+	hass.services.async_register(
+		DOMAIN,
+		SERVICE_RESUME_ALL_AUTOMATION,
+		handle_resume_all_automation,
+		schema=RESUME_ALL_SCHEMA,
+	)
+	_LOGGER.debug(
+		"Registered %s, %s and %s services",
+		SERVICE_RESUME_AUTOMATION,
+		SERVICE_PAUSE_AUTOMATION,
+		SERVICE_RESUME_ALL_AUTOMATION,
+	)

@@ -35,12 +35,29 @@ class TestNoOpServiceCalls:
 
     @pytest.mark.asyncio
     async def test_external_turn_off_disables_presence(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
         await coordinator._handle_service_call(_service_event("light", "turn_off", [self.entity]))
         assert coordinator.get_automation_paused(self.entity) is True
+
+    @pytest.mark.asyncio
+    async def test_external_turn_off_of_already_off_entity_does_not_pause(
+        self, mock_hass, mock_config_entry
+    ):
+        """A turn_off aimed at an already-off entity changes nothing.
+
+        Whole-home commands routinely include entities that are already in the
+        requested state; treating those as manual control left untouched rooms
+        paused for no reason.
+        """
+        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        await coordinator._handle_service_call(_service_event("light", "turn_off", [self.entity]))
+        assert coordinator.get_automation_paused(self.entity) is False
 
     @pytest.mark.asyncio
     async def test_external_turn_on_keeps_presence_allowed(self, mock_hass, mock_config_entry):
@@ -53,7 +70,7 @@ class TestNoOpServiceCalls:
 
     @pytest.mark.asyncio
     async def test_bulk_routine_disables_targeted_entity(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
@@ -122,7 +139,7 @@ class TestNoOpServiceCalls:
 
     @pytest.mark.asyncio
     async def test_detected_service_resets_allowance(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 

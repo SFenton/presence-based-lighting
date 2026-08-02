@@ -36,7 +36,15 @@ class CommandContextRecord:
 
 
 class PresenceCommandContextRegistry:
-	"""Track recent PBL commands across every config entry."""
+	"""Track recent PBL commands across every config entry.
+
+	Keyed by ``(context_id, entity_id)``: a single Home Assistant context can
+	legitimately cover several controlled entities at once (a service call with
+	a multi-entity target, or an HA light group forwarding its context to every
+	member). Storing one record per context id would let the last registration
+	clobber its siblings, and every clobbered entity would then look externally
+	controlled to its own coordinator.
+	"""
 
 	def __init__(
 		self,
@@ -45,7 +53,7 @@ class PresenceCommandContextRegistry:
 	) -> None:
 		self._max_contexts = max_contexts
 		self._ttl_seconds = ttl_seconds
-		self._contexts: OrderedDict[str, CommandContextRecord] = OrderedDict()
+		self._contexts: OrderedDict[str, dict[str, CommandContextRecord]] = OrderedDict()
 
 	def register(
 		self,
@@ -58,21 +66,32 @@ class PresenceCommandContextRegistry:
 		if not context_id:
 			return
 		self._purge_expired()
-		self._contexts.pop(context_id, None)
-		self._contexts[context_id] = CommandContextRecord(
+		records = self._contexts.pop(context_id, None) or {}
+		records[entity_id] = CommandContextRecord(
 			entry_id=entry_id,
 			entity_id=entity_id,
 			target_state=target_state,
 			registered_at=monotonic(),
 		)
+		self._contexts[context_id] = records
 		while len(self._contexts) > self._max_contexts:
 			self._contexts.popitem(last=False)
 
 	def unregister_entry(self, entry_id: str) -> None:
 		"""Remove contexts owned by an unloaded config entry."""
 		for context_id in list(self._contexts):
-			if self._contexts[context_id].entry_id == entry_id:
+			records = self._contexts[context_id]
+			for entity_id in list(records):
+				if records[entity_id].entry_id == entry_id:
+					records.pop(entity_id, None)
+			if not records:
 				self._contexts.pop(context_id, None)
+
+	def entities_for_context(self, context_id: str | None) -> set[str]:
+		"""Return every entity registered under one context id."""
+		if not context_id:
+			return set()
+		return set(self._contexts.get(context_id, {}))
 
 	def classify(
 		self,
@@ -94,8 +113,8 @@ class PresenceCommandContextRegistry:
 		for context_id in context_ids:
 			if not context_id:
 				continue
-			record = self._contexts.get(context_id)
-			if record is None or record.entity_id != entity_id:
+			record = self._contexts.get(context_id, {}).get(entity_id)
+			if record is None:
 				continue
 			if record.entry_id == entry_id:
 				return CommandOrigin.OWN
@@ -105,8 +124,12 @@ class PresenceCommandContextRegistry:
 	def _purge_expired(self) -> None:
 		"""Discard old command contexts."""
 		cutoff = monotonic() - self._ttl_seconds
-		for context_id, record in list(self._contexts.items()):
-			if record.registered_at >= cutoff:
+		for context_id, records in list(self._contexts.items()):
+			newest = max(
+				(record.registered_at for record in records.values()),
+				default=0.0,
+			)
+			if newest >= cutoff:
 				break
 			self._contexts.pop(context_id, None)
 

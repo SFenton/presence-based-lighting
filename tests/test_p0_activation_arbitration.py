@@ -1410,9 +1410,12 @@ async def test_complementary_entries_honor_homekit_off_during_handoff(
         await fallback._handle_controlled_entity_change(state_event)
 
         assert _turn_on_calls(mock_hass) == []
+        # The gate-closed primary now also honours the entity-scoped override, so
+        # it cannot re-arm the shared light when the activation gate flips back.
         assert primary._entity_states[LIGHT]["state"] in {
             EntityAutomationState.PENDING_ACTIVATION,
             EntityAutomationState.IDLE,
+            EntityAutomationState.PAUSED,
         }
         assert primary._entity_states[LIGHT]["intent"]["desired"].value != "detected"
         assert primary._ownership_manager.other_entry_wants_on(

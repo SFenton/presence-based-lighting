@@ -157,6 +157,9 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
             "automation_paused": self._coordinator.get_automation_paused(self._entity_id),
             "automation_state": self._coordinator.get_entity_automation_state(self._entity_id),
         }
+        get_quieted = getattr(self._coordinator, "get_quieted", None)
+        if get_quieted is not None:
+            attributes["automation_quieted"] = get_quieted(self._entity_id)
         attributes.update(self._coordinator.get_entity_control_state(self._entity_id))
         return attributes
 

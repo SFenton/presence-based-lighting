@@ -2,7 +2,7 @@
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"
-VERSION = "2.0.4"
+VERSION = "2.1.0"
 
 ISSUE_URL = "https://github.com/sfenton/presence_based_lighting/issues"
 
@@ -43,6 +43,20 @@ CONF_PRESENCE_SENSOR_MAPPINGS = "presence_sensor_mappings"  # Maps presence sens
 CONF_CLEARING_SENSOR_MAPPINGS = "clearing_sensor_mappings"  # Maps clearing sensors to their source entities
 CONF_ACTIVATION_CONDITIONS = "activation_conditions"  # Optional binary_sensor/input_boolean entities that must ALL be on for lights to activate
 
+# External override configuration keys
+# An "external override" is a fact about a *controlled entity*, not about one
+# config entry. Every entry controlling the entity consults the same record so
+# paired room profiles cannot resurrect a light another profile just released.
+CONF_HONOR_EXTERNAL_OVERRIDE = "honor_external_override"  # Per-entity: consult entity-scoped overrides recorded by sibling entries
+CONF_UNKNOWN_SOURCE_POLICY = "unknown_source_policy"  # Policy for external commands we cannot attribute to a known source
+CONF_QUIETED_MAX_AGE = "quieted_max_age"  # Seconds before a quieted hold arms its rearm latch defensively
+
+# Domain-wide bulk ("all lights off") detection keys
+CONF_HOMEKIT_BATCH_MODE = "homekit_batch_mode"  # off | observe | enforce
+CONF_BATCH_WINDOW_MS = "batch_window_ms"  # Grouping window for same-service HomeKit commands
+CONF_BATCH_RETAIN_SECONDS = "batch_retain_seconds"  # How long a context->batch mapping stays resolvable
+CONF_BATCH_MIN_DISTINCT_ENTITIES = "batch_min_distinct_entities"  # Distinct managed target entities required to call it a batch
+
 # Auto re-enable configuration keys
 CONF_AUTO_REENABLE_PRESENCE_SENSORS = "auto_reenable_presence_sensors"  # Presence sensors used for vacancy tracking
 CONF_AUTO_REENABLE_VACANCY_THRESHOLD = "auto_reenable_vacancy_threshold"  # Percentage threshold for vacancy (0-100)
@@ -52,6 +66,32 @@ CONF_AUTO_REENABLE_END_TIME = "auto_reenable_end_time"  # End of monitoring wind
 # Automation mode values
 AUTOMATION_MODE_AUTOMATIC = "automatic"
 AUTOMATION_MODE_PRESENCE_LOCK = "presence_lock"
+
+# External override policies
+# PAUSE keeps today's semantics: automation stays suspended until the user
+# resumes it (or the controlled entity leaves its manual-disable states).
+# REARM_AFTER_CLEAR ("quieted") honours a whole-home off without stranding the
+# room: the light stays dark until the room actually goes vacant, and only a
+# fresh rising presence edge after that vacancy may turn it back on.
+EXTERNAL_POLICY_PAUSE = "pause"
+EXTERNAL_POLICY_REARM_AFTER_CLEAR = "rearm_after_clear"
+EXTERNAL_POLICY_IGNORE = "ignore"
+
+# Sources an external command can be attributed to
+SOURCE_UNKNOWN = "unknown"
+SOURCE_HOMEKIT_SINGLE = "homekit_single"
+SOURCE_HOMEKIT_BATCH = "homekit_batch"
+
+# HomeKit batch detection modes
+BATCH_MODE_OFF = "off"
+BATCH_MODE_OBSERVE = "observe"
+BATCH_MODE_ENFORCE = "enforce"
+
+# Home Assistant event fired by the HomeKit bridge immediately before it issues
+# the service call, sharing the same context object as that call.
+EVENT_HOMEKIT_STATE_CHANGE = "homekit_state_change"
+# Diagnostic event emitted for every external command classification decision.
+EVENT_COMMAND_INTENT = "presence_based_lighting_command_intent"
 
 # Special value for no action
 NO_ACTION = "none"
@@ -71,6 +111,23 @@ DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE = True
 DEFAULT_AUTOMATION_MODE = AUTOMATION_MODE_AUTOMATIC
 DEFAULT_USE_INTERCEPTOR = True  # Default to using interceptor when available
 DEFAULT_MANUAL_DISABLE_STATES = ["off"]  # Manual off pauses automation by default
+
+# External override defaults.
+# UNKNOWN deliberately stays PAUSE: wall switches on direct-relay devices reach
+# Home Assistant as untraceable state changes, and rearming them automatically
+# would silently defeat a physical off.
+DEFAULT_HONOR_EXTERNAL_OVERRIDE = True
+DEFAULT_UNKNOWN_SOURCE_POLICY = EXTERNAL_POLICY_PAUSE
+DEFAULT_QUIETED_MAX_AGE = 14400  # 4 hours; only arms the rearm latch, never turns anything on
+
+# Bulk detection defaults. Observed native "all lights off" bursts carried 15
+# commands in 21.46 ms and 16 commands in 25.39 ms, while a single-room HomeKit
+# off is exactly one command, so 250 ms leaves ~31x margin over the widest
+# measured intra-burst gap (7.9 ms) with no realistic false-positive path.
+DEFAULT_HOMEKIT_BATCH_MODE = BATCH_MODE_ENFORCE
+DEFAULT_BATCH_WINDOW_MS = 250
+DEFAULT_BATCH_RETAIN_SECONDS = 10.0
+DEFAULT_BATCH_MIN_DISTINCT_ENTITIES = 8
 
 # Auto re-enable defaults
 DEFAULT_AUTO_REENABLE_START_TIME = "00:00:00"  # Midnight

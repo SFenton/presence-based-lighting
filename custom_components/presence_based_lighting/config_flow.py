@@ -21,6 +21,12 @@ from .const import (
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
+	CONF_HONOR_EXTERNAL_OVERRIDE,
+	CONF_QUIETED_MAX_AGE,
+	CONF_UNKNOWN_SOURCE_POLICY,
+	DEFAULT_HONOR_EXTERNAL_OVERRIDE,
+	DEFAULT_QUIETED_MAX_AGE,
+	DEFAULT_UNKNOWN_SOURCE_POLICY,
 	CONF_AUTO_REENABLE_END_TIME,
 	CONF_AUTO_REENABLE_PRESENCE_SENSORS,
 	CONF_AUTO_REENABLE_START_TIME,
@@ -176,6 +182,24 @@ def _format_action_option_label(service_name: str, metadata: dict | None) -> str
 	if description:
 		label = f"{label} – {description}"
 	return label
+
+
+# Per-entity settings that have no dedicated UI field yet. The add/edit flows
+# rebuild the entity config dict from scratch, so these must be carried forward
+# explicitly or editing an entity would silently drop them.
+_CARRY_FORWARD_ENTITY_SETTINGS = {
+	CONF_HONOR_EXTERNAL_OVERRIDE: DEFAULT_HONOR_EXTERNAL_OVERRIDE,
+	CONF_UNKNOWN_SOURCE_POLICY: DEFAULT_UNKNOWN_SOURCE_POLICY,
+	CONF_QUIETED_MAX_AGE: DEFAULT_QUIETED_MAX_AGE,
+}
+
+
+def _carry_forward_entity_settings(updated_config: dict, current_config: dict | None) -> dict:
+	"""Preserve entity settings that the flow schema does not expose."""
+	source = current_config or {}
+	for key, default in _CARRY_FORWARD_ENTITY_SETTINGS.items():
+		updated_config[key] = source.get(key, default)
+	return updated_config
 
 
 def _get_entity_name(hass: HomeAssistant, entity_id: str) -> str:
@@ -427,7 +451,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 10
+	VERSION = 11
 
 	def __init__(self):
 		"""Initialize."""
@@ -674,6 +698,8 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 				
+				_carry_forward_entity_settings(updated_config, self._current_entity_config)
+
 				# Only store RLC tracking entity if one was selected
 				if rlc_tracking_entity:
 					updated_config[CONF_RLC_TRACKING_ENTITY] = rlc_tracking_entity
@@ -1575,6 +1601,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 				
+				_carry_forward_entity_settings(updated_config, self._current_entity_config)
+
 				# Only store RLC tracking entity if one was selected
 				if rlc_tracking_entity:
 					updated_config[CONF_RLC_TRACKING_ENTITY] = rlc_tracking_entity

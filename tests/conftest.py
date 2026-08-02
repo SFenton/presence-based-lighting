@@ -696,6 +696,7 @@ class MockBus:
     def __init__(self):
         """Initialize mock bus."""
         self._listeners = {}
+        self.fired = []
         
     def async_listen(self, event_type, listener):
         """Register an event listener."""
@@ -709,6 +710,24 @@ class MockBus:
                 self._listeners[event_type].remove(listener)
 		
         return remove_listener
+
+    def async_fire(self, event_type, event_data=None, context=None):
+        """Record a fired event so tests can assert on diagnostics."""
+        self.fired.append(
+            {
+                "event_type": event_type,
+                "data": event_data or {},
+                "context": context,
+            }
+        )
+
+    def listeners_for(self, event_type):
+        """Return the listeners registered for an event type."""
+        return list(self._listeners.get(event_type, []))
+
+    def fired_events(self, event_type):
+        """Return every event fired for an event type."""
+        return [event for event in self.fired if event["event_type"] == event_type]
 
 
 @pytest.fixture

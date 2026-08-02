@@ -107,6 +107,99 @@ Each Presence Allowed switch includes:
 - `controlled_entity`: The HA entity ID being automated
 - `respect_presence_allowed`: Whether the entity honors the switch
 - `disable_on_external_control`: Whether external control pauses automation. Manual turn-offs always pause actions until you manually turn the entity back on, even if the Presence Allowed switch is hidden.
+- `automation_quieted` / `quieted`: Whether the entity is holding dark after a whole-home command
+- `external_override_policy` / `external_override_source` / `external_override_reason`: Why automation is currently suppressed
+- `external_override_batch_id` / `external_override_batch_size`: The detected bulk command, if any
+- `rearm_latched` / `rearm_latched_at`: Whether real vacancy has been observed since the hold started
+- `external_override_at` / `external_override_expires_at`: When the hold started and when its max-age safeguard arms
+- `unknown_source_count`: How many external commands could not be attributed to a known source
+- `homekit_batch_mode`: The active bulk-detection kill-switch mode
+
+## Whole-Home ("All Lights Off") Commands
+
+A native HomeKit/Siri "turn off all the lights" is not one command. Home Assistant's
+HomeKit bridge creates a **fresh context for every accessory**, so the house sees N
+unrelated single-entity `turn_off` calls. Treating each one as manual control paused
+every room indefinitely.
+
+This integration groups same-service HomeKit commands that arrive close together and
+treats a large burst as a whole-home command rather than N manual overrides.
+
+### QUIETED (rearm after clear)
+
+A controlled entity caught in a bulk command enters the `quieted` state instead of
+`paused`:
+
+- The entity is **not** turned back on, and entering the state emits no service call.
+- Reconciliation and Presence Lock are both suppressed, so an occupied room cannot
+  bounce the light straight back on.
+- When the room genuinely becomes vacant, a **rearm latch** is armed. This only
+  records that vacancy happened; the entity stays dark.
+- The **next rising presence edge after that vacancy** releases the hold and normal
+  presence automation resumes.
+- A max-age safeguard (`quieted_max_age`, default 4 hours) only arms the latch. It
+  never reconciles and never turns a light on, so a stuck occupancy sensor cannot
+  cause a surprise middle-of-the-night relight.
+
+Single-accessory HomeKit offs, wall switches and any command that cannot be attributed
+to a bulk burst still `pause` exactly as before.
+
+### Settings
+
+Per config entry:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `homekit_batch_mode` | `enforce` | Kill switch: `off`, `observe` (classify and log only), `enforce` |
+| `batch_window_ms` | `250` | Grouping window for same-service HomeKit commands |
+| `batch_retain_seconds` | `10` | How long a context stays resolvable to its batch |
+| `batch_min_distinct_entities` | `8` | Distinct target entities required to call a burst a bulk command |
+
+The observer is domain-wide but settings are per entry, so values are reduced
+deterministically (independently of entry setup order): **mode** takes the least
+behaviour-changing value (`off` beats `observe` beats `enforce`), **window** takes the
+smallest, **min distinct entities** takes the largest, and **retention** takes the
+longest. One entry set to `off` therefore disables bulk detection for the whole house;
+set it per entry only if that is what you want.
+
+The shared `homekit_state_change` listener is reference counted: it attaches when the
+first entry loads and detaches only when the last entry unloads or when the effective
+mode becomes `off`.
+
+Per controlled entity:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `honor_external_override` | `true` | Consult entity-scoped overrides recorded by sibling entries |
+| `unknown_source_policy` | `pause` | Policy for external commands that cannot be attributed |
+| `quieted_max_age` | `14400` | Seconds before the rearm latch arms defensively |
+
+### Entity-scoped overrides and paired profiles
+
+An override caused by an external action on a controlled entity is a fact about **that
+entity**, not about one config entry. Paired profiles (for example a room and its
+"…(other room lights off)" counterpart) control the same light behind opposing
+activation gates, so an override recorded by whichever profile was active is visible to
+the other. Without this, flipping the activation gate hands control to a profile that
+never saw the override and it immediately resurrects the light.
+
+Explicit per-entry controls — the Presence Allowed switch and `pause_automation`
+targeting a specific PBL switch — remain entry-local. Set `honor_external_override` to
+`false` on an entity to restore the old entry-local behaviour.
+
+### Escape hatch
+
+```yaml
+# Clear every pause and every quieted hold across all rooms
+- service: presence_based_lighting.resume_all_automation
+```
+
+### Diagnostics
+
+Every classification decision fires a `presence_based_lighting_command_intent` event
+with `entry_id`, `room`, `entity_id`, `source`, `policy`, `reason`, `batch_id`,
+`batch_size` and `batch_mode`. Run with `homekit_batch_mode: observe` first if you want
+to confirm classification against your own house before enabling enforcement.
 
 ### Use in Automations
 

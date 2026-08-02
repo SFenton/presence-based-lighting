@@ -37,3 +37,10 @@ pause_automation:
             - switch
             - fan
             - cover
+
+resume_all_automation:
+  name: Resume All Automation
+  description: >
+    Clear every pause and every quieted (rearm-after-clear) hold across all
+    Presence Based Lighting config entries, then reconcile each controlled
+    entity. Escape hatch for when many rooms are suppressed at once.

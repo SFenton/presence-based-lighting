@@ -26,9 +26,12 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .command_context import CommandOrigin, get_command_context_registry
+from .batch_observer import get_batch_observer
+from .external_override import get_external_override_manager
 from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
 	AUTOMATION_MODE_PRESENCE_LOCK,
+	BATCH_MODE_OFF,
 	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
 	CONF_AUTO_REENABLE_END_TIME,
@@ -57,26 +60,46 @@ from .const import (
 	CONF_ROOM_NAME,
 	CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
 	CONF_VACANCY_AUTHORITY_SENSORS,
+	CONF_BATCH_MIN_DISTINCT_ENTITIES,
+	CONF_BATCH_RETAIN_SECONDS,
+	CONF_BATCH_WINDOW_MS,
+	CONF_HOMEKIT_BATCH_MODE,
+	CONF_HONOR_EXTERNAL_OVERRIDE,
+	CONF_QUIETED_MAX_AGE,
+	CONF_UNKNOWN_SOURCE_POLICY,
 	DEFAULT_AUTOMATION_MODE,
 	DEFAULT_AUTO_REENABLE_END_TIME,
 	DEFAULT_AUTO_REENABLE_START_TIME,
 	DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
 	NO_ACTION,
+	DEFAULT_BATCH_MIN_DISTINCT_ENTITIES,
+	DEFAULT_BATCH_RETAIN_SECONDS,
+	DEFAULT_BATCH_WINDOW_MS,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
 	DEFAULT_DETECTED_SERVICE,
 	DEFAULT_DETECTED_STATE,
 	DEFAULT_DISABLE_ON_EXTERNAL,
+	DEFAULT_HOMEKIT_BATCH_MODE,
+	DEFAULT_HONOR_EXTERNAL_OVERRIDE,
 	DEFAULT_INITIAL_PRESENCE_ALLOWED,
 	DEFAULT_MANUAL_DISABLE_STATES,
 	DEFAULT_OFF_DELAY,
 	DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+	DEFAULT_QUIETED_MAX_AGE,
 	DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 	DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
+	DEFAULT_UNKNOWN_SOURCE_POLICY,
 	DOMAIN,
 	ENABLE_FILE_LOGGING,
+	EVENT_COMMAND_INTENT,
+	EXTERNAL_POLICY_IGNORE,
+	EXTERNAL_POLICY_REARM_AFTER_CLEAR,
 	PLATFORMS,
+	SOURCE_HOMEKIT_BATCH,
+	SOURCE_HOMEKIT_SINGLE,
+	SOURCE_UNKNOWN,
 	STARTUP_MESSAGE,
 )
 from .entity_targeting import as_entity_list, legacy_room_switch_entity_id, slugify_entity_id
@@ -121,6 +144,9 @@ class EntityAutomationState(Enum):
 	  PENDING_ACTIVATION ──room empties──▶ IDLE
 	  PAUSED ──resume / state leaves disable list──▶ (reconciled)
 	  Any state ──external manual control──▶ PAUSED
+	  Any state ──bulk "all lights off"──▶ QUIETED
+	  QUIETED ──room becomes vacant──▶ QUIETED (rearm latch armed, stays dark)
+	  QUIETED ──rising presence AFTER vacancy──▶ OCCUPIED
 	"""
 
 	IDLE = "idle"
@@ -131,6 +157,7 @@ class EntityAutomationState(Enum):
 	SETTLING_OFF = "settling_off"
 	SETTLING_ON = "settling_on"
 	PAUSED = "paused"
+	QUIETED = "quieted"
 
 
 class DesiredState(Enum):
@@ -180,6 +207,13 @@ _BINARY_EFFECTIVE_STATES = {STATE_OFF, STATE_ON}
 _EXPLICIT_PAUSE_SOURCES = {
 	"presence_allowed",
 	"service",
+}
+# Pause sources that originate from an external command on the controlled
+# entity, and are therefore governed by the entity-scoped override record.
+_EXTERNAL_PAUSE_SOURCES = {
+	"external_state",
+	"external_service",
+	"external_override",
 }
 
 # Persistent debug log file (uncapped)
@@ -495,6 +529,49 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 			config_entry.entry_id,
 		)
 
+	if config_entry.version == 10:
+		# Version 10 -> 11: entity-scoped external overrides and bulk command
+		# detection. An external override is a fact about the controlled entity,
+		# so every entry controlling it consults the same record by default -
+		# otherwise a paired profile whose activation gate was closed at command
+		# time resurrects the light the moment the gate flips. Entries that must
+		# keep the old entry-local behaviour can set honor_external_override to
+		# false explicitly.
+		new_data = {**config_entry.data}
+		controlled_entities = new_data.get(CONF_CONTROLLED_ENTITIES, [])
+		updated_entities = []
+
+		for entity_config in controlled_entities:
+			updated_config = {**entity_config}
+			updated_config.setdefault(
+				CONF_HONOR_EXTERNAL_OVERRIDE,
+				DEFAULT_HONOR_EXTERNAL_OVERRIDE,
+			)
+			updated_config.setdefault(
+				CONF_UNKNOWN_SOURCE_POLICY,
+				DEFAULT_UNKNOWN_SOURCE_POLICY,
+			)
+			updated_config.setdefault(CONF_QUIETED_MAX_AGE, DEFAULT_QUIETED_MAX_AGE)
+			updated_entities.append(updated_config)
+
+		new_data[CONF_CONTROLLED_ENTITIES] = updated_entities
+		new_data.setdefault(CONF_HOMEKIT_BATCH_MODE, DEFAULT_HOMEKIT_BATCH_MODE)
+		new_data.setdefault(CONF_BATCH_WINDOW_MS, DEFAULT_BATCH_WINDOW_MS)
+		new_data.setdefault(CONF_BATCH_RETAIN_SECONDS, DEFAULT_BATCH_RETAIN_SECONDS)
+		new_data.setdefault(
+			CONF_BATCH_MIN_DISTINCT_ENTITIES,
+			DEFAULT_BATCH_MIN_DISTINCT_ENTITIES,
+		)
+		hass.config_entries.async_update_entry(
+			config_entry,
+			data=new_data,
+			version=11,
+		)
+		_LOGGER.info(
+			"Migration of entry %s from version 10 to 11 successful",
+			config_entry.entry_id,
+		)
+
 	return True
 
 
@@ -687,6 +764,9 @@ class PresenceBasedLightingCoordinator:
 		self._entity_states: Dict[str, dict] = {}
 		self._ownership_manager = get_ownership_manager(hass)
 		self._command_context_registry = get_command_context_registry(hass)
+		self._override_manager = get_external_override_manager(hass)
+		self._batch_observer = get_batch_observer(hass)
+		self._batch_unsub: Callable[[], None] | None = None
 		self._interceptor: PresenceLockInterceptor | None = None
 		self._using_interceptor: bool = False
 		self._reconciliation_unsub: Callable[[], None] | None = None
@@ -761,8 +841,15 @@ class PresenceBasedLightingCoordinator:
 					"actuation": self._new_actuation_state(),
 					"pause": None,
 					"last_effective_state": None,  # Track RLC effective state for change detection
+					"last_observed_state": None,  # Last trusted direct state, for redundancy checks
 				}
 				self._ownership_manager.register_entity(self.entry.entry_id, entity_id)
+				self._batch_observer.register_managed_entity(self.entry.entry_id, entity_id)
+				self._override_manager.register_entity(
+					self.entry.entry_id,
+					entity_id,
+					self._handle_external_override_changed,
+				)
 			
 			_LOGGER.info("Coordinator initialized with %d unique entities", len(self._entity_states))
 		except Exception as err:
@@ -900,6 +987,13 @@ class PresenceBasedLightingCoordinator:
 							"RLC sensor %s not available yet for %s, last_effective_state remains None",
 							rlc_tracking_entity, entity_id
 						)
+				else:
+					# Seed the observed state for non-RLC entities too, so a
+					# redundant external command aimed at an entity that is
+					# already in the target state cannot manufacture a pause.
+					current = self.hass.states.get(entity_id)
+					if current is not None and not _is_untrusted_state_value(current):
+						entity_state["last_observed_state"] = current.state
 			
 			_LOGGER.debug("Setting up listeners for %d controlled entities: %s", 
 						 len(controlled_ids), controlled_ids)
@@ -962,6 +1056,28 @@ class PresenceBasedLightingCoordinator:
 				self.hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle_service_call)
 			)
 			_LOGGER.debug("Registered service call listener")
+
+			# Bulk ("all lights off") detection is domain-wide: a single listener
+			# and a single batch view are shared by every config entry, because a
+			# whole-home command by definition spans rooms.
+			self._configure_batch_observer()
+			if self._batch_observer.mode != BATCH_MODE_OFF:
+				self._batch_observer.async_start(self.entry.entry_id)
+				self._batch_unsub = self._batch_observer.subscribe_confirmed(
+					self._handle_batch_confirmed
+				)
+				_LOGGER.debug(
+					"Bulk command detection active (effective config: %s)",
+					self._batch_observer.effective_config,
+				)
+			else:
+				_LOGGER.debug("Bulk command detection disabled by configuration")
+			if self._using_interceptor:
+				_LOGGER.info(
+					"Presence Lock interceptor is active; it blocks conflicting calls "
+					"before bulk classification runs, so whole-home commands are only "
+					"made batch-aware on the non-interceptor (reactive) path"
+				)
 			
 			# Register listener for auto-reenable presence sensors
 			auto_reenable_sensors = self.entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, [])
@@ -1015,6 +1131,14 @@ class PresenceBasedLightingCoordinator:
 
 			self._ownership_manager.unregister_entry(self.entry.entry_id)
 			self._command_context_registry.unregister_entry(self.entry.entry_id)
+			self._override_manager.unregister_entry(self.entry.entry_id)
+			# Drop our batch-confirmation callback before releasing the shared
+			# observer, so a partial unload never leaves a stale subscription
+			# bound to a torn-down coordinator.
+			if self._batch_unsub is not None:
+				self._batch_unsub()
+				self._batch_unsub = None
+			self._batch_observer.unregister_entry(self.entry.entry_id)
 
 			# Cancel auto-reenable schedules
 			self._cancel_auto_reenable_schedules()
@@ -1100,6 +1224,7 @@ class PresenceBasedLightingCoordinator:
 		intent = entity_state["intent"]
 		actuation = entity_state["actuation"]
 		pause = entity_state.get("pause") or {}
+		override = self._override_manager.get(entity_id)
 		return {
 			"desired_state": intent["desired"].value,
 			"desired_target_state": intent["target_state"],
@@ -1115,6 +1240,18 @@ class PresenceBasedLightingCoordinator:
 			"pause_reason": pause.get("reason"),
 			"pause_paused_at": pause.get("paused_at"),
 			"activation_conditions_met": self._entry_is_active(),
+			"quieted": entity_state["state"] == EntityAutomationState.QUIETED,
+			"external_override_policy": override.policy if override else None,
+			"external_override_source": override.source if override else None,
+			"external_override_reason": override.reason if override else None,
+			"external_override_at": override.created_at if override else None,
+			"external_override_expires_at": override.expires_at() if override else None,
+			"external_override_batch_id": override.batch_id if override else None,
+			"external_override_batch_size": override.batch_size if override else 0,
+			"rearm_latched": bool(override.rearm_latched) if override else False,
+			"rearm_latched_at": override.rearm_latched_at if override else None,
+			"unknown_source_count": self._override_manager.unknown_source_count(entity_id),
+			"homekit_batch_mode": self._batch_observer.mode,
 		}
 
 	def _valid_effective_states_for_entity(self, entity_state: dict) -> set[str]:
@@ -2023,6 +2160,28 @@ class PresenceBasedLightingCoordinator:
 		"""Get the path to the manual pause persistence file."""
 		return Path(self.hass.config.path(".storage")) / f"pbl_paused_{self.entry.entry_id}.json"
 
+	def _quieted_persistence_payload(self, entity_id: str) -> dict:
+		"""Serialise a quieted hold, preserving its original creation time.
+
+		``created_at`` must survive the restart: restoring through
+		``set_override`` would re-stamp "now" and restart the max-age budget on
+		every Home Assistant restart, so a hold could never age out.
+		"""
+		record = self._override_manager.get(entity_id)
+		if record is None:
+			return {"reason": "quieted", "rearm_latched": False}
+		return {
+			"policy": record.policy,
+			"source": record.source,
+			"reason": record.reason,
+			"created_at": record.created_at,
+			"rearm_latched": bool(record.rearm_latched),
+			"rearm_latched_at": record.rearm_latched_at,
+			"batch_id": record.batch_id,
+			"batch_size": record.batch_size,
+			"max_age_seconds": record.max_age_seconds,
+		}
+
 	def _schedule_paused_state_save(self) -> None:
 		"""Schedule a save for manual pause state without blocking state handlers."""
 		try:
@@ -2035,16 +2194,21 @@ class PresenceBasedLightingCoordinator:
 			_LOGGER.debug("No running loop available to persist paused state")
 
 	async def _save_paused_state(self) -> None:
-		"""Persist manually paused entities for restart recovery."""
+		"""Persist manually paused and quieted entities for restart recovery."""
 		try:
 			paused_entities = [
 				entity_id
 				for entity_id, entity_state in self._entity_states.items()
 				if entity_state["state"] == EntityAutomationState.PAUSED
 			]
+			quieted_entities = [
+				entity_id
+				for entity_id, entity_state in self._entity_states.items()
+				if entity_state["state"] == EntityAutomationState.QUIETED
+			]
 			path = self._get_paused_persistence_path()
 
-			if not paused_entities:
+			if not paused_entities and not quieted_entities:
 				if path.exists():
 					await self.hass.async_add_executor_job(path.unlink)
 				return
@@ -2065,6 +2229,12 @@ class PresenceBasedLightingCoordinator:
 				},
 				"saved_at": dt_util.utcnow().isoformat(),
 			}
+			if quieted_entities:
+				data["quieted_entities"] = quieted_entities
+				data["quieted"] = {
+					entity_id: self._quieted_persistence_payload(entity_id)
+					for entity_id in quieted_entities
+				}
 			await self.hass.async_add_executor_job(
 				lambda: path.write_text(json.dumps(data))
 			)
@@ -2105,6 +2275,39 @@ class PresenceBasedLightingCoordinator:
 				self._notify_switch(entity_id)
 			if cleared_stale_pause:
 				self._schedule_paused_state_save()
+
+			# Restore quieted holds. A quieted entity is dark on purpose, so the
+			# hold is re-armed rather than reconciled; only a fresh rising
+			# presence edge after vacancy may bring it back.
+			quieted_entities = set(data.get("quieted_entities", []))
+			quieted_meta = data.get("quieted") or {}
+			for entity_id in quieted_entities:
+				entity_state = self._entity_states.get(entity_id)
+				if not entity_state:
+					continue
+				meta = quieted_meta.get(entity_id) or {}
+				# Restore, never re-create: the original creation time drives the
+				# max-age safeguard, so a restart must not reset the hold's age.
+				record = self._override_manager.restore_override(
+					entity_id,
+					meta.get("policy") or EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+					source=meta.get("source") or SOURCE_HOMEKIT_BATCH,
+					reason=meta.get("reason") or "quieted hold restored",
+					created_at=meta.get("created_at"),
+					rearm_latched=bool(meta.get("rearm_latched")),
+					rearm_latched_at=meta.get("rearm_latched_at"),
+					batch_id=meta.get("batch_id"),
+					batch_size=meta.get("batch_size") or 0,
+					max_age_seconds=(
+						meta.get("max_age_seconds")
+						if meta.get("max_age_seconds") is not None
+						else self._quieted_max_age(entity_state)
+					),
+					notify=False,
+				)
+				if record is None:
+					continue
+				self._enter_quieted(entity_id, entity_state, record)
 			_LOGGER.debug("Loaded manual pause state: %s", data)
 		except Exception as err:
 			_LOGGER.debug("No valid manual pause state to load: %s", err)
@@ -2127,12 +2330,18 @@ class PresenceBasedLightingCoordinator:
 				)
 				if origin != CommandOrigin.EXTERNAL:
 					continue
-				await self._handle_external_action(entity_id, service)
+				await self._handle_external_action(entity_id, service, event.context)
 		except Exception as err:
 			_LOGGER.exception("Error handling service call event: %s", err)
 
 	def _expand_target_entities(self, target: Any) -> list[str]:
-		"""Expand service targets to controlled entities, following nested groups."""
+		"""Expand service targets to controlled entities, following nested groups.
+
+		Two different group flavours must be followed. Home Assistant light
+		groups publish their members in ``attributes.entity_id``; Zigbee2MQTT
+		groups publish theirs in ``attributes.group_entities``. Following only
+		the former made every entity behind a Z2M group invisible to targeting.
+		"""
 		matched: list[str] = []
 		seen: set[str] = set()
 		to_visit = as_entity_list(target)
@@ -2151,11 +2360,18 @@ class PresenceBasedLightingCoordinator:
 
 			if entity_id in self._entity_states:
 				matched.append(entity_id)
-				continue
 
 			state = self.hass.states.get(entity_id)
-			if state and state.attributes.get("entity_id"):
-				to_visit.extend(as_entity_list(state.attributes.get("entity_id")))
+			if not state:
+				continue
+			attributes = getattr(state, "attributes", None) or {}
+			for attribute in ("entity_id", "group_entities"):
+				members = attributes.get(attribute)
+				if not members:
+					continue
+				to_visit.extend(
+					member for member in as_entity_list(members) if member not in seen
+				)
 
 		return matched
 
@@ -2241,6 +2457,10 @@ class PresenceBasedLightingCoordinator:
 					)
 					return
 				effective_new_state = new_state.state
+				# Track the observed state so redundant external commands can be
+				# recognised without racing the live state machine. Kept separate
+				# from last_effective_state, which is RLC-specific.
+				entity_state["last_observed_state"] = effective_new_state
 
 			if origin == CommandOrigin.OWN:
 				await self._handle_actuation_feedback(entity_id, entity_state, effective_new_state)
@@ -2253,7 +2473,9 @@ class PresenceBasedLightingCoordinator:
 				)
 				return
 
-			await self._process_external_controlled_change(entity_id, entity_state, effective_new_state)
+			await self._process_external_controlled_change(
+				entity_id, entity_state, effective_new_state, new_state.context
+			)
 		except Exception as err:
 			_LOGGER.exception("Error handling controlled entity change for %s: %s", event.data.get("entity_id"), err)
 
@@ -2329,7 +2551,12 @@ class PresenceBasedLightingCoordinator:
 				)
 				return
 
-			await self._process_external_controlled_change(entity_id, entity_state, new_effective)
+			await self._process_external_controlled_change(
+				entity_id,
+				entity_state,
+				new_effective,
+				controlled.context if controlled is not None else None,
+			)
 		except Exception as err:
 			_LOGGER.exception(
 				"Error handling RLC tracking change for %s: %s",
@@ -2338,6 +2565,7 @@ class PresenceBasedLightingCoordinator:
 
 	async def _process_external_controlled_change(
 		self, entity_id: str, entity_state: dict, effective_new_state: str | None,
+		context: Context | None = None,
 	) -> None:
 		"""Apply manual-control pause/resume logic for an external state change."""
 		cfg = entity_state["config"]
@@ -2347,19 +2575,27 @@ class PresenceBasedLightingCoordinator:
 		):
 			return
 
-		if self._presence_lock_should_yield_to_manual_override(entity_state, effective_new_state):
-			if self._manual_disable_state_matches(entity_state, effective_new_state):
-				self.set_automation_paused(
-					entity_id,
-					True,
-					reason="presence lock yielded to manual override",
-					source="external_state",
-				)
-			return
+		# Classify before Presence Lock gets a vote. A whole-home off that lands
+		# in an occupied room would otherwise be reverted by the presence-lock
+		# fallback before the quieted hold is ever recorded.
+		resolved = self._resolve_external_policy(entity_id, entity_state, context)
+		is_bulk = resolved[1] == EXTERNAL_POLICY_REARM_AFTER_CLEAR
 
-		# Check presence lock first - this takes priority
-		if await self._check_and_apply_presence_lock(entity_state, effective_new_state):
-			return  # Presence lock handled the state change
+		if not is_bulk:
+			if self._presence_lock_should_yield_to_manual_override(entity_state, effective_new_state):
+				if self._manual_disable_state_matches(entity_state, effective_new_state):
+					self._apply_external_policy(
+						entity_id,
+						entity_state,
+						context,
+						"presence lock yielded to manual override",
+						resolved=resolved,
+					)
+				return
+
+			# Check presence lock first - this takes priority
+			if await self._check_and_apply_presence_lock(entity_state, effective_new_state):
+				return  # Presence lock handled the state change
 
 		if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
 			return
@@ -2371,13 +2607,20 @@ class PresenceBasedLightingCoordinator:
 		should_pause = self._should_external_change_pause(entity_id, cfg, effective_new_state)
 
 		if should_pause:
-			self.set_automation_paused(
+			# No redundancy guard is needed here: a redundant command produces no
+			# state transition at all, and _handle_controlled_entity_change has
+			# already discarded no-op events before reaching this point.
+			self._apply_external_policy(
 				entity_id,
-				True,
-				reason="external controlled entity change",
-				source="external_state",
+				entity_state,
+				context,
+				"external controlled entity change",
+				resolved=resolved,
 			)
 		else:
+			self._clear_external_override(
+				entity_id, "external controlled entity change resumed"
+			)
 			self.set_automation_paused(
 				entity_id,
 				False,
@@ -2392,7 +2635,9 @@ class PresenceBasedLightingCoordinator:
 			await self._reconcile_entity(entity_id, entity_state)
 
 
-	async def _handle_external_action(self, entity_id: str, service: str | None) -> None:
+	async def _handle_external_action(
+		self, entity_id: str, service: str | None, context: Context | None = None,
+	) -> None:
 		entity_state = self._entity_states[entity_id]
 		cfg = entity_state["config"]
 
@@ -2409,8 +2654,17 @@ class PresenceBasedLightingCoordinator:
 		):
 			return
 
-		if target_state and await self._check_and_apply_presence_lock(
-			entity_state, target_state, force_fallback=True
+		# Classify before Presence Lock: a whole-home off must not be reverted by
+		# the presence-lock fallback just because the room is occupied.
+		resolved = self._resolve_external_policy(entity_id, entity_state, context)
+		is_bulk = resolved[1] == EXTERNAL_POLICY_REARM_AFTER_CLEAR
+
+		if (
+			not is_bulk
+			and target_state
+			and await self._check_and_apply_presence_lock(
+				entity_state, target_state, force_fallback=True
+			)
 		):
 			return  # Presence lock handled the state change
 
@@ -2428,13 +2682,17 @@ class PresenceBasedLightingCoordinator:
 			return
 
 		if should_pause:
-			self.set_automation_paused(
+			self._apply_external_policy(
 				entity_id,
-				True,
-				reason=f"external service {service}",
-				source="external_service",
+				entity_state,
+				context,
+				f"external service {service}",
+				resolved=resolved,
 			)
 		elif target_state:
+			self._clear_external_override(
+				entity_id, f"external service {service} resumed"
+			)
 			self.set_automation_paused(
 				entity_id,
 				False,
@@ -2461,6 +2719,18 @@ class PresenceBasedLightingCoordinator:
 	def _external_pause_action_is_untrusted_or_redundant(
 		self, entity_id: str, entity_state: dict, target_state: str | None,
 	) -> bool:
+		"""Return whether an external pause action should be ignored.
+
+		A ``turn_off`` aimed at an entity that is already off changes nothing, so
+		it must not manufacture a pause. Whole-home commands routinely include
+		entities that are already in the requested state, which previously left
+		untouched rooms paused for no reason.
+
+		Redundancy is judged against the last effective state PBL actually
+		observed, not against the live state. ``EVENT_CALL_SERVICE`` is delivered
+		before the entity's own state write, so reading the live state here can
+		race with the very command being classified.
+		"""
 		if target_state is None:
 			return False
 		if not entity_state["config"].get(CONF_RLC_TRACKING_ENTITY):
@@ -2469,6 +2739,13 @@ class PresenceBasedLightingCoordinator:
 				_LOGGER.debug(
 					"Ignoring external pause action for %s because no trusted effective state is available",
 					entity_id,
+				)
+				return True
+			observed_state = entity_state.get("last_observed_state")
+			if observed_state is not None and observed_state == target_state:
+				_LOGGER.debug(
+					"Ignoring redundant external pause action for %s: last observed state already %s",
+					entity_id, target_state,
 				)
 				return True
 			return False
@@ -2545,6 +2822,16 @@ class PresenceBasedLightingCoordinator:
 		require_vac = cfg.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
 
 		if not self._entry_is_active():
+			return False
+
+		# A quieted entity is deliberately holding dark after a whole-home
+		# command. Presence Lock must not fight that hold, or the bulk off is
+		# reverted the moment it lands in an occupied room.
+		if entity_state["state"] == EntityAutomationState.QUIETED:
+			_LOGGER.debug(
+				"Presence lock: skipping %s because it is quieted after a bulk command",
+				entity_id,
+			)
 			return False
 
 		if self._presence_lock_should_yield_to_manual_override(entity_state, new_state):
@@ -2657,6 +2944,10 @@ class PresenceBasedLightingCoordinator:
 			# --- Presence sensor turns ON ---
 			if currently_on and entity_id in presence_sensors:
 				_LOGGER.debug("Presence detected via %s", entity_id)
+				# A quieted hold is released only by a rising presence edge that
+				# follows real vacancy. Releasing here drops the entity back to
+				# IDLE so the normal transition below turns it on.
+				self._release_latched_quieted_entities()
 				for eid, es in self._entity_states.items():
 					if not self._presence_switch_allows_entity(es):
 						continue
@@ -2725,6 +3016,9 @@ class PresenceBasedLightingCoordinator:
 					all_clear = self._can_clear_room()
 					if all_clear:
 						_LOGGER.debug("All clear conditions met")
+						# Vacancy only *arms* a quieted hold. The entity stays
+						# dark until presence rises again.
+						self._arm_rearm_latches_for_vacancy()
 						for eid, es in self._entity_states.items():
 							if not self._presence_switch_allows_entity(es):
 								continue
@@ -2881,7 +3175,10 @@ class PresenceBasedLightingCoordinator:
 		- presence_allowed: User-controlled toggle (persisted across reboots)
 		- State is not PAUSED: Transient pause due to manual control
 		"""
-		return self._presence_switch_allows_entity(entity_state) and entity_state["state"] != EntityAutomationState.PAUSED
+		return self._presence_switch_allows_entity(entity_state) and entity_state["state"] not in (
+			EntityAutomationState.PAUSED,
+			EntityAutomationState.QUIETED,
+		)
 
 	def _register_command_context(
 		self,
@@ -2932,6 +3229,305 @@ class PresenceBasedLightingCoordinator:
 				include_parent=True,
 			)
 			== CommandOrigin.OWN
+		)
+
+	# ------------------------------------------------------------------
+	# External command classification and entity-scoped overrides
+	# ------------------------------------------------------------------
+
+	def _entity_honors_external_override(self, entity_state: dict) -> bool:
+		"""Return whether this entity consults entity-scoped external overrides."""
+		return entity_state["config"].get(
+			CONF_HONOR_EXTERNAL_OVERRIDE,
+			DEFAULT_HONOR_EXTERNAL_OVERRIDE,
+		)
+
+	def _unknown_source_policy(self, entity_state: dict) -> str:
+		"""Return the policy for external commands we cannot attribute."""
+		return entity_state["config"].get(
+			CONF_UNKNOWN_SOURCE_POLICY,
+			DEFAULT_UNKNOWN_SOURCE_POLICY,
+		)
+
+	def _quieted_max_age(self, entity_state: dict) -> float | None:
+		"""Return the defensive max age for a quieted hold, if configured."""
+		value = entity_state["config"].get(CONF_QUIETED_MAX_AGE, DEFAULT_QUIETED_MAX_AGE)
+		try:
+			seconds = float(value)
+		except (TypeError, ValueError):
+			return None
+		return seconds if seconds > 0 else None
+
+	def _configure_batch_observer(self) -> None:
+		"""Register this entry's bulk-detection settings with the shared observer."""
+		data = self.entry.data
+		self._batch_observer.configure_entry(
+			self.entry.entry_id,
+			mode=data.get(CONF_HOMEKIT_BATCH_MODE, DEFAULT_HOMEKIT_BATCH_MODE),
+			window_ms=data.get(CONF_BATCH_WINDOW_MS, DEFAULT_BATCH_WINDOW_MS),
+			retain_seconds=data.get(CONF_BATCH_RETAIN_SECONDS, DEFAULT_BATCH_RETAIN_SECONDS),
+			min_distinct_entities=data.get(
+				CONF_BATCH_MIN_DISTINCT_ENTITIES,
+				DEFAULT_BATCH_MIN_DISTINCT_ENTITIES,
+			),
+		)
+
+	def _resolve_external_policy(
+		self, entity_id: str, entity_state: dict, context: Context | None,
+	) -> tuple[str, str, Any]:
+		"""Classify an external command into (source, policy, batch decision).
+
+		UNKNOWN deliberately keeps today's PAUSE semantics: a wall switch on a
+		direct-relay device reaches Home Assistant as an untraceable state change,
+		and rearming it automatically would silently defeat a physical off.
+		"""
+		fallback = self._unknown_source_policy(entity_state)
+		decision = None
+		for context_id in (
+			getattr(context, "id", None),
+			getattr(context, "parent_id", None),
+		):
+			if not context_id:
+				continue
+			decision = self._batch_observer.classify(context_id)
+			if decision is not None:
+				break
+
+		if decision is None:
+			return SOURCE_UNKNOWN, fallback, None
+		if not decision.confirmed:
+			# A single HomeKit accessory command: a genuine per-room manual off.
+			return SOURCE_HOMEKIT_SINGLE, fallback, decision
+		if not decision.enforcing:
+			_LOGGER.info(
+				"Bulk command observed for %s (batch %s, size %d) but batch mode is "
+				"'%s'; applying %s",
+				entity_id,
+				decision.batch_id,
+				decision.size,
+				self._batch_observer.mode,
+				fallback,
+			)
+			return SOURCE_HOMEKIT_BATCH, fallback, decision
+		return SOURCE_HOMEKIT_BATCH, EXTERNAL_POLICY_REARM_AFTER_CLEAR, decision
+
+	def _emit_command_intent(
+		self,
+		entity_id: str,
+		source: str,
+		policy: str,
+		decision: Any,
+		reason: str,
+	) -> None:
+		"""Emit a concise diagnostic event for one classification decision."""
+		payload = {
+			"entry_id": self.entry.entry_id,
+			"room": self.entry.data.get(CONF_ROOM_NAME),
+			"entity_id": entity_id,
+			"source": source,
+			"policy": policy,
+			"reason": reason,
+			"batch_id": getattr(decision, "batch_id", None),
+			"batch_size": getattr(decision, "size", 0),
+			"batch_mode": self._batch_observer.mode,
+		}
+		_LOGGER.debug("Command intent for %s: %s", entity_id, payload)
+		try:
+			fire = getattr(self.hass.bus, "async_fire", None)
+			if fire is not None:
+				result = fire(EVENT_COMMAND_INTENT, payload)
+				# Some test doubles expose an async bus; never leave a coroutine
+				# dangling from a synchronous diagnostic emit.
+				if asyncio.iscoroutine(result):
+					result.close()
+		except Exception as err:  # pragma: no cover - defensive
+			_LOGGER.debug("Could not fire %s event: %s", EVENT_COMMAND_INTENT, err)
+
+	def _apply_external_policy(
+		self,
+		entity_id: str,
+		entity_state: dict,
+		context: Context | None,
+		reason: str,
+		resolved: tuple[str, str, Any] | None = None,
+	) -> str:
+		"""Classify and record an entity-scoped external override."""
+		source, policy, decision = resolved or self._resolve_external_policy(
+			entity_id, entity_state, context
+		)
+		self._emit_command_intent(entity_id, source, policy, decision, reason)
+
+		if policy == EXTERNAL_POLICY_IGNORE:
+			self._override_manager.note_source(entity_id, source)
+			return policy
+
+		self._override_manager.set_override(
+			entity_id,
+			policy,
+			source=source,
+			reason=reason,
+			batch_id=getattr(decision, "batch_id", None),
+			batch_size=getattr(decision, "size", 0),
+			max_age_seconds=(
+				self._quieted_max_age(entity_state)
+				if policy == EXTERNAL_POLICY_REARM_AFTER_CLEAR
+				else None
+			),
+		)
+		return policy
+
+	def _clear_external_override(self, entity_id: str, reason: str) -> None:
+		"""Clear the entity-scoped override shared by every controlling entry."""
+		self._override_manager.clear(entity_id, reason)
+
+	def _handle_external_override_changed(self, entity_id: str) -> None:
+		"""Sync local automation state to the entity-scoped override record.
+
+		Invoked for *every* config entry controlling the entity, including paired
+		profiles whose activation gate is currently closed, so a later gate flip
+		cannot hand control to a profile that never saw the override.
+		"""
+		entity_state = self._entity_states.get(entity_id)
+		if entity_state is None:
+			return
+		if not self._entity_honors_external_override(entity_state):
+			return
+
+		record = self._override_manager.get(entity_id)
+		if record is None:
+			if entity_state["state"] == EntityAutomationState.QUIETED:
+				self._exit_quieted(entity_id, entity_state, "external override cleared")
+			elif (
+				entity_state["state"] == EntityAutomationState.PAUSED
+				and (entity_state.get("pause") or {}).get("source") in _EXTERNAL_PAUSE_SOURCES
+			):
+				self.set_automation_paused(
+					entity_id,
+					False,
+					reason="external override cleared",
+					source="external_override",
+				)
+			return
+
+		if record.is_quieted:
+			self._enter_quieted(entity_id, entity_state, record)
+		elif record.is_paused:
+			self.set_automation_paused(
+				entity_id,
+				True,
+				reason=record.reason,
+				source="external_override",
+			)
+
+	def _enter_quieted(
+		self, entity_id: str, entity_state: dict, record: Any,
+	) -> None:
+		"""Hold an entity dark after a bulk command without stranding it.
+
+		Entering QUIETED never emits a service call: the bulk command already
+		turned the entity off, and re-asserting anything here would either fight
+		that command or bounce the light straight back on.
+		"""
+		if entity_state["state"] == EntityAutomationState.QUIETED:
+			entity_state["pause"] = self._build_pause_metadata(
+				entity_id, entity_state, record.reason, "external_batch",
+			)
+			self._notify_switch(entity_id)
+			return
+
+		self._bump_entity_work_generation(entity_state, "bulk command quieted")
+		self._cancel_entity_timer(entity_state)
+		self._cancel_entity_actuation(entity_state, "bulk command quieted")
+		entity_state["pause"] = self._build_pause_metadata(
+			entity_id, entity_state, record.reason, "external_batch",
+		)
+		self._set_entity_intent(
+			entity_id,
+			entity_state,
+			DesiredState.NONE,
+			None,
+			None,
+			IntentReason.PAUSED,
+			False,
+		)
+		self._set_entity_state(
+			entity_id,
+			entity_state,
+			EntityAutomationState.QUIETED,
+			"bulk command quieted",
+		)
+		self._notify_switch(entity_id)
+		self._schedule_paused_state_save()
+
+	def _exit_quieted(self, entity_id: str, entity_state: dict, reason: str) -> None:
+		"""Release a quieted hold. Never turns the entity on by itself."""
+		if entity_state["state"] != EntityAutomationState.QUIETED:
+			return
+		self._bump_entity_work_generation(entity_state, reason)
+		self._cancel_entity_timer(entity_state)
+		self._cancel_entity_actuation(entity_state, reason)
+		entity_state["pause"] = None
+		self._set_entity_state(entity_id, entity_state, EntityAutomationState.IDLE, reason)
+		self._notify_switch(entity_id)
+		self._schedule_paused_state_save()
+
+	def get_quieted(self, entity_id: str) -> bool:
+		"""Return whether this entity is holding dark after a bulk command."""
+		return self._entity_states[entity_id]["state"] == EntityAutomationState.QUIETED
+
+	def _arm_rearm_latches_for_vacancy(self) -> None:
+		"""Arm rearm latches once the room is genuinely vacant.
+
+		Arming only records that vacancy happened; the entity stays dark until a
+		subsequent rising presence edge.
+		"""
+		for entity_id, entity_state in self._entity_states.items():
+			if entity_state["state"] != EntityAutomationState.QUIETED:
+				continue
+			if self._override_manager.arm_rearm_latch(entity_id, "room vacant"):
+				_LOGGER.debug(
+					"[%s] Rearm latch armed; awaiting fresh presence before resuming",
+					entity_id,
+				)
+
+	def _release_latched_quieted_entities(self) -> None:
+		"""Release quieted holds whose rearm latch was armed by real vacancy."""
+		for entity_id, entity_state in self._entity_states.items():
+			if entity_state["state"] != EntityAutomationState.QUIETED:
+				continue
+			record = self._override_manager.get(entity_id)
+			if record is None or not record.rearm_latched:
+				continue
+			_LOGGER.debug(
+				"[%s] Rising presence after vacancy; releasing quieted hold",
+				entity_id,
+			)
+			self._clear_external_override(entity_id, "rising presence after vacancy")
+
+	def _handle_batch_confirmed(self, batch: Any) -> None:
+		"""Re-classify overrides once a burst is recognised as a bulk command.
+
+		A burst is only recognisable after enough of its commands have arrived,
+		so the first few entities may already have been recorded under the
+		fallback policy. Upgrading them retroactively avoids putting a timer in
+		front of every external command decision.
+		"""
+		if not self._batch_observer.enforcing:
+			return
+		max_age = None
+		for entity_id in batch.managed_entity_ids:
+			entity_state = self._entity_states.get(entity_id)
+			if entity_state is not None:
+				max_age = self._quieted_max_age(entity_state)
+				break
+		self._override_manager.upgrade_batch(
+			batch.batch_id,
+			set(batch.context_ids),
+			set(batch.managed_entity_ids),
+			EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+			source=SOURCE_HOMEKIT_BATCH,
+			reason=f"bulk {batch.service} across {batch.size} entities",
+			max_age_seconds=max_age,
 		)
 
 	def _is_any_occupied(self) -> bool:
@@ -3158,11 +3754,19 @@ class PresenceBasedLightingCoordinator:
 			return False
 		if not self._entry_is_active():
 			return False
+		# A quieted entity is deliberately holding dark after a whole-home
+		# command. It must not enforce Presence Lock (including through the
+		# interceptor), regardless of the manual-override setting.
+		if entity_state["state"] == EntityAutomationState.QUIETED:
+			return False
 		if not self._presence_lock_respects_manual_override(entity_state):
 			return True
 		return (
 			self._presence_switch_allows_entity(entity_state)
-			and entity_state["state"] != EntityAutomationState.PAUSED
+			and entity_state["state"] not in (
+				EntityAutomationState.PAUSED,
+				EntityAutomationState.QUIETED,
+			)
 		)
 
 	def _cancel_entity_timer(self, entity_state: dict) -> None:
@@ -3241,7 +3845,10 @@ class PresenceBasedLightingCoordinator:
 		"""
 		if not self._presence_switch_allows_entity(entity_state):
 			return
-		if entity_state["state"] == EntityAutomationState.PAUSED:
+		if entity_state["state"] in (
+			EntityAutomationState.PAUSED,
+			EntityAutomationState.QUIETED,
+		):
 			return
 
 		cur = entity_state["state"]
@@ -3320,6 +3927,16 @@ class PresenceBasedLightingCoordinator:
 		"""
 		try:
 			now = dt_util.utcnow()
+			# Defensive safeguard only: arm rearm latches on quieted holds that
+			# outlived their max age. This never reconciles and never turns a
+			# light on, so a stuck occupancy sensor cannot cause a surprise
+			# middle-of-the-night relight.
+			for entity_id in self._override_manager.apply_max_age_safeguard():
+				_LOGGER.info(
+					"Quieted hold for %s exceeded its max age; rearm latch armed "
+					"(still dark until presence rises)",
+					entity_id,
+				)
 			for entity_id, es in self._entity_states.items():
 				if await self._recover_taskless_pending_actuation(
 					entity_id,
@@ -3328,6 +3945,9 @@ class PresenceBasedLightingCoordinator:
 					continue
 
 				if not self._presence_switch_allows_entity(es):
+					continue
+
+				if es["state"] == EntityAutomationState.QUIETED:
 					continue
 
 				cur = es["state"]
