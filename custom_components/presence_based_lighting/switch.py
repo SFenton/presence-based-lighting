@@ -88,6 +88,7 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
         return object_id.replace("_", " ").title()
 
     def _desired_entity_id(self, friendly_name: str) -> str:
+        """Return the legacy generated ID without renaming registered entities."""
         slug_source = f"{self._entry.data[CONF_ROOM_NAME]} Presence {friendly_name} Presence Allowed"
         return f"switch.{slugify(slug_source)}"
 
@@ -95,21 +96,6 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
         friendly = self._derive_target_friendly_name()
         self._entity_friendly_name = friendly
         self._attr_name = self._format_switch_name(friendly)
-
-        if not self.hass or not self.entity_id:
-            return
-
-        registry = er.async_get(self.hass)
-        reg_entry = registry.async_get(self.entity_id)
-        desired_entity_id = self._desired_entity_id(friendly)
-
-        # Only rename automatically if no custom name is set and entity_id differs
-        if reg_entry and not reg_entry.name and reg_entry.entity_id != desired_entity_id:
-            try:
-                registry.async_update_entity(reg_entry.entity_id, new_entity_id=desired_entity_id)
-            except ValueError:
-                # Another entity might already use the desired id; skip renaming
-                return
 
     @property
     def device_info(self):

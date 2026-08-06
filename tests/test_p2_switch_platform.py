@@ -371,8 +371,8 @@ class TestPresenceEntitySwitch:
         name = switch._derive_target_friendly_name()
         assert name == "Original Lamp"
 
-    def test_update_display_metadata_renames_entity(self):
-        """_update_display_metadata renames via registry when entity_id differs."""
+    def test_update_display_metadata_preserves_entity_id(self):
+        """Friendly-name refreshes must not rename registered entities."""
         from tests.conftest import _MockRegistryEntry, _MockEntityRegistry
         entry = _make_entry(room="Office")
         hass = MagicMock()
@@ -385,7 +385,7 @@ class TestPresenceEntitySwitch:
             entity_id="light.living_room", name=None
         )
         reg.async_update_entity = MagicMock()
-        # Give switch an entity_id so the rename path is hit
+        # Give switch an existing entity_id that consumers already reference.
         switch.hass = MagicMock()
         switch.hass._entity_registry = reg
         switch.entity_id = "switch.old_id"
@@ -393,8 +393,8 @@ class TestPresenceEntitySwitch:
             entity_id="switch.old_id", name=None
         )
         switch._update_display_metadata()
-        # Registry rename should have been attempted
-        reg.async_update_entity.assert_called_once()
+        reg.async_update_entity.assert_not_called()
+        assert switch.entity_id == "switch.old_id"
 
     def test_update_display_metadata_rename_value_error(self):
         """_update_display_metadata gracefully handles ValueError on rename."""

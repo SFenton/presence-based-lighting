@@ -1,11 +1,13 @@
 """Presence allowed switch behavior tests."""
 
 import asyncio
+from unittest.mock import MagicMock
 
 import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
 
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting.switch import PresenceEntitySwitch
 from tests.conftest import (
     assert_service_called,
     assert_service_not_called,
@@ -43,6 +45,27 @@ class TestPresenceSwitchBehavior:
             _presence_event(mock_hass, STATE_OFF, STATE_ON)
         )
         assert_service_not_called(mock_hass, "light", "turn_on")
+
+    def test_friendly_name_refresh_never_renames_existing_entity_id(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        """Options reloads must not break automations by renaming PBL switches."""
+        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        target = mock_hass.states.get(self.entity)
+        target.attributes["friendly_name"] = "Living Room Lights"
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        entity_config = mock_config_entry.data["controlled_entities"][0]
+        switch = PresenceEntitySwitch(coordinator, mock_config_entry, entity_config)
+        switch.hass = mock_hass
+        switch.entity_id = "switch.living_room_presence_living_room_presence_allowed"
+        mock_hass._entity_registry = MagicMock()
+
+        switch._update_display_metadata()
+
+        mock_hass._entity_registry.async_update_entity.assert_not_called()
+        assert switch.entity_id == "switch.living_room_presence_living_room_presence_allowed"
 
     @pytest.mark.asyncio
     async def test_enabling_presence_while_occupied_turns_on(self, mock_hass, mock_config_entry):
