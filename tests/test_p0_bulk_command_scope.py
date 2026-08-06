@@ -36,6 +36,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_BATCH_MIN_DISTINCT_ENTITIES,
     CONF_BATCH_RETAIN_SECONDS,
     CONF_BATCH_WINDOW_MS,
+    CONF_BULK_COMMAND_POLICY,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
@@ -51,21 +52,26 @@ from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_PRESENCE_SENSORS,
     CONF_QUIETED_MAX_AGE,
+    CONF_QUIETED_MAX_AGE_ACTION,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
     CONF_UNKNOWN_SOURCE_POLICY,
     DEFAULT_BATCH_MIN_DISTINCT_ENTITIES,
+    DEFAULT_BULK_COMMAND_POLICY,
     DEFAULT_HOMEKIT_BATCH_MODE,
     DEFAULT_HONOR_EXTERNAL_OVERRIDE,
     DEFAULT_QUIETED_MAX_AGE,
+    DEFAULT_QUIETED_MAX_AGE_ACTION,
     DEFAULT_UNKNOWN_SOURCE_POLICY,
     DOMAIN,
     EVENT_COMMAND_INTENT,
     EVENT_HOMEKIT_STATE_CHANGE,
     EXTERNAL_POLICY_PAUSE,
     EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+    QUIETED_MAX_AGE_ACTION_ARM,
+    QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
 )
 from custom_components.presence_based_lighting.external_override import (
     ExternalOverrideManager,
@@ -127,7 +133,9 @@ def _entry(
     honor_external_override: bool = DEFAULT_HONOR_EXTERNAL_OVERRIDE,
     batch_mode: str = BATCH_MODE_ENFORCE,
     batch_min_entities: int = 8,
-    version: int = 11,
+    bulk_policy: str = DEFAULT_BULK_COMMAND_POLICY,
+    max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
+    version: int = 12,
 ):
     entry = MagicMock()
     entry.domain = DOMAIN
@@ -150,7 +158,7 @@ def _entry(
                 CONF_PRESENCE_DETECTED_STATE: STATE_ON,
                 CONF_PRESENCE_CLEARED_STATE: STATE_OFF,
                 CONF_RESPECTS_PRESENCE_ALLOWED: True,
-                CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+                CONF_DISABLE_ON_EXTERNAL_CONTROL: not presence_lock,
                 CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: presence_lock,
                 CONF_REQUIRE_VACANCY_FOR_CLEARED: presence_lock,
                 CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: False,
@@ -158,7 +166,9 @@ def _entry(
                 CONF_INITIAL_PRESENCE_ALLOWED: True,
                 CONF_HONOR_EXTERNAL_OVERRIDE: honor_external_override,
                 CONF_UNKNOWN_SOURCE_POLICY: DEFAULT_UNKNOWN_SOURCE_POLICY,
+                CONF_BULK_COMMAND_POLICY: bulk_policy,
                 CONF_QUIETED_MAX_AGE: DEFAULT_QUIETED_MAX_AGE,
+                CONF_QUIETED_MAX_AGE_ACTION: max_age_action,
             }
         ],
     }
@@ -251,7 +261,13 @@ def _configure_storage(mock_hass, tmp_path):
     mock_hass.async_add_executor_job = run_sync
 
 
-async def _replay_incident_burst(mock_hass, observer, clock, entities=None):
+async def _replay_incident_burst(
+    mock_hass,
+    observer,
+    clock,
+    entities=None,
+    service="turn_off",
+):
     """Replay the observed HomeKit burst, returning context per entity."""
     entities = entities or INCIDENT_ENTITIES
     contexts = {}
@@ -262,7 +278,7 @@ async def _replay_incident_burst(mock_hass, observer, clock, entities=None):
         clock.value = start + offset / 1000.0
         context = MockContext(f"homekit-{index}")
         contexts[entity_id] = context
-        event = _homekit_event(entity_id, "turn_off", context)
+        event = _homekit_event(entity_id, service, context)
         for listener in listeners:
             await listener(event)
     return contexts
@@ -311,6 +327,35 @@ async def test_incident_replay_quiets_instead_of_pausing(mock_hass, tmp_path):
 
     intents = mock_hass.bus.fired_events(EVENT_COMMAND_INTENT)
     assert any(event["data"]["entity_id"] == LIGHT for event in intents)
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_homekit_turn_on_batch_never_creates_suppression(mock_hass, tmp_path):
+    """Only whole-home off intent may create PAUSED or QUIETED holds."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="room", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    contexts = await _replay_incident_burst(
+        mock_hass,
+        observer,
+        clock,
+        service="turn_on",
+    )
+
+    assert observer.classify(contexts[LIGHT].id).confirmed is True
+    assert coordinator._override_manager.get(LIGHT) is None
+    assert coordinator.get_automation_paused(LIGHT) is False
+    assert coordinator.get_quieted(LIGHT) is False
 
     coordinator.async_stop()
 
@@ -423,6 +468,42 @@ async def test_presence_lock_cannot_force_quieted_entity_on(mock_hass, tmp_path)
     coordinator.async_stop()
 
 
+@pytest.mark.asyncio
+async def test_presence_lock_cannot_bounce_bulk_pause_policy_on(
+    mock_hass,
+    tmp_path,
+):
+    """Confirmed bulk intent bypasses Presence Lock even when policy is PAUSE."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(
+        entry_id="bedroom",
+        room_name="Master Bedroom",
+        presence_lock=True,
+        bulk_policy=EXTERNAL_POLICY_PAUSE,
+    )
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    contexts = await _replay_incident_burst(mock_hass, observer, clock)
+    mock_hass.services.clear()
+    clock.advance_ms(758)
+    mock_hass.states.set(LIGHT, STATE_OFF, context=contexts[LIGHT])
+    await coordinator._handle_controlled_entity_change(
+        _state_event(LIGHT, STATE_ON, STATE_OFF, contexts[LIGHT])
+    )
+
+    assert coordinator.get_automation_paused(LIGHT) is True
+    assert [c for c in mock_hass.services.calls if c["service"] == "turn_on"] == []
+
+    coordinator.async_stop()
+
+
 # ---------------------------------------------------------------------------
 # 5: vacancy arms, rising presence releases
 # ---------------------------------------------------------------------------
@@ -505,8 +586,8 @@ async def test_rising_presence_without_vacancy_does_not_release(mock_hass, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_max_age_safeguard_only_arms_and_never_relights(mock_hass, tmp_path):
-    """The max-age safeguard arms the latch; it must never reconcile a relight."""
+async def test_max_age_safeguard_is_diagnostic_only_by_default(mock_hass, tmp_path):
+    """A stale quieted hold must stay fail-dark across later presence edges."""
     clock = FakeClock()
     _configure_storage(mock_hass, tmp_path)
     observer, _manager = _install_clock(mock_hass, clock)
@@ -533,8 +614,48 @@ async def test_max_age_safeguard_only_arms_and_never_relights(mock_hass, tmp_pat
     await coordinator._periodic_reconciliation(None)
 
     assert coordinator.get_quieted(LIGHT) is True
-    assert coordinator._override_manager.get(LIGHT).rearm_latched is True
+    record = coordinator._override_manager.get(LIGHT)
+    assert record.rearm_latched is False
+    assert record.max_age_action == QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
+    assert record.max_age_reached_at is not None
     assert [c for c in mock_hass.services.calls if c["service"] == "turn_on"] == []
+
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    await coordinator._handle_presence_change(
+        _sensor_event(LOCAL_SENSOR, STATE_OFF, STATE_ON)
+    )
+    assert coordinator.get_quieted(LIGHT) is True
+    assert [c for c in mock_hass.services.calls if c["service"] == "turn_on"] == []
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_legacy_max_age_arm_action_remains_available(mock_hass, tmp_path):
+    """Existing users may explicitly retain the old max-age arm behavior."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(
+        entry_id="fallback",
+        room_name="Master Bathroom Fallback",
+        max_age_action=QUIETED_MAX_AGE_ACTION_ARM,
+    )
+    entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_QUIETED_MAX_AGE] = 60
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    await _replay_incident_burst(mock_hass, observer, clock)
+    clock.advance_ms(61_000)
+    await coordinator._periodic_reconciliation(None)
+
+    record = coordinator._override_manager.get(LIGHT)
+    assert record.rearm_latched is True
+    assert record.rearm_armed_by == "max age"
 
     coordinator.async_stop()
 
@@ -601,6 +722,54 @@ async def test_paired_entries_share_override_and_gate_flip_cannot_resurrect(mock
 
     assert [c for c in mock_hass.services.calls if c["service"] == "turn_on"] == []
     assert primary_coordinator.get_quieted(LIGHT) is True
+
+    primary_coordinator.async_stop()
+    fallback_coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_paired_batch_does_not_overwrite_explicit_entry_pause(
+    mock_hass,
+    tmp_path,
+):
+    """A sibling callback cannot convert an explicit local PAUSE to QUIETED."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    primary = _entry(
+        entry_id="primary",
+        room_name="Master Bathroom",
+        activation_condition=BEDROOM_ON,
+    )
+    fallback = _entry(
+        entry_id="fallback",
+        room_name="Master Bathroom Fallback",
+        activation_condition=BEDROOM_OFF,
+    )
+    mock_hass.states.set(BEDROOM_ON, STATE_ON)
+    mock_hass.states.set(BEDROOM_OFF, STATE_OFF)
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+
+    primary_coordinator = PresenceBasedLightingCoordinator(mock_hass, primary)
+    fallback_coordinator = PresenceBasedLightingCoordinator(mock_hass, fallback)
+    mock_hass.data[DOMAIN][primary.entry_id] = primary_coordinator
+    mock_hass.data[DOMAIN][fallback.entry_id] = fallback_coordinator
+    await primary_coordinator.async_start()
+    await fallback_coordinator.async_start()
+
+    primary_coordinator.set_automation_paused(
+        LIGHT,
+        True,
+        reason="explicit pause",
+        source="service",
+    )
+    await _replay_incident_burst(mock_hass, observer, clock)
+
+    assert primary_coordinator.get_automation_paused(LIGHT) is True
+    assert primary_coordinator.get_quieted(LIGHT) is False
+    assert primary_coordinator._entity_states[LIGHT]["pause"]["source"] == "service"
 
     primary_coordinator.async_stop()
     fallback_coordinator.async_stop()
@@ -788,6 +957,169 @@ async def test_redundant_turn_off_of_already_off_entity_does_not_pause(mock_hass
     coordinator.async_stop()
 
 
+@pytest.mark.asyncio
+async def test_confirmed_batch_holds_already_off_target(mock_hass, tmp_path):
+    """Whole-home intent applies even when the managed light was already off."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="e", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    await _replay_incident_burst(mock_hass, observer, clock)
+
+    record = coordinator._override_manager.get(LIGHT)
+    assert record is not None
+    assert record.policy == EXTERNAL_POLICY_REARM_AFTER_CLEAR
+    assert record.batch_size == len(INCIDENT_ENTITIES)
+    assert record.rearm_latched is True
+    assert coordinator.get_quieted(LIGHT) is True
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_already_clear_batch_latch_survives_late_state_echo(
+    mock_hass,
+    tmp_path,
+):
+    """The Z2M echo must not erase the edge eligibility set at confirmation."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="e", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    contexts = await _replay_incident_burst(mock_hass, observer, clock)
+    assert coordinator._override_manager.get(LIGHT).rearm_latched is True
+
+    clock.advance_ms(758)
+    mock_hass.states.set(LIGHT, STATE_OFF, context=contexts[LIGHT])
+    await coordinator._handle_controlled_entity_change(
+        _state_event(LIGHT, STATE_ON, STATE_OFF, contexts[LIGHT])
+    )
+    assert coordinator._override_manager.get(LIGHT).rearm_latched is True
+
+    mock_hass.services.clear()
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    await coordinator._handle_presence_change(
+        _sensor_event(LOCAL_SENSOR, STATE_OFF, STATE_ON)
+    )
+    assert coordinator.get_quieted(LIGHT) is False
+    assert [c for c in mock_hass.services.calls if c["service"] == "turn_on"]
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_batch_can_pause_one_room(mock_hass, tmp_path):
+    """A sleep-sensitive room may fail dark while other rooms stay quieted."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(
+        entry_id="bedroom",
+        room_name="Master Bedroom",
+        bulk_policy=EXTERNAL_POLICY_PAUSE,
+    )
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    await _replay_incident_burst(mock_hass, observer, clock)
+
+    record = coordinator._override_manager.get(LIGHT)
+    assert record is not None
+    assert record.policy == EXTERNAL_POLICY_PAUSE
+    assert coordinator.get_automation_paused(LIGHT) is True
+    assert coordinator.get_quieted(LIGHT) is False
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_admin_pause_survives_confirmed_batch_state_echo(mock_hass, tmp_path):
+    """A later all-lights command cannot downgrade an admin PAUSE to QUIETED."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="bedroom", room_name="Master Bedroom")
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    await coordinator.async_set_automation_control_state(LIGHT, "paused")
+    contexts = await _replay_incident_burst(mock_hass, observer, clock)
+    clock.advance_ms(758)
+    mock_hass.states.set(LIGHT, STATE_OFF, context=contexts[LIGHT])
+    await coordinator._handle_controlled_entity_change(
+        _state_event(LIGHT, STATE_ON, STATE_OFF, contexts[LIGHT])
+    )
+
+    record = coordinator._override_manager.get(LIGHT)
+    assert record is not None
+    assert record.policy == EXTERNAL_POLICY_PAUSE
+    assert record.source == "admin"
+    assert coordinator.get_automation_paused(LIGHT) is True
+    assert coordinator.get_quieted(LIGHT) is False
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause_source", ["service", "presence_allowed"])
+async def test_confirmed_batch_preserves_explicit_entry_pause(
+    mock_hass,
+    tmp_path,
+    pause_source,
+):
+    """An all-lights command must not turn an explicit pause into QUIETED."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="e", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    if pause_source == "presence_allowed":
+        await coordinator.async_set_presence_allowed(LIGHT, False)
+    else:
+        coordinator.set_automation_paused(
+            LIGHT,
+            True,
+            reason="explicit test pause",
+            source="service",
+        )
+
+    await _replay_incident_burst(mock_hass, observer, clock)
+
+    assert coordinator.get_automation_paused(LIGHT) is True
+    assert coordinator.get_quieted(LIGHT) is False
+    assert coordinator._override_manager.get(LIGHT) is None
+
+    coordinator.async_stop()
+
+
 # ---------------------------------------------------------------------------
 # 11: kill switch
 # ---------------------------------------------------------------------------
@@ -840,8 +1172,8 @@ async def test_batch_mode_kill_switch(mock_hass, tmp_path, mode, expect_quieted,
 
 
 @pytest.mark.asyncio
-async def test_migration_v10_to_v11_backfills_new_settings():
-    """v10 entries gain the new keys with behaviour-preserving defaults."""
+async def test_migration_v10_to_v12_backfills_new_settings():
+    """v10 entries gain the v11/v12 keys with safe defaults."""
     hass = MagicMock()
     entry = _entry(entry_id="legacy", room_name="Legacy", version=10)
     for key in (
@@ -854,7 +1186,9 @@ async def test_migration_v10_to_v11_backfills_new_settings():
     for key in (
         CONF_HONOR_EXTERNAL_OVERRIDE,
         CONF_UNKNOWN_SOURCE_POLICY,
+        CONF_BULK_COMMAND_POLICY,
         CONF_QUIETED_MAX_AGE,
+        CONF_QUIETED_MAX_AGE_ACTION,
     ):
         entry.data[CONF_CONTROLLED_ENTITIES][0].pop(key, None)
 
@@ -867,7 +1201,7 @@ async def test_migration_v10_to_v11_backfills_new_settings():
     hass.config_entries.async_update_entry = track_update
 
     assert await async_migrate_entry(hass, entry) is True
-    assert entry.version == 11
+    assert entry.version == 12
 
     assert entry.data[CONF_HOMEKIT_BATCH_MODE] == DEFAULT_HOMEKIT_BATCH_MODE
     assert (
@@ -881,7 +1215,12 @@ async def test_migration_v10_to_v11_backfills_new_settings():
     assert entity_config[CONF_HONOR_EXTERNAL_OVERRIDE] is True
     # Unknown sources keep legacy PAUSE semantics for wall switches.
     assert entity_config[CONF_UNKNOWN_SOURCE_POLICY] == EXTERNAL_POLICY_PAUSE
+    assert entity_config[CONF_BULK_COMMAND_POLICY] == DEFAULT_BULK_COMMAND_POLICY
     assert entity_config[CONF_QUIETED_MAX_AGE] == DEFAULT_QUIETED_MAX_AGE
+    assert (
+        entity_config[CONF_QUIETED_MAX_AGE_ACTION]
+        == DEFAULT_QUIETED_MAX_AGE_ACTION
+    )
 
 
 @pytest.mark.asyncio
@@ -906,9 +1245,9 @@ async def test_migration_is_idempotent_and_preserves_explicit_values():
     assert entry.data[CONF_BATCH_MIN_DISTINCT_ENTITIES] == 12
     assert entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_HONOR_EXTERNAL_OVERRIDE] is False
 
-    # Already at v11: a second pass is a no-op.
+    # Already at v12: a second pass is a no-op.
     assert await async_migrate_entry(hass, entry) is True
-    assert entry.version == 11
+    assert entry.version == 12
 
 
 @pytest.mark.asyncio
@@ -923,18 +1262,27 @@ async def test_options_flow_round_trip_preserves_new_entity_settings():
         CONF_ENTITY_ID: LIGHT,
         CONF_HONOR_EXTERNAL_OVERRIDE: False,
         CONF_UNKNOWN_SOURCE_POLICY: EXTERNAL_POLICY_PAUSE,
+        CONF_BULK_COMMAND_POLICY: EXTERNAL_POLICY_PAUSE,
         CONF_QUIETED_MAX_AGE: 900,
+        CONF_QUIETED_MAX_AGE_ACTION: QUIETED_MAX_AGE_ACTION_ARM,
     }
     rebuilt = _carry_forward_entity_settings({CONF_ENTITY_ID: LIGHT}, existing)
     assert rebuilt[CONF_HONOR_EXTERNAL_OVERRIDE] is False
     assert rebuilt[CONF_UNKNOWN_SOURCE_POLICY] == EXTERNAL_POLICY_PAUSE
+    assert rebuilt[CONF_BULK_COMMAND_POLICY] == EXTERNAL_POLICY_PAUSE
     assert rebuilt[CONF_QUIETED_MAX_AGE] == 900
+    assert rebuilt[CONF_QUIETED_MAX_AGE_ACTION] == QUIETED_MAX_AGE_ACTION_ARM
 
     # A brand new entity gets the behaviour-preserving defaults.
     fresh = _carry_forward_entity_settings({CONF_ENTITY_ID: LIGHT}, {})
     assert fresh[CONF_HONOR_EXTERNAL_OVERRIDE] is DEFAULT_HONOR_EXTERNAL_OVERRIDE
     assert fresh[CONF_UNKNOWN_SOURCE_POLICY] == DEFAULT_UNKNOWN_SOURCE_POLICY
+    assert fresh[CONF_BULK_COMMAND_POLICY] == DEFAULT_BULK_COMMAND_POLICY
     assert fresh[CONF_QUIETED_MAX_AGE] == DEFAULT_QUIETED_MAX_AGE
+    assert (
+        fresh[CONF_QUIETED_MAX_AGE_ACTION]
+        == DEFAULT_QUIETED_MAX_AGE_ACTION
+    )
 
 
 @pytest.mark.asyncio
@@ -1017,10 +1365,14 @@ async def test_control_state_exposes_override_diagnostics(mock_hass, tmp_path):
 
     attributes = coordinator.get_entity_control_state(LIGHT)
     assert attributes["quieted"] is True
+    assert attributes["automation_suppressed"] is True
+    assert attributes["suppression_kind"] == "quieted"
+    assert attributes["bulk_command_policy"] == EXTERNAL_POLICY_REARM_AFTER_CLEAR
     assert attributes["external_override_policy"] == EXTERNAL_POLICY_REARM_AFTER_CLEAR
     assert attributes["external_override_batch_id"]
     assert attributes["external_override_batch_size"] >= 8
     assert attributes["rearm_latched"] is False
+    assert attributes["quieted_max_age_action"] == QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
     assert attributes["external_override_expires_at"]
     assert attributes["homekit_batch_mode"] == BATCH_MODE_ENFORCE
     assert attributes["unknown_source_count"] == 0
@@ -1131,12 +1483,14 @@ async def test_quieted_max_age_is_not_reset_by_restart(mock_hass, tmp_path):
         elapsed = restart_clock.value - restored.created_monotonic
         assert 3500 < elapsed < 3600
 
-        # One more minute and the safeguard arms - it would never have armed if
-        # the restart had reset the age.
+        # One more minute and the one-shot diagnostic fires. It would not have
+        # fired if the restart had reset the age.
         restart_clock.advance_ms(120_000)
         assert restored.is_past_max_age(restart_clock.value) is True
         await restarted._periodic_reconciliation(None)
-        assert restarted._override_manager.get(LIGHT).rearm_latched is True
+        refreshed = restarted._override_manager.get(LIGHT)
+        assert refreshed.rearm_latched is False
+        assert refreshed.max_age_reached_at is not None
         assert restarted.get_quieted(LIGHT) is True
         assert [c for c in mock_hass.services.calls if c["service"] == "turn_on"] == []
 
@@ -1182,6 +1536,152 @@ async def test_restored_rearm_latch_is_preserved(mock_hass, tmp_path):
     )
     assert record.rearm_latched is True
     assert record.rearm_latched_at == "2026-08-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_arming_rearm_latch_schedules_persistence(mock_hass, tmp_path):
+    """A same-state QUIETED metadata change must be written before restart."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="fallback", room_name="Master Bathroom Fallback")
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    await _replay_incident_burst(mock_hass, observer, clock)
+    assert coordinator.get_quieted(LIGHT) is True
+
+    coordinator._schedule_paused_state_save = MagicMock()
+    assert coordinator._override_manager.arm_rearm_latch(LIGHT, "room vacant")
+    coordinator._schedule_paused_state_save.assert_called()
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_bulk_pause_policy_survives_restart_when_room_is_clear(
+    mock_hass,
+    tmp_path,
+):
+    """Fail-dark batch policy must not disappear during an overnight restart."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(
+        entry_id="bedroom",
+        room_name="Master Bedroom",
+        bulk_policy=EXTERNAL_POLICY_PAUSE,
+    )
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    await _replay_incident_burst(mock_hass, observer, clock)
+    assert coordinator.get_automation_paused(LIGHT) is True
+    await coordinator._save_paused_state()
+
+    persisted = json.loads(
+        (tmp_path / ".storage" / f"pbl_paused_{entry.entry_id}.json").read_text()
+    )
+    assert persisted["external_overrides"][LIGHT]["policy"] == EXTERNAL_POLICY_PAUSE
+
+    coordinator.async_stop()
+    _install_clock(mock_hass, FakeClock(start=50_000.0))
+    restarted = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = restarted
+    await restarted.async_start()
+
+    assert restarted.get_automation_paused(LIGHT) is True
+    restored = restarted._override_manager.get(LIGHT)
+    assert restored is not None
+    assert restored.policy == EXTERNAL_POLICY_PAUSE
+
+    restarted.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_explicit_pause_outranks_restored_quieted_override(
+    mock_hass,
+    tmp_path,
+):
+    """A saved service PAUSE remains dominant over an older quieted record."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="room", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    await _replay_incident_burst(mock_hass, observer, clock)
+    coordinator.set_automation_paused(
+        LIGHT,
+        True,
+        reason="explicit pause",
+        source="service",
+    )
+    await coordinator._save_paused_state()
+    coordinator.async_stop()
+
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    _install_clock(mock_hass, FakeClock(start=50_000.0))
+    restarted = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = restarted
+    await restarted.async_start()
+
+    assert restarted.get_automation_paused(LIGHT) is True
+    assert restarted.get_quieted(LIGHT) is False
+    assert restarted._entity_states[LIGHT]["pause"]["source"] == "service"
+    assert restarted._override_manager.get(LIGHT) is not None
+
+    restarted.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_stale_external_pause_is_dropped_if_light_was_turned_on(
+    mock_hass,
+    tmp_path,
+):
+    """A manual turn-on while HA is down remains a valid recovery action."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(entry_id="room", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_PAUSE,
+        source="unknown",
+        reason="external off",
+    )
+    await coordinator._save_paused_state()
+    coordinator.async_stop()
+
+    mock_hass.states.set(LIGHT, STATE_ON)
+    _install_clock(mock_hass, FakeClock(start=50_000.0))
+    restarted = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = restarted
+    await restarted.async_start()
+
+    assert restarted.get_automation_paused(LIGHT) is False
+    assert restarted._override_manager.get(LIGHT) is None
+
+    restarted.async_stop()
 
 
 # ---------------------------------------------------------------------------

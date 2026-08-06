@@ -38,6 +38,46 @@ pause_automation:
             - fan
             - cover
 
+set_automation_state:
+  name: Set Automation State
+  description: >
+    Set the targeted Presence Based Lighting control to On, Off, Paused,
+    Quieted, or Active.
+  target:
+    entity:
+      integration: presence_based_lighting
+      domain: switch
+  fields:
+    state:
+      name: State
+      description: Administrative state to apply.
+      required: true
+      selector:
+        select:
+          options:
+            - label: On
+              value: "on"
+            - label: Off
+              value: "off"
+            - label: Paused
+              value: paused
+            - label: Quieted
+              value: quieted
+            - label: Active
+              value: active
+          mode: dropdown
+    entity_id:
+      name: Entity
+      description: The controlled entity to update. If omitted, updates all entities for the targeted switch.
+      required: false
+      selector:
+        entity:
+          domain:
+            - light
+            - switch
+            - fan
+            - cover
+
 resume_all_automation:
   name: Resume All Automation
   description: >

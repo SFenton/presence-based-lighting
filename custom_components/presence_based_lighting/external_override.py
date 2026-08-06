@@ -23,10 +23,18 @@ from typing import TYPE_CHECKING, Callable
 from homeassistant.util import dt as dt_util
 
 from .const import (
+	DEFAULT_BULK_COMMAND_POLICY,
+	DEFAULT_QUIETED_MAX_AGE,
+	DEFAULT_QUIETED_MAX_AGE_ACTION,
 	DOMAIN,
 	EXTERNAL_POLICY_IGNORE,
 	EXTERNAL_POLICY_PAUSE,
 	EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+	QUIETED_MAX_AGE_ACTION_ARM,
+	QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
+	QUIETED_MAX_AGE_ACTION_PAUSE,
+	SOURCE_HOMEKIT_BATCH,
+	SOURCE_HOMEKIT_SINGLE,
 	SOURCE_UNKNOWN,
 )
 
@@ -63,7 +71,10 @@ class ExternalOverrideRecord:
 	batch_size: int = 0
 	rearm_latched: bool = False
 	rearm_latched_at: str | None = None
+	rearm_armed_by: str | None = None
 	max_age_seconds: float | None = None
+	max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION
+	max_age_reached_at: str | None = None
 
 	@property
 	def created_at(self) -> str:
@@ -81,7 +92,7 @@ class ExternalOverrideRecord:
 		return self.policy == EXTERNAL_POLICY_PAUSE
 
 	def expires_at(self) -> str | None:
-		"""Return the ISO timestamp at which the rearm latch arms defensively."""
+		"""Return the ISO timestamp at which this hold becomes stale."""
 		if not self.max_age_seconds:
 			return None
 		return (self.created_dt + timedelta(seconds=self.max_age_seconds)).isoformat()
@@ -102,6 +113,7 @@ class ExternalOverrideManager:
 		self._entities: dict[str, set[str]] = {}
 		self._listeners: dict[str, dict[str, Callable[[str], None]]] = {}
 		self._unknown_counts: dict[str, int] = {}
+		self._entity_configs: dict[str, dict[str, dict[str, object]]] = {}
 
 	# ------------------------------------------------------------------
 	# Registration
@@ -112,9 +124,18 @@ class ExternalOverrideManager:
 		entry_id: str,
 		entity_id: str,
 		listener: Callable[[str], None] | None = None,
+		*,
+		bulk_policy: str = DEFAULT_BULK_COMMAND_POLICY,
+		max_age_seconds: float | None = DEFAULT_QUIETED_MAX_AGE,
+		max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
 	) -> None:
 		"""Register that a config entry controls this entity."""
 		self._entities.setdefault(entity_id, set()).add(entry_id)
+		self._entity_configs.setdefault(entity_id, {})[entry_id] = {
+			"bulk_policy": bulk_policy,
+			"max_age_seconds": max_age_seconds,
+			"max_age_action": max_age_action,
+		}
 		if listener is not None:
 			self._listeners.setdefault(entity_id, {})[entry_id] = listener
 
@@ -124,6 +145,10 @@ class ExternalOverrideManager:
 			self._entities[entity_id].discard(entry_id)
 			if not self._entities[entity_id]:
 				self._entities.pop(entity_id, None)
+		for entity_id in list(self._entity_configs):
+			self._entity_configs[entity_id].pop(entry_id, None)
+			if not self._entity_configs[entity_id]:
+				self._entity_configs.pop(entity_id, None)
 		for entity_id in list(self._listeners):
 			self._listeners[entity_id].pop(entry_id, None)
 			if not self._listeners[entity_id]:
@@ -132,6 +157,40 @@ class ExternalOverrideManager:
 	def entries_for(self, entity_id: str) -> set[str]:
 		"""Return every config entry controlling this entity."""
 		return set(self._entities.get(entity_id, set()))
+
+	def bulk_policy_for(self, entity_id: str) -> str:
+		"""Return the strictest configured bulk-command policy for an entity."""
+		policies = {
+			str(config.get("bulk_policy", DEFAULT_BULK_COMMAND_POLICY))
+			for config in self._entity_configs.get(entity_id, {}).values()
+		}
+		if EXTERNAL_POLICY_PAUSE in policies:
+			return EXTERNAL_POLICY_PAUSE
+		return EXTERNAL_POLICY_REARM_AFTER_CLEAR
+
+	def max_age_action_for(self, entity_id: str) -> str:
+		"""Return the safest configured stale-hold action for an entity."""
+		actions = {
+			str(config.get("max_age_action", DEFAULT_QUIETED_MAX_AGE_ACTION))
+			for config in self._entity_configs.get(entity_id, {}).values()
+		}
+		if QUIETED_MAX_AGE_ACTION_PAUSE in actions:
+			return QUIETED_MAX_AGE_ACTION_PAUSE
+		if QUIETED_MAX_AGE_ACTION_DIAGNOSTIC in actions:
+			return QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
+		return QUIETED_MAX_AGE_ACTION_ARM
+
+	def max_age_seconds_for(self, entity_id: str) -> float | None:
+		"""Return the earliest positive stale-hold threshold for an entity."""
+		values: list[float] = []
+		for config in self._entity_configs.get(entity_id, {}).values():
+			try:
+				value = float(config.get("max_age_seconds", DEFAULT_QUIETED_MAX_AGE))
+			except (TypeError, ValueError):
+				continue
+			if value > 0:
+				values.append(value)
+		return min(values) if values else None
 
 	# ------------------------------------------------------------------
 	# Override lifecycle
@@ -159,22 +218,40 @@ class ExternalOverrideManager:
 		reason: str = "external control",
 		batch_id: str | None = None,
 		batch_size: int = 0,
+		rearm_latched: bool = False,
+		rearm_latched_at: str | None = None,
+		rearm_armed_by: str | None = None,
 		max_age_seconds: float | None = None,
+		max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
+		max_age_reached_at: str | None = None,
 		notify: bool = True,
 	) -> ExternalOverrideRecord | None:
 		"""Record an entity-scoped override and notify every controlling entry."""
 		if policy == EXTERNAL_POLICY_IGNORE:
 			return None
+		existing = self._overrides.get(entity_id)
+		same_batch = (
+			existing is not None
+			and batch_id is not None
+			and existing.batch_id == batch_id
+		)
 		record = ExternalOverrideRecord(
 			entity_id=entity_id,
 			policy=policy,
 			source=source,
 			reason=reason,
-			created_dt=dt_util.utcnow(),
-			created_monotonic=self._now(),
+			created_dt=existing.created_dt if same_batch else dt_util.utcnow(),
+			created_monotonic=(
+				existing.created_monotonic if same_batch else self._now()
+			),
 			batch_id=batch_id,
 			batch_size=batch_size,
+			rearm_latched=rearm_latched,
+			rearm_latched_at=rearm_latched_at,
+			rearm_armed_by=rearm_armed_by,
 			max_age_seconds=max_age_seconds,
+			max_age_action=max_age_action,
+			max_age_reached_at=max_age_reached_at,
 		)
 		self._overrides[entity_id] = record
 		self.note_source(entity_id, source)
@@ -210,9 +287,12 @@ class ExternalOverrideManager:
 		created_at: str | None = None,
 		rearm_latched: bool = False,
 		rearm_latched_at: str | None = None,
+		rearm_armed_by: str | None = None,
 		batch_id: str | None = None,
 		batch_size: int = 0,
 		max_age_seconds: float | None = None,
+		max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
+		max_age_reached_at: str | None = None,
 		notify: bool = True,
 	) -> ExternalOverrideRecord | None:
 		"""Re-adopt a persisted override without resetting its age.
@@ -256,7 +336,10 @@ class ExternalOverrideManager:
 			batch_size=batch_size,
 			rearm_latched=rearm_latched,
 			rearm_latched_at=rearm_latched_at,
+			rearm_armed_by=rearm_armed_by,
 			max_age_seconds=max_age_seconds,
+			max_age_action=max_age_action,
+			max_age_reached_at=max_age_reached_at,
 		)
 		self._overrides[entity_id] = record
 		_LOGGER.debug(
@@ -279,74 +362,103 @@ class ExternalOverrideManager:
 			record,
 			rearm_latched=True,
 			rearm_latched_at=dt_util.utcnow().isoformat(),
+			rearm_armed_by=reason,
 		)
 		_LOGGER.debug("Rearm latch armed for %s (%s)", entity_id, reason)
 		self._notify(entity_id)
 		return True
 
-	def upgrade_batch(
+	def upsert_confirmed_batch(
 		self,
 		batch_id: str,
-		context_ids: set[str],
-		entity_ids: set[str],
+		entity_id: str,
 		policy: str,
 		*,
 		source: str,
 		reason: str,
+		batch_size: int,
+		rearm_latched: bool = False,
+		rearm_armed_by: str | None = None,
 		max_age_seconds: float | None = None,
-	) -> list[str]:
-		"""Promote already-recorded overrides belonging to a confirmed batch.
+		max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
+	) -> bool:
+		"""Create or promote the entity's hold for a confirmed bulk command."""
+		record = self._overrides.get(entity_id)
+		if (
+			record is not None
+			and record.is_paused
+			and record.batch_id not in (batch_id,)
+			and record.source not in {SOURCE_HOMEKIT_BATCH, SOURCE_HOMEKIT_SINGLE, SOURCE_UNKNOWN}
+			and policy == EXTERNAL_POLICY_REARM_AFTER_CLEAR
+		):
+			return False
+		if record is not None and record.batch_id == batch_id and record.rearm_latched:
+			rearm_latched = True
+			rearm_armed_by = record.rearm_armed_by
+		self.set_override(
+			entity_id,
+			policy,
+			source=source,
+			reason=reason,
+			batch_id=batch_id,
+			batch_size=batch_size,
+			rearm_latched=rearm_latched,
+			rearm_latched_at=dt_util.utcnow().isoformat() if rearm_latched else None,
+			rearm_armed_by=rearm_armed_by,
+			max_age_seconds=max_age_seconds,
+			max_age_action=max_age_action,
+		)
+		return True
 
-		A burst is only recognised once enough of its commands have been seen, so
-		the first few entities of an all-lights-off may already have been recorded
-		under the fallback policy. Re-classify them rather than deferring every
-		decision behind a timer.
-		"""
-		upgraded: list[str] = []
-		for entity_id in entity_ids:
-			record = self._overrides.get(entity_id)
-			if record is None or record.policy == policy:
-				continue
-			if record.batch_id not in (None, batch_id):
-				continue
-			self._overrides[entity_id] = replace(
-				record,
-				policy=policy,
-				source=source,
-				reason=reason,
-				batch_id=batch_id,
-				batch_size=len(entity_ids),
-				rearm_latched=False,
-				rearm_latched_at=None,
-				max_age_seconds=max_age_seconds,
-			)
-			upgraded.append(entity_id)
-			self._notify(entity_id)
-		if upgraded:
-			_LOGGER.info(
-				"Upgraded %d override(s) to %s for batch %s: %s",
-				len(upgraded),
-				policy,
-				batch_id,
-				sorted(upgraded),
-			)
-		return upgraded
-
-	def apply_max_age_safeguard(self) -> list[str]:
-		"""Arm the rearm latch on quieted holds that outlived their max age.
-
-		This only arms the latch; it never reconciles and never turns a light on,
-		so a stuck occupancy sensor cannot produce a surprise 02:48 relight.
-		"""
-		now = self._now()
-		armed: list[str] = []
+	def update_confirmed_batch_size(self, batch_id: str, batch_size: int) -> None:
+		"""Refresh retained batch diagnostics without re-entering entity states."""
 		for entity_id, record in list(self._overrides.items()):
-			if not record.is_quieted or record.rearm_latched:
+			if record.batch_id != batch_id or record.batch_size == batch_size:
+				continue
+			self._overrides[entity_id] = replace(record, batch_size=batch_size)
+
+	def apply_max_age_safeguard(self) -> list[tuple[str, str]]:
+		"""Apply each stale quieted hold's configured one-shot action."""
+		now = self._now()
+		changed: list[tuple[str, str]] = []
+		for entity_id, record in list(self._overrides.items()):
+			if not record.is_quieted or record.max_age_reached_at:
 				continue
 			if record.is_past_max_age(now):
-				if self.arm_rearm_latch(entity_id, reason="max age safeguard"):
-					armed.append(entity_id)
-		return armed
+				reached_at = dt_util.utcnow().isoformat()
+				action = record.max_age_action or DEFAULT_QUIETED_MAX_AGE_ACTION
+				if action == QUIETED_MAX_AGE_ACTION_ARM:
+					self._overrides[entity_id] = replace(
+						record,
+						rearm_latched=True,
+						rearm_latched_at=reached_at,
+						rearm_armed_by="max age",
+						max_age_reached_at=reached_at,
+					)
+				elif action == QUIETED_MAX_AGE_ACTION_PAUSE:
+					self._overrides[entity_id] = replace(
+						record,
+						policy=EXTERNAL_POLICY_PAUSE,
+						rearm_latched=False,
+						rearm_latched_at=None,
+						rearm_armed_by=None,
+						max_age_reached_at=reached_at,
+						reason=f"{record.reason}; quieted max age reached",
+					)
+				else:
+					action = QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
+					self._overrides[entity_id] = replace(
+						record,
+						max_age_reached_at=reached_at,
+					)
+				_LOGGER.info(
+					"Quieted hold max age reached for %s; action=%s",
+					entity_id,
+					action,
+				)
+				self._notify(entity_id)
+				changed.append((entity_id, action))
+		return changed
 
 	# ------------------------------------------------------------------
 

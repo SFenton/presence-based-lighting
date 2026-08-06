@@ -108,10 +108,13 @@ Each Presence Allowed switch includes:
 - `respect_presence_allowed`: Whether the entity honors the switch
 - `disable_on_external_control`: Whether external control pauses automation. Manual turn-offs always pause actions until you manually turn the entity back on, even if the Presence Allowed switch is hidden.
 - `automation_quieted` / `quieted`: Whether the entity is holding dark after a whole-home command
+- `automation_suppressed` / `suppression_kind`: Unified PAUSED-or-QUIETED status for downstream consumers
+- `bulk_command_policy`: Whether confirmed whole-home commands pause or quiet this entity
 - `external_override_policy` / `external_override_source` / `external_override_reason`: Why automation is currently suppressed
 - `external_override_batch_id` / `external_override_batch_size`: The detected bulk command, if any
-- `rearm_latched` / `rearm_latched_at`: Whether real vacancy has been observed since the hold started
-- `external_override_at` / `external_override_expires_at`: When the hold started and when its max-age safeguard arms
+- `rearm_latched` / `rearm_latched_at` / `rearm_armed_by`: Whether and why re-entry became eligible
+- `external_override_at` / `external_override_expires_at`: When the hold started and when it becomes stale
+- `quieted_max_age_action` / `quieted_max_age_reached_at`: Configured and applied stale-hold handling
 - `unknown_source_count`: How many external commands could not be attributed to a known source
 - `homekit_batch_mode`: The active bulk-detection kill-switch mode
 
@@ -125,21 +128,28 @@ every room indefinitely.
 This integration groups same-service HomeKit commands that arrive close together and
 treats a large burst as a whole-home command rather than N manual overrides.
 
-### QUIETED (rearm after clear)
+### Per-entity bulk policy
 
-A controlled entity caught in a bulk command enters the `quieted` state instead of
-`paused`:
+Each controlled entity chooses what a confirmed whole-home command means:
 
-- The entity is **not** turned back on, and entering the state emits no service call.
+- `rearm_after_clear` enters `quieted`.
+- `pause` stays dark until an explicit resume.
+
+This lets sleep-sensitive rooms fail dark while hallways and other rooms can rearm.
+The policy applies even when the managed entity was already off when the batch arrived;
+redundant singleton offs remain no-ops.
+
+For a `quieted` entity:
+
+- Entering the state emits no service call.
 - Reconciliation and Presence Lock are both suppressed, so an occupied room cannot
   bounce the light straight back on.
 - When the room genuinely becomes vacant, a **rearm latch** is armed. This only
   records that vacancy happened; the entity stays dark.
 - The **next rising presence edge after that vacancy** releases the hold and normal
   presence automation resumes.
-- A max-age safeguard (`quieted_max_age`, default 4 hours) only arms the latch. It
-  never reconciles and never turns a light on, so a stuck occupancy sensor cannot
-  cause a surprise middle-of-the-night relight.
+- Reaching `quieted_max_age` is diagnostic-only by default. Legacy latch arming and
+  fail-dark conversion to `paused` remain explicit options.
 
 Single-accessory HomeKit offs, wall switches and any command that cannot be attributed
 to a bulk burst still `pause` exactly as before.
@@ -172,7 +182,9 @@ Per controlled entity:
 | --- | --- | --- |
 | `honor_external_override` | `true` | Consult entity-scoped overrides recorded by sibling entries |
 | `unknown_source_policy` | `pause` | Policy for external commands that cannot be attributed |
-| `quieted_max_age` | `14400` | Seconds before the rearm latch arms defensively |
+| `bulk_command_policy` | `rearm_after_clear` | `rearm_after_clear` (Quieted) or `pause` for confirmed whole-home commands |
+| `quieted_max_age` | `14400` | Seconds before a quieted hold is marked stale |
+| `quieted_max_age_action` | `diagnostic` | `diagnostic`, `pause`, or legacy `arm` |
 
 ### Entity-scoped overrides and paired profiles
 
@@ -186,6 +198,16 @@ never saw the override and it immediately resurrects the light.
 Explicit per-entry controls — the Presence Allowed switch and `pause_automation`
 targeting a specific PBL switch — remain entry-local. Set `honor_external_override` to
 `false` on an entity to restore the old entry-local behaviour.
+
+### Administrative state service
+
+`presence_based_lighting.set_automation_state` accepts a PBL switch target and one of:
+
+- `on`: enable Presence Allowed, clearing admin-created suppression
+- `off`: disable Presence Allowed
+- `paused`: apply an entity-scoped indefinite pause
+- `quieted`: apply an entity-scoped rearm-after-clear hold
+- `active`: force-clear local and entity-scoped suppression, then reconcile
 
 ### Escape hatch
 

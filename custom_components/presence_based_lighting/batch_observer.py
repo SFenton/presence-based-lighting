@@ -98,7 +98,9 @@ class CommandBatchObserver:
 		self._listening_entries: set[str] = set()
 		self._batch_counter = 0
 		self._unsub: Callable[[], None] | None = None
-		self._confirm_callbacks: list[Callable[[CommandBatch], None]] = []
+		self._confirm_callbacks: list[
+			Callable[[CommandBatch, str | None], None]
+		] = []
 
 	# ------------------------------------------------------------------
 	# Configuration and lifecycle
@@ -235,7 +237,10 @@ class CommandBatchObserver:
 		"""Return whether any config entry controls this entity."""
 		return bool(self._managed_entities.get(entity_id))
 
-	def subscribe_confirmed(self, callback: Callable[[CommandBatch], None]) -> Callable[[], None]:
+	def subscribe_confirmed(
+		self,
+		callback: Callable[[CommandBatch, str | None], None],
+	) -> Callable[[], None]:
 		"""Subscribe to batch confirmation, returning an unsubscribe callable."""
 		self._confirm_callbacks.append(callback)
 
@@ -346,6 +351,7 @@ class CommandBatchObserver:
 		self._purge(now)
 
 		batch = self._open_batch_for(service, now)
+		entity_was_new = entity_id not in batch.entity_ids
 		batch.last_seen_at = now
 		batch.context_ids.add(context_id)
 		batch.entity_ids.add(entity_id)
@@ -353,8 +359,10 @@ class CommandBatchObserver:
 			batch.managed_entity_ids.add(entity_id)
 		self._context_to_batch[context_id] = batch.batch_id
 
+		newly_confirmed = False
 		if not batch.confirmed and batch.size >= self._min_distinct_entities:
 			batch.confirmed = True
+			newly_confirmed = True
 			_LOGGER.info(
 				"Bulk command detected: %s across %d distinct entities (%d managed) "
 				"in %.1f ms (batch %s, mode=%s)",
@@ -365,9 +373,11 @@ class CommandBatchObserver:
 				batch.batch_id,
 				self._mode,
 			)
+		if newly_confirmed or (batch.confirmed and entity_was_new):
+			new_target = None if newly_confirmed else entity_id
 			for callback in list(self._confirm_callbacks):
 				try:
-					callback(batch)
+					callback(batch, new_target)
 				except Exception as err:  # pragma: no cover - defensive
 					_LOGGER.exception("Error in batch confirmation callback: %s", err)
 		return batch

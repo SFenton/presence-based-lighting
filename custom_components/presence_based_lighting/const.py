@@ -2,7 +2,7 @@
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 ISSUE_URL = "https://github.com/sfenton/presence_based_lighting/issues"
 
@@ -49,7 +49,9 @@ CONF_ACTIVATION_CONDITIONS = "activation_conditions"  # Optional binary_sensor/i
 # paired room profiles cannot resurrect a light another profile just released.
 CONF_HONOR_EXTERNAL_OVERRIDE = "honor_external_override"  # Per-entity: consult entity-scoped overrides recorded by sibling entries
 CONF_UNKNOWN_SOURCE_POLICY = "unknown_source_policy"  # Policy for external commands we cannot attribute to a known source
-CONF_QUIETED_MAX_AGE = "quieted_max_age"  # Seconds before a quieted hold arms its rearm latch defensively
+CONF_BULK_COMMAND_POLICY = "bulk_command_policy"  # pause | rearm_after_clear for confirmed whole-home commands
+CONF_QUIETED_MAX_AGE = "quieted_max_age"  # Seconds before a quieted hold is considered stale
+CONF_QUIETED_MAX_AGE_ACTION = "quieted_max_age_action"  # diagnostic | pause | arm
 
 # Domain-wide bulk ("all lights off") detection keys
 CONF_HOMEKIT_BATCH_MODE = "homekit_batch_mode"  # off | observe | enforce
@@ -77,10 +79,30 @@ EXTERNAL_POLICY_PAUSE = "pause"
 EXTERNAL_POLICY_REARM_AFTER_CLEAR = "rearm_after_clear"
 EXTERNAL_POLICY_IGNORE = "ignore"
 
+# Quieted max-age actions
+QUIETED_MAX_AGE_ACTION_DIAGNOSTIC = "diagnostic"
+QUIETED_MAX_AGE_ACTION_PAUSE = "pause"
+QUIETED_MAX_AGE_ACTION_ARM = "arm"
+
 # Sources an external command can be attributed to
 SOURCE_UNKNOWN = "unknown"
 SOURCE_HOMEKIT_SINGLE = "homekit_single"
 SOURCE_HOMEKIT_BATCH = "homekit_batch"
+SOURCE_ADMIN = "admin"
+
+# Administrative state-control values
+AUTOMATION_CONTROL_STATE_ON = "on"
+AUTOMATION_CONTROL_STATE_OFF = "off"
+AUTOMATION_CONTROL_STATE_PAUSED = "paused"
+AUTOMATION_CONTROL_STATE_QUIETED = "quieted"
+AUTOMATION_CONTROL_STATE_ACTIVE = "active"
+AUTOMATION_CONTROL_STATES = {
+	AUTOMATION_CONTROL_STATE_ON,
+	AUTOMATION_CONTROL_STATE_OFF,
+	AUTOMATION_CONTROL_STATE_PAUSED,
+	AUTOMATION_CONTROL_STATE_QUIETED,
+	AUTOMATION_CONTROL_STATE_ACTIVE,
+}
 
 # HomeKit batch detection modes
 BATCH_MODE_OFF = "off"
@@ -118,7 +140,9 @@ DEFAULT_MANUAL_DISABLE_STATES = ["off"]  # Manual off pauses automation by defau
 # would silently defeat a physical off.
 DEFAULT_HONOR_EXTERNAL_OVERRIDE = True
 DEFAULT_UNKNOWN_SOURCE_POLICY = EXTERNAL_POLICY_PAUSE
-DEFAULT_QUIETED_MAX_AGE = 14400  # 4 hours; only arms the rearm latch, never turns anything on
+DEFAULT_BULK_COMMAND_POLICY = EXTERNAL_POLICY_REARM_AFTER_CLEAR
+DEFAULT_QUIETED_MAX_AGE = 14400  # 4 hours before stale-hold diagnostics
+DEFAULT_QUIETED_MAX_AGE_ACTION = QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
 
 # Bulk detection defaults. Observed native "all lights off" bursts carried 15
 # commands in 21.46 ms and 16 commands in 25.39 ms, while a single-room HomeKit
