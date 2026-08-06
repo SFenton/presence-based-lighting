@@ -9,8 +9,16 @@ from custom_components.presence_based_lighting import (
     async_setup,
     SERVICE_RESUME_AUTOMATION,
     SERVICE_PAUSE_AUTOMATION,
+    SERVICE_SET_AUTOMATION_STATE,
 )
 from custom_components.presence_based_lighting.const import (
+    AUTOMATION_CONTROL_STATE_ACTIVE,
+    AUTOMATION_CONTROL_STATE_OFF,
+    AUTOMATION_CONTROL_STATE_ON,
+    AUTOMATION_CONTROL_STATE_PAUSED,
+    AUTOMATION_CONTROL_STATE_QUIETED,
+    CONF_CONTROLLED_ENTITIES,
+    CONF_HONOR_EXTERNAL_OVERRIDE,
     CONF_ROOM_NAME,
     DOMAIN,
 )
@@ -19,12 +27,14 @@ from tests.conftest import (
 )
 
 
-def _create_service_call(entity_id=None, target_switches=None):
+def _create_service_call(entity_id=None, target_switches=None, state=None):
     """Create a mock service call object."""
     call = MagicMock()
     call.data = {}
     if entity_id:
         call.data["entity_id"] = entity_id
+    if state:
+        call.data["state"] = state
     
     if target_switches:
         call.target = {"entity_id": target_switches}
@@ -71,7 +81,7 @@ class TestServiceRegistration:
 
     @pytest.mark.asyncio
     async def test_services_are_registered(self, mock_hass):
-        """Test that resume_automation and pause_automation services are registered."""
+        """Test that all public automation-control services are registered."""
         registered_services = []
         
         def capture_register(domain, service, handler, schema=None):
@@ -84,6 +94,7 @@ class TestServiceRegistration:
         assert result is True
         assert (DOMAIN, SERVICE_RESUME_AUTOMATION) in registered_services
         assert (DOMAIN, SERVICE_PAUSE_AUTOMATION) in registered_services
+        assert (DOMAIN, SERVICE_SET_AUTOMATION_STATE) in registered_services
 
 
 class TestResumeAutomationService:
@@ -290,3 +301,80 @@ class TestServiceHandlerIntegration:
         turn_on_calls = [c for c in mock_hass.services.calls 
                          if c["domain"] == "light" and c["service"] == "turn_on"]
         assert len(turn_on_calls) == 1
+
+
+class TestSetAutomationStateService:
+    """Test the five-state administrative service used by React Dash."""
+
+    entity = "light.living_room"
+    switch_entity = "switch.living_room_presence_lighting"
+
+    @pytest.mark.asyncio
+    async def test_set_automation_state_supports_all_five_states(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        mock_hass.data[DOMAIN] = {}
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        mock_hass.data[DOMAIN][mock_config_entry.entry_id] = coordinator
+        await coordinator.async_start()
+        await async_setup(mock_hass, {})
+        handler = mock_hass.services._registered[(DOMAIN, SERVICE_SET_AUTOMATION_STATE)]
+
+        async def select(state):
+            await handler(
+                _create_service_call(
+                    target_switches=[self.switch_entity],
+                    state=state,
+                )
+            )
+
+        await select(AUTOMATION_CONTROL_STATE_OFF)
+        assert coordinator.get_presence_allowed(self.entity) is False
+        assert coordinator.get_automation_paused(self.entity) is True
+
+        await select(AUTOMATION_CONTROL_STATE_ON)
+        assert coordinator.get_presence_allowed(self.entity) is True
+        assert coordinator.get_automation_paused(self.entity) is False
+
+        await select(AUTOMATION_CONTROL_STATE_PAUSED)
+        assert coordinator.get_presence_allowed(self.entity) is True
+        assert coordinator.get_automation_paused(self.entity) is True
+
+        await select(AUTOMATION_CONTROL_STATE_QUIETED)
+        assert coordinator.get_quieted(self.entity) is True
+        assert coordinator.get_automation_paused(self.entity) is False
+
+        await select(AUTOMATION_CONTROL_STATE_ACTIVE)
+        assert coordinator.get_presence_allowed(self.entity) is True
+        assert coordinator.get_quieted(self.entity) is False
+        assert coordinator.get_automation_paused(self.entity) is False
+
+    @pytest.mark.asyncio
+    async def test_admin_states_respect_entry_local_override_opt_out(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_HONOR_EXTERNAL_OVERRIDE
+        ] = False
+        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        await coordinator.async_set_automation_control_state(
+            self.entity,
+            AUTOMATION_CONTROL_STATE_PAUSED,
+        )
+        assert coordinator.get_automation_paused(self.entity) is True
+
+        await coordinator.async_set_presence_allowed(self.entity, False)
+        with pytest.raises(ValueError):
+            await coordinator.async_set_automation_control_state(
+                self.entity,
+                AUTOMATION_CONTROL_STATE_QUIETED,
+            )
+        assert coordinator.get_presence_allowed(self.entity) is False

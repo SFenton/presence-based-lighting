@@ -8,16 +8,23 @@ import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_ROOM_NAME, DOMAIN
+from .const import AUTOMATION_CONTROL_STATES, CONF_ROOM_NAME, DOMAIN
 from .entity_targeting import as_entity_list, legacy_room_switch_entity_id
 
 _LOGGER = logging.getLogger(__package__)
 
 SERVICE_RESUME_AUTOMATION = "resume_automation"
 SERVICE_PAUSE_AUTOMATION = "pause_automation"
+SERVICE_RESUME_ALL_AUTOMATION = "resume_all_automation"
+SERVICE_SET_AUTOMATION_STATE = "set_automation_state"
 
 SERVICE_SCHEMA = vol.Schema({
 	vol.Optional("entity_id"): vol.Any(cv.entity_id, [cv.entity_id]),
+})
+
+RESUME_ALL_SCHEMA = vol.Schema({})
+SET_AUTOMATION_STATE_SCHEMA = SERVICE_SCHEMA.extend({
+	vol.Required("state"): vol.In(AUTOMATION_CONTROL_STATES),
 })
 
 
@@ -98,10 +105,83 @@ async def async_register_services(hass: HomeAssistant, coordinator_type: type) -
 		"""Handle the pause_automation service call."""
 		await _apply_to_service_targets(call, paused=True)
 
+	async def handle_set_automation_state(call: Any) -> None:
+		"""Apply an administrative state to the targeted PBL switch entities."""
+		target_switches = _target_switches_from_call(call)
+		target_entity_ids = _controlled_entities_from_call(call, target_switches)
+		if not target_switches and target_entity_ids:
+			target_switches = ["*"]
+		if not target_switches:
+			_LOGGER.warning("set_automation_state called without target switch")
+			return
+
+		control_state = call.data["state"]
+		for _entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+			if not isinstance(coordinator, coordinator_type):
+				continue
+			matched_entities = coordinator.resolve_service_target_entities(target_switches)
+			if not isinstance(matched_entities, (list, tuple, set)):
+				matched_entities = _fallback_service_target_entities(
+					coordinator,
+					target_switches,
+				)
+			for entity_id in matched_entities:
+				if target_entity_ids is not None and entity_id not in target_entity_ids:
+					continue
+				await coordinator.async_set_automation_control_state(
+					entity_id,
+					control_state,
+				)
+
+	async def handle_resume_all_automation(_call: Any) -> None:
+		"""Clear every pause and quieted hold across all config entries.
+
+		Escape hatch: pauses are entry-local while external overrides are
+		entity-scoped, so unsticking a house-wide problem otherwise means
+		targeting each room switch individually.
+		"""
+		cleared = 0
+		for _entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+			if not isinstance(coordinator, coordinator_type):
+				continue
+			for entity_id in list(coordinator._entity_states):
+				clear_override = getattr(coordinator, "_clear_external_override", None)
+				if clear_override is not None:
+					clear_override(entity_id, "resume_all_automation")
+				if coordinator.get_automation_paused(entity_id):
+					coordinator.set_automation_paused(
+						entity_id,
+						False,
+						reason="resume_all_automation",
+						source="service",
+					)
+				entity_state = coordinator._entity_states[entity_id]
+				await coordinator._reconcile_entity(entity_id, entity_state)
+				cleared += 1
+		_LOGGER.info("resume_all_automation processed %d controlled entities", cleared)
+
 	hass.services.async_register(
 		DOMAIN, SERVICE_RESUME_AUTOMATION, handle_resume_automation, schema=SERVICE_SCHEMA
 	)
 	hass.services.async_register(
 		DOMAIN, SERVICE_PAUSE_AUTOMATION, handle_pause_automation, schema=SERVICE_SCHEMA
 	)
-	_LOGGER.debug("Registered %s and %s services", SERVICE_RESUME_AUTOMATION, SERVICE_PAUSE_AUTOMATION)
+	hass.services.async_register(
+		DOMAIN,
+		SERVICE_RESUME_ALL_AUTOMATION,
+		handle_resume_all_automation,
+		schema=RESUME_ALL_SCHEMA,
+	)
+	hass.services.async_register(
+		DOMAIN,
+		SERVICE_SET_AUTOMATION_STATE,
+		handle_set_automation_state,
+		schema=SET_AUTOMATION_STATE_SCHEMA,
+	)
+	_LOGGER.debug(
+		"Registered %s, %s, %s and %s services",
+		SERVICE_RESUME_AUTOMATION,
+		SERVICE_PAUSE_AUTOMATION,
+		SERVICE_RESUME_ALL_AUTOMATION,
+		SERVICE_SET_AUTOMATION_STATE,
+	)

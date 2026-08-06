@@ -9,12 +9,20 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
 from .const import (
+    CONF_AUTOMATION_MODE,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
     CONF_INITIAL_PRESENCE_ALLOWED,
+    CONF_MANUAL_DISABLE_STATES,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
+    CONF_USE_INTERCEPTOR,
+    DEFAULT_AUTOMATION_MODE,
+    DEFAULT_MANUAL_DISABLE_STATES,
+    DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+    DEFAULT_USE_INTERCEPTOR,
     DOMAIN,
     ICON,
     ICON_AUTO_REENABLE,
@@ -80,6 +88,7 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
         return object_id.replace("_", " ").title()
 
     def _desired_entity_id(self, friendly_name: str) -> str:
+        """Return the legacy generated ID without renaming registered entities."""
         slug_source = f"{self._entry.data[CONF_ROOM_NAME]} Presence {friendly_name} Presence Allowed"
         return f"switch.{slugify(slug_source)}"
 
@@ -87,21 +96,6 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
         friendly = self._derive_target_friendly_name()
         self._entity_friendly_name = friendly
         self._attr_name = self._format_switch_name(friendly)
-
-        if not self.hass or not self.entity_id:
-            return
-
-        registry = er.async_get(self.hass)
-        reg_entry = registry.async_get(self.entity_id)
-        desired_entity_id = self._desired_entity_id(friendly)
-
-        # Only rename automatically if no custom name is set and entity_id differs
-        if reg_entry and not reg_entry.name and reg_entry.entity_id != desired_entity_id:
-            try:
-                registry.async_update_entity(reg_entry.entity_id, new_entity_id=desired_entity_id)
-            except ValueError:
-                # Another entity might already use the desired id; skip renaming
-                return
 
     @property
     def device_info(self):
@@ -130,9 +124,28 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
             "controlled_entity": self._entity_id,
             CONF_RESPECTS_PRESENCE_ALLOWED: self._entity_config[CONF_RESPECTS_PRESENCE_ALLOWED],
             CONF_DISABLE_ON_EXTERNAL_CONTROL: self._entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+            CONF_AUTOMATION_MODE: self._entity_config.get(
+                CONF_AUTOMATION_MODE,
+                DEFAULT_AUTOMATION_MODE,
+            ),
+            CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: self._entity_config.get(
+                CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+                DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+            ),
+            CONF_MANUAL_DISABLE_STATES: self._entity_config.get(
+                CONF_MANUAL_DISABLE_STATES,
+                list(DEFAULT_MANUAL_DISABLE_STATES),
+            ),
+            CONF_USE_INTERCEPTOR: self._entity_config.get(
+                CONF_USE_INTERCEPTOR,
+                DEFAULT_USE_INTERCEPTOR,
+            ),
             "automation_paused": self._coordinator.get_automation_paused(self._entity_id),
             "automation_state": self._coordinator.get_entity_automation_state(self._entity_id),
         }
+        get_quieted = getattr(self._coordinator, "get_quieted", None)
+        if get_quieted is not None:
+            attributes["automation_quieted"] = get_quieted(self._entity_id)
         attributes.update(self._coordinator.get_entity_control_state(self._entity_id))
         return attributes
 

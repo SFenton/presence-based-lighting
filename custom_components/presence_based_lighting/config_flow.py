@@ -21,6 +21,16 @@ from .const import (
 	AUTOMATION_MODE_PRESENCE_LOCK,
 	CONF_ACTIVATION_CONDITIONS,
 	CONF_AUTOMATION_MODE,
+	CONF_BULK_COMMAND_POLICY,
+	CONF_HONOR_EXTERNAL_OVERRIDE,
+	CONF_QUIETED_MAX_AGE,
+	CONF_QUIETED_MAX_AGE_ACTION,
+	CONF_UNKNOWN_SOURCE_POLICY,
+	DEFAULT_BULK_COMMAND_POLICY,
+	DEFAULT_HONOR_EXTERNAL_OVERRIDE,
+	DEFAULT_QUIETED_MAX_AGE,
+	DEFAULT_QUIETED_MAX_AGE_ACTION,
+	DEFAULT_UNKNOWN_SOURCE_POLICY,
 	CONF_AUTO_REENABLE_END_TIME,
 	CONF_AUTO_REENABLE_PRESENCE_SENSORS,
 	CONF_AUTO_REENABLE_START_TIME,
@@ -68,7 +78,12 @@ from .const import (
 	DEFAULT_FILE_LOGGING_ENABLED,
 	DEFAULT_USE_INTERCEPTOR,
 	DOMAIN,
+	EXTERNAL_POLICY_PAUSE,
+	EXTERNAL_POLICY_REARM_AFTER_CLEAR,
 	NO_ACTION,
+	QUIETED_MAX_AGE_ACTION_ARM,
+	QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
+	QUIETED_MAX_AGE_ACTION_PAUSE,
 )
 from .interceptor import is_interceptor_available
 from .real_last_changed import (
@@ -176,6 +191,26 @@ def _format_action_option_label(service_name: str, metadata: dict | None) -> str
 	if description:
 		label = f"{label} – {description}"
 	return label
+
+
+# Per-entity settings that have no dedicated UI field yet. The add/edit flows
+# rebuild the entity config dict from scratch, so these must be carried forward
+# explicitly or editing an entity would silently drop them.
+_CARRY_FORWARD_ENTITY_SETTINGS = {
+	CONF_HONOR_EXTERNAL_OVERRIDE: DEFAULT_HONOR_EXTERNAL_OVERRIDE,
+	CONF_UNKNOWN_SOURCE_POLICY: DEFAULT_UNKNOWN_SOURCE_POLICY,
+	CONF_BULK_COMMAND_POLICY: DEFAULT_BULK_COMMAND_POLICY,
+	CONF_QUIETED_MAX_AGE: DEFAULT_QUIETED_MAX_AGE,
+	CONF_QUIETED_MAX_AGE_ACTION: DEFAULT_QUIETED_MAX_AGE_ACTION,
+}
+
+
+def _carry_forward_entity_settings(updated_config: dict, current_config: dict | None) -> dict:
+	"""Preserve entity settings that the flow schema does not expose."""
+	source = current_config or {}
+	for key, default in _CARRY_FORWARD_ENTITY_SETTINGS.items():
+		updated_config.setdefault(key, source.get(key, default))
+	return updated_config
 
 
 def _get_entity_name(hass: HomeAssistant, entity_id: str) -> str:
@@ -427,7 +462,7 @@ class _EntityManagementMixin:
 class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.ConfigFlow, domain=DOMAIN):
 	"""Config flow for presence_based_lighting."""
 
-	VERSION = 10
+	VERSION = 12
 
 	def __init__(self):
 		"""Initialize."""
@@ -574,6 +609,17 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		)
 		defaults.setdefault(CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES))
 		defaults.setdefault(CONF_RLC_TRACKING_ENTITY, None)
+		defaults.setdefault(CONF_BULK_COMMAND_POLICY, DEFAULT_BULK_COMMAND_POLICY)
+		defaults.setdefault(CONF_QUIETED_MAX_AGE, DEFAULT_QUIETED_MAX_AGE)
+		defaults.setdefault(
+			CONF_QUIETED_MAX_AGE_ACTION,
+			DEFAULT_QUIETED_MAX_AGE_ACTION,
+		)
+		valid_rlc_effective_states = {
+			defaults[CONF_PRESENCE_DETECTED_STATE],
+			defaults[CONF_PRESENCE_CLEARED_STATE],
+			*(defaults[CONF_MANUAL_DISABLE_STATES] or []),
+		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
@@ -581,7 +627,15 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		
 		# Check if RLC integration is available and find potential RLC sensors for this entity
 		rlc_available = is_rlc_integration_available(self.hass)
-		rlc_sensors_for_entity = get_rlc_sensors_for_entity(self.hass, entity_id) if rlc_available else []
+		rlc_sensors_for_entity = (
+			get_rlc_sensors_for_entity(
+				self.hass,
+				entity_id,
+				valid_effective_states=valid_rlc_effective_states,
+			)
+			if rlc_available
+			else []
+		)
 		all_rlc_sensors = get_all_rlc_sensors(self.hass) if rlc_available else []
 
 		state_option_source = await _build_state_option_dicts(
@@ -654,6 +708,18 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_USE_INTERCEPTOR: use_interceptor,
 					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: presence_lock_respects_manual_override,
 					CONF_MANUAL_DISABLE_STATES: manual_disable_states,
+					CONF_BULK_COMMAND_POLICY: user_input.get(
+						CONF_BULK_COMMAND_POLICY,
+						defaults[CONF_BULK_COMMAND_POLICY],
+					),
+					CONF_QUIETED_MAX_AGE: user_input.get(
+						CONF_QUIETED_MAX_AGE,
+						defaults[CONF_QUIETED_MAX_AGE],
+					),
+					CONF_QUIETED_MAX_AGE_ACTION: user_input.get(
+						CONF_QUIETED_MAX_AGE_ACTION,
+						defaults[CONF_QUIETED_MAX_AGE_ACTION],
+					),
 					# Legacy fields for coordinator compatibility
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
 					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: require_occupancy,
@@ -661,6 +727,8 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 				
+				_carry_forward_entity_settings(updated_config, self._current_entity_config)
+
 				# Only store RLC tracking entity if one was selected
 				if rlc_tracking_entity:
 					updated_config[CONF_RLC_TRACKING_ENTITY] = rlc_tracking_entity
@@ -771,6 +839,50 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					],
 					mode=selector.SelectSelectorMode.DROPDOWN,
 					translation_key="automation_mode",
+				)
+			),
+			vol.Required(
+				CONF_BULK_COMMAND_POLICY,
+				default=defaults[CONF_BULK_COMMAND_POLICY],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=[
+						selector.SelectOptionDict(
+							value=EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+							label="Quieted - rearm after vacancy",
+						),
+						selector.SelectOptionDict(
+							value=EXTERNAL_POLICY_PAUSE,
+							label="Paused - explicit resume",
+						),
+					],
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			),
+			vol.Required(
+				CONF_QUIETED_MAX_AGE,
+				default=defaults[CONF_QUIETED_MAX_AGE],
+			): vol.All(vol.Coerce(int), vol.Range(min=0, max=604800)),
+			vol.Required(
+				CONF_QUIETED_MAX_AGE_ACTION,
+				default=defaults[CONF_QUIETED_MAX_AGE_ACTION],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=[
+						selector.SelectOptionDict(
+							value=QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
+							label="Diagnostic only",
+						),
+						selector.SelectOptionDict(
+							value=QUIETED_MAX_AGE_ACTION_PAUSE,
+							label="Convert to paused",
+						),
+						selector.SelectOptionDict(
+							value=QUIETED_MAX_AGE_ACTION_ARM,
+							label="Legacy - arm re-entry",
+						),
+					],
+					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			),
 			vol.Optional(
@@ -1461,6 +1573,21 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_RLC_TRACKING_ENTITY: self._current_entity_config.get(
 				CONF_RLC_TRACKING_ENTITY
 			),
+			CONF_BULK_COMMAND_POLICY: self._current_entity_config.get(
+				CONF_BULK_COMMAND_POLICY, DEFAULT_BULK_COMMAND_POLICY
+			),
+			CONF_QUIETED_MAX_AGE: self._current_entity_config.get(
+				CONF_QUIETED_MAX_AGE, DEFAULT_QUIETED_MAX_AGE
+			),
+			CONF_QUIETED_MAX_AGE_ACTION: self._current_entity_config.get(
+				CONF_QUIETED_MAX_AGE_ACTION,
+				DEFAULT_QUIETED_MAX_AGE_ACTION,
+			),
+		}
+		valid_rlc_effective_states = {
+			defaults[CONF_PRESENCE_DETECTED_STATE],
+			defaults[CONF_PRESENCE_CLEARED_STATE],
+			*(defaults[CONF_MANUAL_DISABLE_STATES] or []),
 		}
 		entity_delay_default = self._current_entity_config.get(CONF_ENTITY_OFF_DELAY)
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
@@ -1469,7 +1596,15 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		
 		# Check if RLC integration is available and find potential RLC sensors for this entity
 		rlc_available = is_rlc_integration_available(self.hass)
-		rlc_sensors_for_entity = get_rlc_sensors_for_entity(self.hass, entity_id) if rlc_available else []
+		rlc_sensors_for_entity = (
+			get_rlc_sensors_for_entity(
+				self.hass,
+				entity_id,
+				valid_effective_states=valid_rlc_effective_states,
+			)
+			if rlc_available
+			else []
+		)
 		all_rlc_sensors = get_all_rlc_sensors(self.hass) if rlc_available else []
 
 		state_option_source = await _build_state_option_dicts(
@@ -1542,6 +1677,18 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_USE_INTERCEPTOR: use_interceptor,
 					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: presence_lock_respects_manual_override,
 					CONF_MANUAL_DISABLE_STATES: manual_disable_states,
+					CONF_BULK_COMMAND_POLICY: user_input.get(
+						CONF_BULK_COMMAND_POLICY,
+						defaults[CONF_BULK_COMMAND_POLICY],
+					),
+					CONF_QUIETED_MAX_AGE: user_input.get(
+						CONF_QUIETED_MAX_AGE,
+						defaults[CONF_QUIETED_MAX_AGE],
+					),
+					CONF_QUIETED_MAX_AGE_ACTION: user_input.get(
+						CONF_QUIETED_MAX_AGE_ACTION,
+						defaults[CONF_QUIETED_MAX_AGE_ACTION],
+					),
 					# Legacy fields for coordinator compatibility
 					CONF_DISABLE_ON_EXTERNAL_CONTROL: disable_on_external,
 					CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: require_occupancy,
@@ -1549,6 +1696,8 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
 				
+				_carry_forward_entity_settings(updated_config, self._current_entity_config)
+
 				# Only store RLC tracking entity if one was selected
 				if rlc_tracking_entity:
 					updated_config[CONF_RLC_TRACKING_ENTITY] = rlc_tracking_entity
@@ -1659,6 +1808,50 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					],
 					mode=selector.SelectSelectorMode.DROPDOWN,
 					translation_key="automation_mode",
+				)
+			),
+			vol.Required(
+				CONF_BULK_COMMAND_POLICY,
+				default=defaults[CONF_BULK_COMMAND_POLICY],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=[
+						selector.SelectOptionDict(
+							value=EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+							label="Quieted - rearm after vacancy",
+						),
+						selector.SelectOptionDict(
+							value=EXTERNAL_POLICY_PAUSE,
+							label="Paused - explicit resume",
+						),
+					],
+					mode=selector.SelectSelectorMode.DROPDOWN,
+				)
+			),
+			vol.Required(
+				CONF_QUIETED_MAX_AGE,
+				default=defaults[CONF_QUIETED_MAX_AGE],
+			): vol.All(vol.Coerce(int), vol.Range(min=0, max=604800)),
+			vol.Required(
+				CONF_QUIETED_MAX_AGE_ACTION,
+				default=defaults[CONF_QUIETED_MAX_AGE_ACTION],
+			): selector.SelectSelector(
+				selector.SelectSelectorConfig(
+					options=[
+						selector.SelectOptionDict(
+							value=QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
+							label="Diagnostic only",
+						),
+						selector.SelectOptionDict(
+							value=QUIETED_MAX_AGE_ACTION_PAUSE,
+							label="Convert to paused",
+						),
+						selector.SelectOptionDict(
+							value=QUIETED_MAX_AGE_ACTION_ARM,
+							label="Legacy - arm re-entry",
+						),
+					],
+					mode=selector.SelectSelectorMode.DROPDOWN,
 				)
 			),
 			vol.Optional(

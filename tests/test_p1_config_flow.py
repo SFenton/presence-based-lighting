@@ -30,6 +30,7 @@ from custom_components.presence_based_lighting.const import (
     AUTOMATION_MODE_AUTOMATIC,
     CONF_ACTIVATION_CONDITIONS,
     CONF_AUTOMATION_MODE,
+    CONF_BULK_COMMAND_POLICY,
     CONF_AUTO_REENABLE_END_TIME,
     CONF_AUTO_REENABLE_PRESENCE_SENSORS,
     CONF_AUTO_REENABLE_START_TIME,
@@ -42,6 +43,8 @@ from custom_components.presence_based_lighting.const import (
     CONF_FILE_LOGGING_ENABLED,
     CONF_INITIAL_PRESENCE_ALLOWED,
     CONF_OFF_DELAY,
+    CONF_QUIETED_MAX_AGE,
+    CONF_QUIETED_MAX_AGE_ACTION,
     CONF_PRESENCE_CLEARED_SERVICE,
     CONF_PRESENCE_CLEARED_STATE,
     CONF_PRESENCE_DETECTED_SERVICE,
@@ -52,6 +55,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
     DEFAULT_AUTOMATION_MODE,
+    DEFAULT_BULK_COMMAND_POLICY,
     DEFAULT_AUTO_REENABLE_END_TIME,
     DEFAULT_AUTO_REENABLE_START_TIME,
     DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
@@ -62,6 +66,8 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_FILE_LOGGING_ENABLED,
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
     DEFAULT_OFF_DELAY,
+    DEFAULT_QUIETED_MAX_AGE,
+    DEFAULT_QUIETED_MAX_AGE_ACTION,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
     DEFAULT_RESPECTS_PRESENCE_ALLOWED,
@@ -83,6 +89,9 @@ def _default_configure_input() -> dict:
         CONF_PRESENCE_CLEARED_STATE: DEFAULT_CLEARED_STATE,
         CONF_RESPECTS_PRESENCE_ALLOWED: DEFAULT_RESPECTS_PRESENCE_ALLOWED,
         CONF_AUTOMATION_MODE: DEFAULT_AUTOMATION_MODE,
+        CONF_BULK_COMMAND_POLICY: DEFAULT_BULK_COMMAND_POLICY,
+        CONF_QUIETED_MAX_AGE: DEFAULT_QUIETED_MAX_AGE,
+        CONF_QUIETED_MAX_AGE_ACTION: DEFAULT_QUIETED_MAX_AGE_ACTION,
     }
 
 
@@ -260,6 +269,21 @@ async def test_configure_entity_uses_state_dropdown_when_options_available(_mock
     assert len(cleared_custom_field) == 1
     assert schema.schema[cleared_custom_field[0]]["text"]["multiline"] is False
     assert cleared_custom_field[0].default is UNDEFINED
+
+    bulk_policy_field = next(
+        field for field in schema.schema if field.schema == CONF_BULK_COMMAND_POLICY
+    )
+    max_age_field = next(
+        field for field in schema.schema if field.schema == CONF_QUIETED_MAX_AGE
+    )
+    max_age_action_field = next(
+        field
+        for field in schema.schema
+        if field.schema == CONF_QUIETED_MAX_AGE_ACTION
+    )
+    assert schema.schema[bulk_policy_field]["select"]["mode"] == "dropdown"
+    assert max_age_field.default() == DEFAULT_QUIETED_MAX_AGE
+    assert schema.schema[max_age_action_field]["select"]["mode"] == "dropdown"
 
 
 @pytest.mark.asyncio

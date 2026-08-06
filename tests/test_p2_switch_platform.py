@@ -5,12 +5,17 @@ from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 from homeassistant.const import STATE_ON, STATE_OFF
 
 from custom_components.presence_based_lighting.const import (
+    AUTOMATION_MODE_PRESENCE_LOCK,
+    CONF_AUTOMATION_MODE,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
     CONF_INITIAL_PRESENCE_ALLOWED,
+    CONF_MANUAL_DISABLE_STATES,
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
+    CONF_USE_INTERCEPTOR,
     DOMAIN,
     ICON,
     ICON_AUTO_REENABLE,
@@ -66,6 +71,10 @@ def _make_entity_config(entity_id="light.living_room"):
         CONF_ENTITY_ID: entity_id,
         CONF_RESPECTS_PRESENCE_ALLOWED: True,
         CONF_DISABLE_ON_EXTERNAL_CONTROL: True,
+        CONF_AUTOMATION_MODE: AUTOMATION_MODE_PRESENCE_LOCK,
+        CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: False,
+        CONF_MANUAL_DISABLE_STATES: [STATE_OFF],
+        CONF_USE_INTERCEPTOR: False,
         CONF_INITIAL_PRESENCE_ALLOWED: True,
     }
 
@@ -180,6 +189,10 @@ class TestPresenceEntitySwitch:
         assert attrs["controlled_entity"] == "light.living_room"
         assert attrs[CONF_RESPECTS_PRESENCE_ALLOWED] is True
         assert attrs[CONF_DISABLE_ON_EXTERNAL_CONTROL] is True
+        assert attrs[CONF_AUTOMATION_MODE] == AUTOMATION_MODE_PRESENCE_LOCK
+        assert attrs[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] is False
+        assert attrs[CONF_MANUAL_DISABLE_STATES] == [STATE_OFF]
+        assert attrs[CONF_USE_INTERCEPTOR] is False
         assert attrs["automation_paused"] is True
         assert attrs["automation_state"] == "PAUSED"
 
@@ -358,8 +371,8 @@ class TestPresenceEntitySwitch:
         name = switch._derive_target_friendly_name()
         assert name == "Original Lamp"
 
-    def test_update_display_metadata_renames_entity(self):
-        """_update_display_metadata renames via registry when entity_id differs."""
+    def test_update_display_metadata_preserves_entity_id(self):
+        """Friendly-name refreshes must not rename registered entities."""
         from tests.conftest import _MockRegistryEntry, _MockEntityRegistry
         entry = _make_entry(room="Office")
         hass = MagicMock()
@@ -372,7 +385,7 @@ class TestPresenceEntitySwitch:
             entity_id="light.living_room", name=None
         )
         reg.async_update_entity = MagicMock()
-        # Give switch an entity_id so the rename path is hit
+        # Give switch an existing entity_id that consumers already reference.
         switch.hass = MagicMock()
         switch.hass._entity_registry = reg
         switch.entity_id = "switch.old_id"
@@ -380,8 +393,8 @@ class TestPresenceEntitySwitch:
             entity_id="switch.old_id", name=None
         )
         switch._update_display_metadata()
-        # Registry rename should have been attempted
-        reg.async_update_entity.assert_called_once()
+        reg.async_update_entity.assert_not_called()
+        assert switch.entity_id == "switch.old_id"
 
     def test_update_display_metadata_rename_value_error(self):
         """_update_display_metadata gracefully handles ValueError on rename."""

@@ -270,6 +270,34 @@ class TestPresenceLockInterceptorWithLib:
         finally:
             self._unpatch()
 
+    @pytest.mark.asyncio
+    async def test_handler_allows_commands_when_entry_is_inactive(self):
+        """Activation-gated entries must not enforce either lock direction."""
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(
+                req_occ=True,
+                req_vac=True,
+                respects_manual_override=False,
+            )
+            interceptor = PresenceLockInterceptor(
+                hass,
+                entry,
+                lambda: True,
+                lambda _entity_id: False,
+            )
+            interceptor.setup()
+
+            for registration in self._register_calls:
+                call = MagicMock()
+                data = {"entity_id": ["light.living_room"]}
+                result = await registration["handler"](call, data)
+                assert result == self._mock_result.ALLOW
+                assert data["entity_id"] == ["light.living_room"]
+        finally:
+            self._unpatch()
+
     def test_setup_skips_turn_off_interceptor_when_manual_override_allowed(self):
         self._patch_interceptor_available()
         try:
