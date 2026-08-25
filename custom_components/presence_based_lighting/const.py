@@ -2,7 +2,7 @@
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"
-VERSION = "2.2.1"
+VERSION = "2.4.2"
 
 ISSUE_URL = "https://github.com/sfenton/presence_based_lighting/issues"
 
@@ -25,8 +25,11 @@ CONF_OFF_DELAY = "off_delay"
 CONF_CONTROLLED_ENTITIES = "controlled_entities"
 CONF_ENTITY_ID = "entity_id"
 CONF_PRESENCE_DETECTED_SERVICE = "presence_detected_service"
+CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT = "presence_detected_brightness_pct"
+CONF_PRESENCE_DETECTED_TRANSITION = "presence_detected_transition"
 CONF_PRESENCE_DETECTED_STATE = "presence_detected_state"
 CONF_PRESENCE_CLEARED_SERVICE = "presence_cleared_service"
+CONF_PRESENCE_CLEARED_TRANSITION = "presence_cleared_transition"
 CONF_PRESENCE_CLEARED_STATE = "presence_cleared_state"
 CONF_RESPECTS_PRESENCE_ALLOWED = "respect_presence_allowed"
 CONF_DISABLE_ON_EXTERNAL_CONTROL = "disable_on_external_control"
@@ -37,11 +40,13 @@ CONF_INITIAL_PRESENCE_ALLOWED = "initial_presence_allowed"
 CONF_ENTITY_OFF_DELAY = "entity_off_delay"
 CONF_AUTOMATION_MODE = "automation_mode"
 CONF_USE_INTERCEPTOR = "use_interceptor"
+CONF_NORMALIZE_EXTERNAL_PLAIN_ON = "normalize_external_plain_on"
 CONF_MANUAL_DISABLE_STATES = "manual_disable_states"
 CONF_RLC_TRACKING_ENTITY = "rlc_tracking_entity"  # Optional RLC sensor that tracks this entity's real state
 CONF_PRESENCE_SENSOR_MAPPINGS = "presence_sensor_mappings"  # Maps presence sensors to their source entities
 CONF_CLEARING_SENSOR_MAPPINGS = "clearing_sensor_mappings"  # Maps clearing sensors to their source entities
 CONF_ACTIVATION_CONDITIONS = "activation_conditions"  # Optional binary_sensor/input_boolean entities that must ALL be on for lights to activate
+CONF_ACTIVATION_CATCHUP_MODE = "activation_catchup_mode"
 
 # External override configuration keys
 # An "external override" is a fact about a *controlled entity*, not about one
@@ -68,6 +73,11 @@ CONF_AUTO_REENABLE_END_TIME = "auto_reenable_end_time"  # End of monitoring wind
 # Automation mode values
 AUTOMATION_MODE_AUTOMATIC = "automatic"
 AUTOMATION_MODE_PRESENCE_LOCK = "presence_lock"
+
+# Activation-gate catch-up policies
+ACTIVATION_CATCHUP_ANY_TRIGGER = "any_trigger"
+ACTIVATION_CATCHUP_CLEARING_AUTHORITY = "clearing_authority"
+ACTIVATION_CATCHUP_NONE = "none"
 
 # External override policies
 # PAUSE keeps today's semantics: automation stays suspended until the user
@@ -121,7 +131,10 @@ NO_ACTION = "none"
 # Defaults
 DEFAULT_OFF_DELAY = 30  # seconds
 DEFAULT_DETECTED_SERVICE = "turn_on"
+DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT = 100
+DEFAULT_PRESENCE_DETECTED_TRANSITION = 1.0  # seconds
 DEFAULT_CLEARED_SERVICE = "turn_off"
+DEFAULT_PRESENCE_CLEARED_TRANSITION = 1.0  # seconds
 DEFAULT_DETECTED_STATE = "on"
 DEFAULT_CLEARED_STATE = "off"
 DEFAULT_RESPECTS_PRESENCE_ALLOWED = True
@@ -132,7 +145,9 @@ DEFAULT_REQUIRE_VACANCY_FOR_CLEARED = False
 DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE = True
 DEFAULT_AUTOMATION_MODE = AUTOMATION_MODE_AUTOMATIC
 DEFAULT_USE_INTERCEPTOR = True  # Default to using interceptor when available
+DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON = True
 DEFAULT_MANUAL_DISABLE_STATES = ["off"]  # Manual off pauses automation by default
+DEFAULT_ACTIVATION_CATCHUP_MODE = ACTIVATION_CATCHUP_ANY_TRIGGER
 
 # External override defaults.
 # UNKNOWN deliberately stays PAUSE: wall switches on direct-relay devices reach

@@ -29,6 +29,7 @@ from custom_components.presence_based_lighting.config_flow import (
 from custom_components.presence_based_lighting.const import (
     AUTOMATION_MODE_AUTOMATIC,
     CONF_ACTIVATION_CONDITIONS,
+    CONF_ACTIVATION_CATCHUP_MODE,
     CONF_AUTOMATION_MODE,
     CONF_BULK_COMMAND_POLICY,
     CONF_AUTO_REENABLE_END_TIME,
@@ -59,6 +60,7 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_AUTO_REENABLE_END_TIME,
     DEFAULT_AUTO_REENABLE_START_TIME,
     DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
+    DEFAULT_ACTIVATION_CATCHUP_MODE,
     DEFAULT_CLEARED_SERVICE,
     DEFAULT_CLEARED_STATE,
     DEFAULT_DETECTED_SERVICE,
@@ -166,6 +168,7 @@ async def test_manage_entities_creates_entry_when_ready():
         CONF_CLEARING_SENSORS: [],
         CONF_CLEARING_SENSORS_AUTO_DISCOVERED: False,
         CONF_ACTIVATION_CONDITIONS: [],
+        CONF_ACTIVATION_CATCHUP_MODE: DEFAULT_ACTIVATION_CATCHUP_MODE,
         CONF_FILE_LOGGING_ENABLED: DEFAULT_FILE_LOGGING_ENABLED,
         CONF_OFF_DELAY: 15,
         CONF_CONTROLLED_ENTITIES: handler._controlled_entities,  # type: ignore[attr-defined]

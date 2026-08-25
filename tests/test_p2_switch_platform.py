@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 from homeassistant.const import STATE_ON, STATE_OFF
 
 from custom_components.presence_based_lighting.const import (
+    CONF_ACTIVATION_CATCHUP_MODE,
     AUTOMATION_MODE_PRESENCE_LOCK,
     CONF_AUTOMATION_MODE,
     CONF_CONTROLLED_ENTITIES,
@@ -12,11 +13,20 @@ from custom_components.presence_based_lighting.const import (
     CONF_ENTITY_ID,
     CONF_INITIAL_PRESENCE_ALLOWED,
     CONF_MANUAL_DISABLE_STATES,
+    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+    CONF_PRESENCE_CLEARED_TRANSITION,
+    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+    CONF_PRESENCE_DETECTED_TRANSITION,
     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
     CONF_USE_INTERCEPTOR,
+    DEFAULT_ACTIVATION_CATCHUP_MODE,
     DOMAIN,
+    DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
+    DEFAULT_PRESENCE_CLEARED_TRANSITION,
+    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+    DEFAULT_PRESENCE_DETECTED_TRANSITION,
     ICON,
     ICON_AUTO_REENABLE,
 )
@@ -193,6 +203,26 @@ class TestPresenceEntitySwitch:
         assert attrs[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] is False
         assert attrs[CONF_MANUAL_DISABLE_STATES] == [STATE_OFF]
         assert attrs[CONF_USE_INTERCEPTOR] is False
+        assert (
+            attrs[CONF_NORMALIZE_EXTERNAL_PLAIN_ON]
+            is DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON
+        )
+        assert (
+            attrs[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT]
+            == DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
+        )
+        assert (
+            attrs[CONF_PRESENCE_DETECTED_TRANSITION]
+            == DEFAULT_PRESENCE_DETECTED_TRANSITION
+        )
+        assert (
+            attrs[CONF_PRESENCE_CLEARED_TRANSITION]
+            == DEFAULT_PRESENCE_CLEARED_TRANSITION
+        )
+        assert (
+            attrs[CONF_ACTIVATION_CATCHUP_MODE]
+            == DEFAULT_ACTIVATION_CATCHUP_MODE
+        )
         assert attrs["automation_paused"] is True
         assert attrs["automation_state"] == "PAUSED"
 

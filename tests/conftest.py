@@ -115,7 +115,7 @@ class _BaseFlow:
     async def async_show_form(self, *args, **kwargs):
         """Mock show form."""
         return {"type": "form"}
-    
+
     def async_create_entry(self, *args, **kwargs):
         """Mock create entry - NOT async despite the name."""
         return {"type": "create_entry"}
@@ -145,7 +145,7 @@ class OptionsFlow(_BaseFlow):
     def __init__(self, config_entry):
         """Initialize options flow."""
         self._config_entry = config_entry
-    
+
     @property
     def config_entry(self):
         """Return the config entry."""
@@ -343,8 +343,10 @@ core_module.HomeAssistant = type("HomeAssistant", (), {})
 
 # Context with id attribute
 class MockContext:
-    def __init__(self):
-        self.id = str(uuid.uuid4())
+    def __init__(self, id=None, parent_id=None, user_id=None):
+        self.id = id or str(uuid.uuid4())
+        self.parent_id = parent_id
+        self.user_id = user_id
 
 core_module.Context = MockContext
 core_module.Event = type("Event", (), {})
@@ -533,7 +535,7 @@ def mock_config_entry_separate_clearing():
 
 class MockState:
     """Mock state object."""
-    
+
     def __init__(self, entity_id, state, context=None, attributes=None):
         """Initialize mock state."""
         self.entity_id = entity_id
@@ -544,7 +546,7 @@ class MockState:
 
 class MockContext:
     """Mock context object."""
-    
+
     def __init__(self, id=None, parent_id=None, user_id=None):
         """Initialize mock context."""
         self.id = id or "test_context_id"
@@ -554,7 +556,7 @@ class MockContext:
 
 class MockHass:
     """Mock Home Assistant instance for testing."""
-    
+
     def __init__(self):
         """Initialize mock hass."""
         self.data = {}
@@ -564,13 +566,13 @@ class MockHass:
         self.bus = MockBus()
         self._state_listeners = []
         self._context_counter = 0
-        
+
     @property
     def context(self):
         """Get a new context for service calls."""
         self._context_counter += 1
         return MockContext(id=f"test_context_{self._context_counter}")
-        
+
     def is_state(self, entity_id, state):
         """Check if entity is in given state."""
         entity_state = self.states.get(entity_id)
@@ -581,7 +583,7 @@ class MockHass:
 
 class MockStates:
     """Mock states registry."""
-    
+
     def __init__(self):
         """Initialize mock states."""
         self._states = {}
@@ -599,15 +601,15 @@ class MockStates:
                 },
             },
         }
-        
+
     def get(self, entity_id):
         """Get state of entity."""
         return self._states.get(entity_id)
-        
+
     def set(self, entity_id, state, context=None, attributes=None):
         """Set state of entity."""
         self._states[entity_id] = MockState(entity_id, state, context, attributes)
-        
+
     def is_state(self, entity_id, state):
         """Check if entity is in state."""
         entity_state = self.get(entity_id)
@@ -618,7 +620,7 @@ class MockStates:
 
 class MockServices:
     """Mock services registry."""
-    
+
     def __init__(self):
         """Initialize mock services."""
         self.calls = []
@@ -643,7 +645,7 @@ class MockServices:
                 "turn_off": {},
             },
         }
-        
+
     async def async_call(self, domain, service, service_data=None, blocking=False, context=None):
         """Call a service."""
         self.calls.append({
@@ -653,7 +655,7 @@ class MockServices:
             "blocking": blocking,
             "context": context,
         })
-        
+
     def clear(self):
         """Clear service calls."""
         self.calls.clear()
@@ -673,11 +675,11 @@ class MockServices:
 
 class MockConfigEntries:
     """Mock config entries registry."""
-    
+
     async def async_forward_entry_setups(self, entry, platforms):
         """Forward entry setups."""
         return True
-        
+
     async def async_unload_platforms(self, entry, platforms):
         """Unload platforms."""
         return True
@@ -692,23 +694,23 @@ class MockConfigEntries:
 
 class MockBus:
     """Mock event bus."""
-    
+
     def __init__(self):
         """Initialize mock bus."""
         self._listeners = {}
         self.fired = []
-        
+
     def async_listen(self, event_type, listener):
         """Register an event listener."""
         if event_type not in self._listeners:
             self._listeners[event_type] = []
         self._listeners[event_type].append(listener)
-        
+
         # Return a function to remove the listener
         def remove_listener():
             if event_type in self._listeners:
                 self._listeners[event_type].remove(listener)
-		
+
         return remove_listener
 
     def async_fire(self, event_type, event_data=None, context=None):
@@ -740,7 +742,7 @@ def setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE
     """Set up initial entity states."""
     # Set light states
     mock_hass.states.set("light.living_room", lights_state)
-    
+
     # Set occupancy sensor states
     mock_hass.states.set("binary_sensor.living_room_motion", occupancy_state)
 
@@ -751,7 +753,7 @@ def setup_multi_entity_states(mock_hass, lights_states=None, occupancy_states=No
         lights_states = [STATE_OFF, STATE_OFF]
     if occupancy_states is None:
         occupancy_states = [STATE_OFF, STATE_OFF]
-        
+
     mock_hass.states.set("light.living_room_1", lights_states[0])
     mock_hass.states.set("light.living_room_2", lights_states[1])
     mock_hass.states.set("binary_sensor.motion_1", occupancy_states[0])
@@ -783,7 +785,7 @@ def assert_service_called(mock_hass, domain, service, entity_id=None):
                 target_entities = target
             if entity_id in target_entities:
                 return True
-    raise AssertionError(f"Service {domain}.{service} was not called" + 
+    raise AssertionError(f"Service {domain}.{service} was not called" +
                         (f" for {entity_id}" if entity_id else ""))
 
 

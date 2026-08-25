@@ -16,6 +16,7 @@ import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
 
 from custom_components.presence_based_lighting import (
+    EntityAutomationState,
     PresenceBasedLightingCoordinator,
     SERVICE_PAUSE_AUTOMATION,
     async_setup,
@@ -271,6 +272,41 @@ async def test_manual_off_pause_is_persisted_for_restart_recovery(
         assert data["paused_entities"] == ["light.living_room"]
     finally:
         coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_paused_state_saves_serialize_rapid_pause_resume(
+    mock_hass, mock_config_entry, tmp_path
+):
+    """A delayed pause save must not overwrite a later resumed state."""
+    storage_path = _configure_storage(mock_hass, tmp_path)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+    entity_id = "light.living_room"
+    coordinator._entity_states[entity_id]["state"] = EntityAutomationState.PAUSED
+    first_write_started = asyncio.Event()
+    release_first_write = asyncio.Event()
+    executor_calls = 0
+
+    async def delayed_executor(func, *args):
+        nonlocal executor_calls
+        executor_calls += 1
+        if executor_calls == 1:
+            first_write_started.set()
+            await release_first_write.wait()
+        return func(*args)
+
+    mock_hass.async_add_executor_job = delayed_executor
+    first_save = asyncio.create_task(coordinator._save_paused_state())
+    await first_write_started.wait()
+
+    coordinator._entity_states[entity_id]["state"] = EntityAutomationState.IDLE
+    resumed_save = asyncio.create_task(coordinator._save_paused_state())
+    await asyncio.sleep(0)
+    release_first_write.set()
+    await asyncio.gather(first_save, resumed_save)
+
+    paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
+    assert not paused_path.exists()
 
 
 @pytest.mark.asyncio

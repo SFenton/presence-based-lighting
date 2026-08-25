@@ -25,16 +25,20 @@ Drive lights, fans, or any switchable entity directly from HA service metadata. 
 - 🎯 **Smart manual override** – external control pauses automation until you re-enable it
 - 🏠 **Multi-room + multi-entity** – configure multiple rooms, each with any number of controlled entities
 - ⏱️ **Global or per-entity delays** – override turn-off timers per device when needed
+- 🌅 **Single-stage light activation** – PBL and intercepted plain light turn-ons target a configurable brightness and transition before dispatch
+- 🌙 **Smooth light clearing** – presence-driven light turn-offs use a configurable transition
 - 🔧 **Completely UI-based** – no YAML, selectors are built-in to the config flow
 - � **Presence Allowed switches** – each entity gets its own switch entity for dashboards or automations
 
 ## How It Works
 
 **Automatic Mode (when enabled):**
+
 - Lights turn **ON** when presence is detected
 - Lights turn **OFF** after a configurable delay when room is unoccupied
 
 **Manual Override:**
+
 - Turn lights **OFF** manually → Automation disables itself
 - Turn lights **ON** manually → Automation re-enables itself
 
@@ -42,9 +46,9 @@ Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_pre
 
 ## Platforms
 
-| Platform | Description                                                  |
-| -------- | ------------------------------------------------------------ |
-| `switch` | Enable/disable presence automation with state attributes    |
+| Platform | Description                                              |
+| -------- | -------------------------------------------------------- |
+| `switch` | Enable/disable presence automation with state attributes |
 
 ## Installation
 
@@ -66,6 +70,14 @@ Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_pre
 5. Place the files you downloaded in the new directory you created
 6. Restart Home Assistant
 
+### Optional pre-dispatch normalization
+
+Install [Hass Interceptor](https://github.com/SFenton/hass-interceptor) and add
+`hass_interceptor:` to `configuration.yaml` to normalize external plain
+`light.turn_on` calls before they reach the device. PBL continues to operate
+without it, but manual HomeKit/HA turn-ons then retain their original service
+data.
+
 ## Configuration
 
 **Configuration is done entirely in the UI:**
@@ -74,22 +86,37 @@ Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_pre
 2. Click **"+ Add Integration"**
 3. Search for **"Presence Based Lighting"**
 4. Configure your room:
-  - **Room Name**: e.g., "Living Room"
-  - **Trigger Sensors**: Fast motion or presence sensors that should turn entities on
-  - **Clearing Sensors**: Sensors that must all be clear before entities turn off. When configured, these are the clearing authority; trigger-only sensors can turn entities on but do not veto a clear. PBL auto-fills an exact room-level Area Occupancy Detection / Real Last Changed occupancy status when one exists, so raw trigger sensors can turn lights on quickly without being trusted to clear the room. Leave empty to use the trigger sensors for both activation and clearing.
-  - **Global Turn-Off Delay**: Seconds to wait when presence clears
+
+- **Room Name**: e.g., "Living Room"
+- **Trigger Sensors**: Fast motion or presence sensors that should turn entities on
+- **Clearing Sensors**: Sensors that must all be clear before entities turn off. When configured, these are the clearing authority; trigger-only sensors can turn entities on but do not veto a clear. PBL auto-fills an exact room-level Area Occupancy Detection / Real Last Changed occupancy status when one exists, so raw trigger sensors can turn lights on quickly without being trusted to clear the room. Leave empty to use the trigger sensors for both activation and clearing.
+- **Global Turn-Off Delay**: Seconds to wait when presence clears
+
 5. Add entities to control. For each entity:
-  - Select the target entity
-  - Pick services/states for presence detected/cleared (or `No Action`)
-  - Decide whether the entity respects the toggle switch
-  - Decide if external control should pause automation (manual turn-offs always pause actions until the entity is turned back on, even if the Presence Allowed switch is hidden)
-  - Optionally set a per-entity off delay
+
+- Select the target entity
+- Pick services/states for presence detected/cleared (or `No Action`)
+- Decide whether the entity respects the toggle switch
+- Decide if external control should pause automation (manual turn-offs always pause actions until the entity is turned back on, even if the Presence Allowed switch is hidden)
+- For lights, optionally adjust the turn-on brightness (100% by default) and transition (1 second by default)
+- For lights, optionally adjust the turn-off transition (1 second by default)
+- Optionally set a per-entity off delay
+
+Activation-gated entries can also choose how existing occupancy is handled when
+their gate opens:
+
+- **Any occupied trigger** preserves the original catch-up behavior.
+- **Clearing authority occupied** only catches up when the room's authoritative
+  clearing sensor is occupied; trigger-only prelighting still works on a fresh
+  rising edge after the gate is open.
+- **Fresh trigger only** never catches up from already-active sensors.
 
 You can add multiple room configurations - each operates independently.
 
 ## Usage Example
 
 ### Living Room Setup
+
 ```
 Room Name: Living Room
 Presence Sensors: binary_sensor.living_room_motion
@@ -158,12 +185,12 @@ to a bulk burst still `pause` exactly as before.
 
 Per config entry:
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `homekit_batch_mode` | `enforce` | Kill switch: `off`, `observe` (classify and log only), `enforce` |
-| `batch_window_ms` | `250` | Grouping window for same-service HomeKit commands |
-| `batch_retain_seconds` | `10` | How long a context stays resolvable to its batch |
-| `batch_min_distinct_entities` | `8` | Distinct target entities required to call a burst a bulk command |
+| Setting                       | Default   | Purpose                                                          |
+| ----------------------------- | --------- | ---------------------------------------------------------------- |
+| `homekit_batch_mode`          | `enforce` | Kill switch: `off`, `observe` (classify and log only), `enforce` |
+| `batch_window_ms`             | `250`     | Grouping window for same-service HomeKit commands                |
+| `batch_retain_seconds`        | `10`      | How long a context stays resolvable to its batch                 |
+| `batch_min_distinct_entities` | `8`       | Distinct target entities required to call a burst a bulk command |
 
 The observer is domain-wide but settings are per entry, so values are reduced
 deterministically (independently of entry setup order): **mode** takes the least
@@ -178,13 +205,13 @@ mode becomes `off`.
 
 Per controlled entity:
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `honor_external_override` | `true` | Consult entity-scoped overrides recorded by sibling entries |
-| `unknown_source_policy` | `pause` | Policy for external commands that cannot be attributed |
-| `bulk_command_policy` | `rearm_after_clear` | `rearm_after_clear` (Quieted) or `pause` for confirmed whole-home commands |
-| `quieted_max_age` | `14400` | Seconds before a quieted hold is marked stale |
-| `quieted_max_age_action` | `diagnostic` | `diagnostic`, `pause`, or legacy `arm` |
+| Setting                   | Default             | Purpose                                                                    |
+| ------------------------- | ------------------- | -------------------------------------------------------------------------- |
+| `honor_external_override` | `true`              | Consult entity-scoped overrides recorded by sibling entries                |
+| `unknown_source_policy`   | `pause`             | Policy for external commands that cannot be attributed                     |
+| `bulk_command_policy`     | `rearm_after_clear` | `rearm_after_clear` (Quieted) or `pause` for confirmed whole-home commands |
+| `quieted_max_age`         | `14400`             | Seconds before a quieted hold is marked stale                              |
+| `quieted_max_age_action`  | `diagnostic`        | `diagnostic`, `pause`, or legacy `arm`                                     |
 
 ### Entity-scoped overrides and paired profiles
 
@@ -198,6 +225,17 @@ never saw the override and it immediately resurrects the light.
 Explicit per-entry controls — the Presence Allowed switch and `pause_automation`
 targeting a specific PBL switch — remain entry-local. Set `honor_external_override` to
 `false` on an entity to restore the old entry-local behaviour.
+
+### Scheduled auto re-enable
+
+When the configured vacancy threshold is met at the end of the auto-reenable
+window, the reset clears shared non-admin `pause` overrides before resuming and
+reconciling the loaded room profiles. Physical wall-switch, single-accessory
+HomeKit, and batch-derived pauses therefore remain fail-dark until the scheduled
+reset, then release consistently across paired profiles.
+
+Admin-created pauses remain in place until an explicit admin resume. Quieted
+`rearm_after_clear` holds also keep their vacancy-and-next-presence lifecycle.
 
 ### Administrative state service
 

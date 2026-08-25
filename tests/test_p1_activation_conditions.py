@@ -1,6 +1,6 @@
 """Tests for activation conditions feature.
 
-Activation conditions are optional binary_sensor/input_boolean entities that must 
+Activation conditions are optional binary_sensor/input_boolean entities that must
 ALL be on for lights to activate. This enables scenarios like:
 - Only turn on lights when it's dark (lux sensor)
 - Only turn on lights when home (presence state)
@@ -18,7 +18,10 @@ from custom_components.presence_based_lighting import (
     EntityAutomationState,
 )
 from custom_components.presence_based_lighting.const import (
+    ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
+    ACTIVATION_CATCHUP_NONE,
     CONF_ACTIVATION_CONDITIONS,
+    CONF_ACTIVATION_CATCHUP_MODE,
     CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -401,6 +404,21 @@ class TestNoActivationConditions:
 
         assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
 
+    @pytest.mark.asyncio
+    async def test_catchup_mode_does_not_change_gate_free_entries(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        """Catch-up policy only applies when the entry has an activation gate."""
+        mock_config_entry.data[CONF_ACTIVATION_CATCHUP_MODE] = ACTIVATION_CATCHUP_NONE
+        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
+
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
+
 
 class TestActivationConditionOffTimerGuard:
     """Test that activation condition handler respects clearing sensor state.
@@ -505,3 +523,88 @@ class TestActivationConditionOffTimerGuard:
         es = coordinator._entity_states["light.living_room"]
         assert es["state"] == EntityAutomationState.CLEARING
         assert es["off_timer"] is not None, "Off-timer should start when clearing sensors are clear"
+
+    @pytest.mark.asyncio
+    async def test_gate_open_does_not_catch_up_remote_trigger_when_local_clear(
+        self,
+        mock_hass,
+        mock_config_entry_condition_with_clearing,
+    ):
+        """Cross-room catch-up waits for local clearing authority occupancy."""
+        mock_config_entry_condition_with_clearing.data[
+            CONF_ACTIVATION_CATCHUP_MODE
+        ] = ACTIVATION_CATCHUP_CLEARING_AUTHORITY
+        mock_hass.states.set("light.living_room", STATE_OFF)
+        mock_hass.states.set("binary_sensor.motion", STATE_ON)
+        mock_hass.states.set("binary_sensor.occupancy", STATE_OFF)
+        mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)
+        coordinator = PresenceBasedLightingCoordinator(
+            mock_hass,
+            mock_config_entry_condition_with_clearing,
+        )
+        await coordinator.async_start()
+        mock_hass.services.clear()
+
+        await coordinator._handle_activation_condition_change(
+            _event(mock_hass, "binary_sensor.lux_dark", STATE_OFF, STATE_ON)
+        )
+
+        entity_state = coordinator._entity_states["light.living_room"]
+        assert entity_state["state"] == EntityAutomationState.PENDING_ACTIVATION
+        assert_service_not_called(mock_hass, "light", "turn_on")
+
+        await coordinator._periodic_reconciliation(None)
+        assert entity_state["state"] == EntityAutomationState.PENDING_ACTIVATION
+        assert_service_not_called(mock_hass, "light", "turn_on")
+
+    @pytest.mark.asyncio
+    async def test_local_clearing_authority_edge_releases_pending_catchup(
+        self,
+        mock_hass,
+        mock_config_entry_condition_with_clearing,
+    ):
+        """A fresh local occupancy edge still activates a pending entry."""
+        mock_config_entry_condition_with_clearing.data[
+            CONF_ACTIVATION_CATCHUP_MODE
+        ] = ACTIVATION_CATCHUP_CLEARING_AUTHORITY
+        mock_hass.states.set("light.living_room", STATE_OFF)
+        mock_hass.states.set("binary_sensor.motion", STATE_ON)
+        mock_hass.states.set("binary_sensor.occupancy", STATE_OFF)
+        mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)
+        coordinator = PresenceBasedLightingCoordinator(
+            mock_hass,
+            mock_config_entry_condition_with_clearing,
+        )
+        await coordinator.async_start()
+        await coordinator._handle_activation_condition_change(
+            _event(mock_hass, "binary_sensor.lux_dark", STATE_OFF, STATE_ON)
+        )
+        mock_hass.services.clear()
+
+        await coordinator._handle_presence_change(
+            _event(mock_hass, "binary_sensor.occupancy", STATE_OFF, STATE_ON)
+        )
+
+        assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
+
+    @pytest.mark.asyncio
+    async def test_inactive_entry_does_not_clear_shared_light_from_idle(
+        self,
+        mock_hass,
+        mock_config_entry_condition_with_clearing,
+    ):
+        """A gate-closed idle profile must not turn off a shared light."""
+        mock_hass.states.set("light.living_room", STATE_ON)
+        mock_hass.states.set("binary_sensor.motion", STATE_OFF)
+        mock_hass.states.set("binary_sensor.occupancy", STATE_OFF)
+        mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)
+        coordinator = PresenceBasedLightingCoordinator(
+            mock_hass,
+            mock_config_entry_condition_with_clearing,
+        )
+        await coordinator.async_start()
+        mock_hass.services.clear()
+
+        await coordinator._periodic_reconciliation(None)
+
+        assert_service_not_called(mock_hass, "light", "turn_off")

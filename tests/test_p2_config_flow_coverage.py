@@ -35,9 +35,11 @@ from custom_components.presence_based_lighting.config_flow import (
     StateFieldDefaults,
 )
 from custom_components.presence_based_lighting.const import (
+    ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
     AUTOMATION_MODE_AUTOMATIC,
     AUTOMATION_MODE_PRESENCE_LOCK,
     CONF_ACTIVATION_CONDITIONS,
+    CONF_ACTIVATION_CATCHUP_MODE,
     CONF_AUTOMATION_MODE,
     CONF_AUTO_REENABLE_END_TIME,
     CONF_AUTO_REENABLE_PRESENCE_SENSORS,
@@ -51,10 +53,14 @@ from custom_components.presence_based_lighting.const import (
     CONF_FILE_LOGGING_ENABLED,
     CONF_INITIAL_PRESENCE_ALLOWED,
     CONF_MANUAL_DISABLE_STATES,
+    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
     CONF_OFF_DELAY,
     CONF_PRESENCE_CLEARED_SERVICE,
     CONF_PRESENCE_CLEARED_STATE,
+    CONF_PRESENCE_CLEARED_TRANSITION,
+    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
     CONF_PRESENCE_DETECTED_SERVICE,
+    CONF_PRESENCE_DETECTED_TRANSITION,
     CONF_PRESENCE_DETECTED_STATE,
     CONF_PRESENCE_SENSORS,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
@@ -64,15 +70,20 @@ from custom_components.presence_based_lighting.const import (
     CONF_ROOM_NAME,
     CONF_USE_INTERCEPTOR,
     DEFAULT_AUTOMATION_MODE,
+    DEFAULT_ACTIVATION_CATCHUP_MODE,
     DEFAULT_AUTO_REENABLE_END_TIME,
     DEFAULT_AUTO_REENABLE_START_TIME,
     DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
     DEFAULT_CLEARED_SERVICE,
     DEFAULT_CLEARED_STATE,
+    DEFAULT_PRESENCE_CLEARED_TRANSITION,
     DEFAULT_DETECTED_SERVICE,
+    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+    DEFAULT_PRESENCE_DETECTED_TRANSITION,
     DEFAULT_DETECTED_STATE,
     DEFAULT_FILE_LOGGING_ENABLED,
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
+    DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
     DEFAULT_OFF_DELAY,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
@@ -128,6 +139,33 @@ def _make_config_entry(room="Office", entities=None, entry_id="opt_entry"):
         CONF_CONTROLLED_ENTITIES: entities,
     }
     return entry
+
+
+def test_create_entry_payload_preserves_activation_catchup_mode():
+    handler = PresenceBasedLightingFlowHandler()
+    handler._base_data = {
+        CONF_ROOM_NAME: "Office",
+        CONF_PRESENCE_SENSORS: ["binary_sensor.office_motion"],
+        CONF_OFF_DELAY: 10,
+        CONF_ACTIVATION_CATCHUP_MODE: ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
+    }
+    handler._controlled_entities = [_entity_fixture("light.office")]
+
+    payload = handler._create_entry_payload()
+
+    assert (
+        payload[CONF_ACTIVATION_CATCHUP_MODE]
+        == ACTIVATION_CATCHUP_CLEARING_AUTHORITY
+    )
+
+
+def test_options_flow_defaults_activation_catchup_mode():
+    handler = PresenceBasedLightingOptionsFlowHandler(_make_config_entry())
+
+    assert (
+        handler._base_data[CONF_ACTIVATION_CATCHUP_MODE]
+        == DEFAULT_ACTIVATION_CATCHUP_MODE
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -509,12 +547,64 @@ class TestConfigFlowConfigureEntity:
             **_default_configure_input(),
             CONF_RLC_TRACKING_ENTITY: "sensor.rlc_x",
             CONF_ENTITY_OFF_DELAY: 15,
+            CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT: 75,
+            CONF_PRESENCE_DETECTED_TRANSITION: 2.5,
+            CONF_PRESENCE_CLEARED_TRANSITION: 3.5,
         }
         result = await handler.async_step_configure_entity(user_input)
         # Should go to manage_entities
         assert len(handler._controlled_entities) == 1
         assert handler._controlled_entities[0].get(CONF_RLC_TRACKING_ENTITY) == "sensor.rlc_x"
         assert handler._controlled_entities[0].get(CONF_ENTITY_OFF_DELAY) == 15
+        assert (
+            handler._controlled_entities[0][CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT]
+            == 75
+        )
+        assert (
+            handler._controlled_entities[0][CONF_PRESENCE_DETECTED_TRANSITION]
+            == 2.5
+        )
+        assert (
+            handler._controlled_entities[0][CONF_PRESENCE_CLEARED_TRANSITION]
+            == 3.5
+        )
+
+    @pytest.mark.asyncio
+    @patch("custom_components.presence_based_lighting.config_flow._get_services_for_entity", return_value=SERVICE_OPTION_FIXTURE)
+    async def test_light_transition_defaults_to_one_second(self, _mock):
+        handler = PresenceBasedLightingFlowHandler()
+        handler.hass = MagicMock()
+        handler.hass.states.get.return_value = None
+        handler.async_show_form = MagicMock(return_value={"type": "form"})
+        handler._selected_entity_id = "light.x"
+        handler._controlled_entities = []
+        handler._editing_index = None
+        handler._current_entity_config = {}
+        handler._custom_state_ui = {}
+        handler._base_data = {
+            CONF_ROOM_NAME: "R",
+            CONF_PRESENCE_SENSORS: [],
+            CONF_OFF_DELAY: 5,
+        }
+
+        await handler.async_step_configure_entity(_default_configure_input())
+
+        assert (
+            handler._controlled_entities[0][CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT]
+            == DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
+        )
+        assert (
+            handler._controlled_entities[0][CONF_PRESENCE_DETECTED_TRANSITION]
+            == DEFAULT_PRESENCE_DETECTED_TRANSITION
+        )
+        assert (
+            handler._controlled_entities[0][CONF_PRESENCE_CLEARED_TRANSITION]
+            == DEFAULT_PRESENCE_CLEARED_TRANSITION
+        )
+        assert (
+            handler._controlled_entities[0][CONF_NORMALIZE_EXTERNAL_PLAIN_ON]
+            is DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON
+        )
 
     @pytest.mark.asyncio
     @patch("custom_components.presence_based_lighting.config_flow._get_services_for_entity", return_value=SERVICE_OPTION_FIXTURE)

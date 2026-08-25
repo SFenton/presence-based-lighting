@@ -26,11 +26,14 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .command_context import CommandOrigin, get_command_context_registry
-from .batch_observer import get_batch_observer
+from .batch_observer import BlockedCommand, get_batch_observer
 from .external_override import get_external_override_manager
 from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
 	AUTOMATION_MODE_PRESENCE_LOCK,
+	ACTIVATION_CATCHUP_ANY_TRIGGER,
+	ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
+	ACTIVATION_CATCHUP_NONE,
 	AUTOMATION_CONTROL_STATE_ACTIVE,
 	AUTOMATION_CONTROL_STATE_OFF,
 	AUTOMATION_CONTROL_STATE_ON,
@@ -38,6 +41,7 @@ from .const import (
 	AUTOMATION_CONTROL_STATE_QUIETED,
 	BATCH_MODE_OFF,
 	CONF_ACTIVATION_CONDITIONS,
+	CONF_ACTIVATION_CATCHUP_MODE,
 	CONF_AUTOMATION_MODE,
 	CONF_BULK_COMMAND_POLICY,
 	CONF_AUTO_REENABLE_END_TIME,
@@ -55,7 +59,10 @@ from .const import (
 	CONF_OFF_DELAY,
 	CONF_PRESENCE_CLEARED_SERVICE,
 	CONF_PRESENCE_CLEARED_STATE,
+	CONF_PRESENCE_CLEARED_TRANSITION,
+	CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
 	CONF_PRESENCE_DETECTED_SERVICE,
+	CONF_PRESENCE_DETECTED_TRANSITION,
 	CONF_PRESENCE_DETECTED_STATE,
 	CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 	CONF_PRESENCE_SENSORS,
@@ -75,6 +82,7 @@ from .const import (
 	CONF_QUIETED_MAX_AGE_ACTION,
 	CONF_UNKNOWN_SOURCE_POLICY,
 	DEFAULT_AUTOMATION_MODE,
+	DEFAULT_ACTIVATION_CATCHUP_MODE,
 	DEFAULT_BULK_COMMAND_POLICY,
 	DEFAULT_AUTO_REENABLE_END_TIME,
 	DEFAULT_AUTO_REENABLE_START_TIME,
@@ -85,7 +93,10 @@ from .const import (
 	DEFAULT_BATCH_WINDOW_MS,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
+	DEFAULT_PRESENCE_CLEARED_TRANSITION,
 	DEFAULT_DETECTED_SERVICE,
+	DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+	DEFAULT_PRESENCE_DETECTED_TRANSITION,
 	DEFAULT_DETECTED_STATE,
 	DEFAULT_DISABLE_ON_EXTERNAL,
 	DEFAULT_HOMEKIT_BATCH_MODE,
@@ -348,7 +359,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
 	"""Migrate old entry to new version.
-	
+
 	Version 2 -> 3: Add automation_mode derived from legacy boolean toggles.
 	Version 3 -> 4: Add manual_disable_states for automatic mode.
 	Version 4 -> 5: Add presence_sensor_mappings for real_last_changed support.
@@ -372,7 +383,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 		for entity_config in controlled_entities:
 			updated_config = {**entity_config}
-			
+
 			# Only add automation_mode if not already present
 			if CONF_AUTOMATION_MODE not in updated_config:
 				# Derive automation_mode from legacy boolean fields
@@ -382,13 +393,13 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 				require_vacancy = updated_config.get(
 					CONF_REQUIRE_VACANCY_FOR_CLEARED, False
 				)
-				
+
 				# If either presence lock toggle was enabled, use presence_lock mode
 				if require_occupancy or require_vacancy:
 					updated_config[CONF_AUTOMATION_MODE] = AUTOMATION_MODE_PRESENCE_LOCK
 				else:
 					updated_config[CONF_AUTOMATION_MODE] = AUTOMATION_MODE_AUTOMATIC
-				
+
 				# Normalize the legacy booleans based on the mode
 				is_automatic = updated_config[CONF_AUTOMATION_MODE] == AUTOMATION_MODE_AUTOMATIC
 				is_presence_lock = updated_config[CONF_AUTOMATION_MODE] == AUTOMATION_MODE_PRESENCE_LOCK
@@ -416,7 +427,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 		for entity_config in controlled_entities:
 			updated_config = {**entity_config}
-			
+
 			# Add default manual_disable_states if not present
 			if CONF_MANUAL_DISABLE_STATES not in updated_config:
 				updated_config[CONF_MANUAL_DISABLE_STATES] = list(DEFAULT_MANUAL_DISABLE_STATES)
@@ -449,7 +460,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 		new_data = {**config_entry.data}
 		if CONF_ACTIVATION_CONDITIONS not in new_data:
 			new_data[CONF_ACTIVATION_CONDITIONS] = []
-		
+
 		hass.config_entries.async_update_entry(
 			config_entry, data=new_data, version=6
 		)
@@ -469,7 +480,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 			new_data[CONF_AUTO_REENABLE_START_TIME] = DEFAULT_AUTO_REENABLE_START_TIME
 		if CONF_AUTO_REENABLE_END_TIME not in new_data:
 			new_data[CONF_AUTO_REENABLE_END_TIME] = DEFAULT_AUTO_REENABLE_END_TIME
-		
+
 		hass.config_entries.async_update_entry(
 			config_entry, data=new_data, version=7
 		)
@@ -720,7 +731,7 @@ def _schedule_rlc_sensor_migration_retry(hass: HomeAssistant, entry: ConfigEntry
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Set up Presence Based Lighting via the UI."""
-	
+
 	try:
 		_LOGGER.info("Setting up Presence Based Lighting entry: %s", entry.entry_id)
 
@@ -745,7 +756,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 		_LOGGER.debug("Setting up platforms: %s", PLATFORMS)
 		await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-		
+
 		_LOGGER.debug("Starting coordinator for entry: %s", entry.entry_id)
 		await coordinator.async_start()
 
@@ -759,10 +770,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Unload a config entry."""
-	
+
 	try:
 		_LOGGER.info("Unloading Presence Based Lighting entry: %s", entry.entry_id)
-		
+
 		coordinator: PresenceBasedLightingCoordinator = hass.data[DOMAIN][entry.entry_id]
 		coordinator.async_stop()
 
@@ -809,6 +820,8 @@ class PresenceBasedLightingCoordinator:
 		self._override_manager = get_external_override_manager(hass)
 		self._batch_observer = get_batch_observer(hass)
 		self._batch_unsub: Callable[[], None] | None = None
+		self._batch_replay_tasks: set[asyncio.Task] = set()
+		self._paused_state_save_lock = asyncio.Lock()
 		self._interceptor: PresenceLockInterceptor | None = None
 		self._using_interceptor: bool = False
 		self._reconciliation_unsub: Callable[[], None] | None = None
@@ -817,7 +830,7 @@ class PresenceBasedLightingCoordinator:
 		# signal instead of the racy synchronous read during the controlled
 		# entity's own state_changed event.
 		self._rlc_to_entity: Dict[str, str] = {}
-		
+
 		# Auto re-enable feature state
 		self._auto_reenable_enabled: bool = False
 		self._auto_reenable_tracking: Dict[str, Any] = {
@@ -829,7 +842,7 @@ class PresenceBasedLightingCoordinator:
 		}
 		self._auto_reenable_end_time_unsub: Callable[[], None] | None = None
 		self._auto_reenable_start_time_unsub: Callable[[], None] | None = None
-		
+
 		# Parse start/end times from config entry
 		self._auto_reenable_start_time = self._parse_time_string(
 			entry.data.get(CONF_AUTO_REENABLE_START_TIME, DEFAULT_AUTO_REENABLE_START_TIME)
@@ -842,23 +855,23 @@ class PresenceBasedLightingCoordinator:
 			_LOGGER.debug("Initializing coordinator for entry: %s", entry.entry_id)
 			controlled_entities = entry.data.get(CONF_CONTROLLED_ENTITIES, [])
 			_LOGGER.debug("Processing %d controlled entities", len(controlled_entities))
-			
+
 			# Track seen entity IDs to detect duplicates
 			seen_entities = set()
-			
+
 			for idx, entity in enumerate(controlled_entities):
 				entity_id = entity.get(CONF_ENTITY_ID)
 				if not entity_id:
 					_LOGGER.error("Entity at index %d is missing entity_id: %s", idx, entity)
 					continue
-				
+
 				if entity_id in seen_entities:
 					_LOGGER.warning("Duplicate entity_id detected: %s (skipping duplicate)", entity_id)
 					continue
-				
+
 				seen_entities.add(entity_id)
 				_LOGGER.debug("Configuring entity %d: %s with config: %s", idx, entity_id, entity)
-				
+
 				initial_presence_allowed = entity.get(
 					CONF_INITIAL_PRESENCE_ALLOWED, DEFAULT_INITIAL_PRESENCE_ALLOWED
 				)
@@ -877,6 +890,7 @@ class PresenceBasedLightingCoordinator:
 					"state_entered_at": dt_util.utcnow(),
 					"callbacks": set(),
 					"contexts": deque(maxlen=20),
+					"context_targets": {},
 					"off_timer": None,
 					"work_generation": 0,
 					"intent": self._new_entity_intent(),
@@ -904,7 +918,7 @@ class PresenceBasedLightingCoordinator:
 						DEFAULT_QUIETED_MAX_AGE_ACTION,
 					),
 				)
-			
+
 			_LOGGER.info("Coordinator initialized with %d unique entities", len(self._entity_states))
 		except Exception as err:
 			_LOGGER.exception("Error initializing PresenceBasedLightingCoordinator: %s", err)
@@ -971,32 +985,41 @@ class PresenceBasedLightingCoordinator:
 
 	async def async_start(self) -> None:
 		"""Begin tracking sensors and controlled entities."""
-		
+
 		try:
 			_LOGGER.debug("Starting coordinator for entry: %s", self.entry.entry_id)
-			
-			# Set up hass-interceptor for Presence Lock mode (if available)
+
+			# Set up hass-interceptor for normalization and Presence Lock.
 			self._interceptor = PresenceLockInterceptor(
 				self.hass,
 				self.entry,
 				self._is_any_occupied,
 				self._entity_may_enforce_presence_lock,
+				entry_is_active_func=self._entry_is_active,
+				is_clearing_authority_occupied_func=(
+					self._is_clearing_authority_occupied
+				),
+				classify_command_context_func=self._classify_interceptor_command,
+				handle_blocked_command_func=self._handle_blocked_interceptor_command,
 			)
-			self._using_interceptor = self._interceptor.setup()
-			
-			if self._using_interceptor:
+			interceptors_registered = self._interceptor.setup()
+			self._using_interceptor = (
+				self._interceptor.has_presence_lock_interceptors
+			)
+
+			if interceptors_registered:
 				_LOGGER.info(
-					"Using hass-interceptor for Presence Lock mode (proactive blocking)"
+					"Using hass-interceptor for pre-dispatch service handling"
 				)
 			elif is_interceptor_available():
 				_LOGGER.debug(
-					"hass-interceptor available but no presence-lock entities configured"
+					"hass-interceptor available but no eligible entities configured"
 				)
 			else:
 				_LOGGER.debug(
 					"hass-interceptor not installed, using fallback (reactive reversion)"
 				)
-			
+
 			controlled_ids = list(self._entity_states.keys())
 			presence_sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
 			clearing_sensors = self.entry.data.get(CONF_CLEARING_SENSORS, [])
@@ -1007,18 +1030,18 @@ class PresenceBasedLightingCoordinator:
 			):
 				clearing_sensors = legacy_authority_sensors
 			activation_conditions = self.entry.data.get(CONF_ACTIVATION_CONDITIONS, [])
-			
+
 			# Store presence and clearing sensors directly
 			# RLC sensors are handled via their previous_valid_state attribute
 			self._presence_sensors = set(presence_sensors)
 			self._clearing_sensors = set(clearing_sensors) if clearing_sensors else set(presence_sensors)
-			
+
 			# Store activation conditions (optional AND gate for light activation)
 			self._activation_conditions = set(activation_conditions)
-			
+
 			# Combine all sensors for state change tracking
 			all_sensors = list(set(presence_sensors + clearing_sensors))
-			
+
 			# Initialize last_effective_state for RLC-tracked entities
 			# This prevents the first state change event from being treated as a "change"
 			# which would incorrectly trigger manual control logic on startup
@@ -1048,13 +1071,13 @@ class PresenceBasedLightingCoordinator:
 					current = self.hass.states.get(entity_id)
 					if current is not None and not _is_untrusted_state_value(current):
 						entity_state["last_observed_state"] = current.state
-			
-			_LOGGER.debug("Setting up listeners for %d controlled entities: %s", 
+
+			_LOGGER.debug("Setting up listeners for %d controlled entities: %s",
 						 len(controlled_ids), controlled_ids)
-			_LOGGER.debug("Setting up listeners for %d presence sensors: %s", 
+			_LOGGER.debug("Setting up listeners for %d presence sensors: %s",
 						 len(presence_sensors), presence_sensors)
-			_LOGGER.debug("Setting up listeners for %d clearing sensors: %s", 
-						 len(clearing_sensors) if clearing_sensors else len(presence_sensors), 
+			_LOGGER.debug("Setting up listeners for %d clearing sensors: %s",
+						 len(clearing_sensors) if clearing_sensors else len(presence_sensors),
 						 clearing_sensors if clearing_sensors else presence_sensors)
 			if controlled_ids:
 				self._listeners.append(
@@ -1128,11 +1151,10 @@ class PresenceBasedLightingCoordinator:
 				_LOGGER.debug("Bulk command detection disabled by configuration")
 			if self._using_interceptor:
 				_LOGGER.info(
-					"Presence Lock interceptor is active; it blocks conflicting calls "
-					"before bulk classification runs, so whole-home commands are only "
-					"made batch-aware on the non-interceptor (reactive) path"
+					"Presence Lock interceptor is active; early blocked HomeKit batch "
+					"commands will be replayed after batch confirmation"
 				)
-			
+
 			# Register listener for auto-reenable presence sensors
 			auto_reenable_sensors = self.entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, [])
 			if auto_reenable_sensors:
@@ -1145,11 +1167,11 @@ class PresenceBasedLightingCoordinator:
 				)
 				_LOGGER.debug("Registered state change listener for %d auto-reenable sensors: %s",
 							 len(auto_reenable_sensors), auto_reenable_sensors)
-			
-			# Check if we need to continue tracking after a restart
-			await self._check_auto_reenable_startup()
 
 			await self._load_paused_state()
+
+			# Restore persisted suppression before an overdue reset evaluates it.
+			await self._check_auto_reenable_startup()
 
 			# Periodic state reconciliation – safety net that catches any
 			# inconsistency (e.g., missed events, transient sensor blips)
@@ -1164,7 +1186,7 @@ class PresenceBasedLightingCoordinator:
 			for eid, es in self._entity_states.items():
 				if self._presence_switch_allows_entity(es):
 					await self._reconcile_entity(eid, es)
-			
+
 			_LOGGER.info("Coordinator started successfully with %d listeners", len(self._listeners))
 		except Exception as err:
 			_LOGGER.exception("Error starting PresenceBasedLightingCoordinator: %s", err)
@@ -1173,7 +1195,7 @@ class PresenceBasedLightingCoordinator:
 	@callback
 	def async_stop(self) -> None:
 		"""Stop tracking events."""
-		
+
 		try:
 			_LOGGER.debug("Stopping coordinator for entry: %s", self.entry.entry_id)
 
@@ -1193,6 +1215,9 @@ class PresenceBasedLightingCoordinator:
 				self._batch_unsub()
 				self._batch_unsub = None
 			self._batch_observer.unregister_entry(self.entry.entry_id)
+			for task in self._batch_replay_tasks:
+				task.cancel()
+			self._batch_replay_tasks.clear()
 
 			# Cancel auto-reenable schedules
 			self._cancel_auto_reenable_schedules()
@@ -1210,7 +1235,7 @@ class PresenceBasedLightingCoordinator:
 					entity_state["off_timer"] = None
 					cancelled_count += 1
 				self._cancel_entity_actuation(entity_state, "coordinator stopped")
-			
+
 			if cancelled_count > 0:
 				_LOGGER.debug("Cancelled %d per-entity off timers", cancelled_count)
 
@@ -1221,7 +1246,7 @@ class PresenceBasedLightingCoordinator:
 				except Exception as err:
 					_LOGGER.error("Error removing listener: %s", err)
 			self._listeners.clear()
-			
+
 			_LOGGER.info("Coordinator stopped successfully, removed %d listeners", listener_count)
 		except Exception as err:
 			_LOGGER.exception("Error stopping PresenceBasedLightingCoordinator: %s", err)
@@ -1777,6 +1802,57 @@ class PresenceBasedLightingCoordinator:
 		jitter = (stable_hash % (jitter_slots + 1)) / 1000
 		return delay + jitter
 
+	def _build_service_data(
+		self,
+		entity_id: str,
+		entity_state: dict,
+		service_key: str,
+	) -> dict:
+		"""Build typed service data for one PBL-owned action."""
+		config = entity_state["config"]
+		service = config[service_key]
+		service_data = {"entity_id": entity_id}
+		if entity_state["domain"] != "light":
+			return service_data
+
+		if (
+			service_key == CONF_PRESENCE_DETECTED_SERVICE
+			and service == DEFAULT_DETECTED_SERVICE
+		):
+			service_data["brightness_pct"] = config.get(
+				CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+				DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+			)
+			service_data["transition"] = config.get(
+				CONF_PRESENCE_DETECTED_TRANSITION,
+				DEFAULT_PRESENCE_DETECTED_TRANSITION,
+			)
+		elif (
+			service_key == CONF_PRESENCE_CLEARED_SERVICE
+			and service == DEFAULT_CLEARED_SERVICE
+		):
+			try:
+				transition = float(
+					config.get(
+						CONF_PRESENCE_CLEARED_TRANSITION,
+						DEFAULT_PRESENCE_CLEARED_TRANSITION,
+					)
+				)
+			except (TypeError, ValueError):
+				transition = DEFAULT_PRESENCE_CLEARED_TRANSITION
+			if transition > 0:
+				service_data["transition"] = transition
+		return service_data
+
+	@staticmethod
+	def _actuation_confirmation_delay(service_data: dict) -> float:
+		"""Allow configured transitions to settle before checking convergence."""
+		try:
+			transition = float(service_data.get("transition", 0))
+		except (TypeError, ValueError):
+			transition = 0
+		return max(_ACTUATION_CONFIRMATION_SECONDS, transition + 1)
+
 	async def _execute_actuation_confirmation_timer(
 		self, entity_id: str, entity_state: dict, delay: float, generation: int | None = None,
 	) -> None:
@@ -1880,11 +1956,16 @@ class PresenceBasedLightingCoordinator:
 		)
 		dispatch_token = object()
 		actuation["dispatching"] = dispatch_token
+		service_data = self._build_service_data(
+			entity_id,
+			entity_state,
+			service_key,
+		)
 		try:
 			await self.hass.services.async_call(
 				entity_state["domain"],
 				service,
-				{"entity_id": entity_id},
+				service_data,
 				blocking=True,
 				context=context,
 			)
@@ -1917,7 +1998,12 @@ class PresenceBasedLightingCoordinator:
 				actuation["dispatching"] = False
 		_LOGGER.debug("Service call completed for %s", entity_id)
 		if self._entity_work_generation_matches(entity_id, entity_state, generation, "actuation confirmation scheduling"):
-			self._schedule_actuation_timer(entity_id, entity_state, _ACTUATION_CONFIRMATION_SECONDS, retry=False)
+			self._schedule_actuation_timer(
+				entity_id,
+				entity_state,
+				self._actuation_confirmation_delay(service_data),
+				retry=False,
+			)
 
 	async def _handle_actuation_feedback(
 		self, entity_id: str, entity_state: dict, observed_state: str,
@@ -2282,7 +2368,7 @@ class PresenceBasedLightingCoordinator:
 		source: str = "service",
 	) -> None:
 		"""Transition to/from PAUSED state (transient, based on manual control).
-		
+
 		This is separate from presence_allowed:
 		- presence_allowed: User-controlled, persisted across reboots
 		- PAUSED state: Automatic, transient, based on manual_disable_states
@@ -2290,13 +2376,13 @@ class PresenceBasedLightingCoordinator:
 		entity_state = self._entity_states[entity_id]
 		current_state = entity_state["state"]
 		is_paused = current_state == EntityAutomationState.PAUSED
-		
+
 		if is_paused == paused:
 			if paused:
 				entity_state["pause"] = self._build_pause_metadata(entity_id, entity_state, reason, source)
 				self._schedule_paused_state_save()
 			return
-		
+
 		if paused:
 			self._bump_entity_work_generation(entity_state, reason)
 			self._cancel_entity_timer(entity_state)
@@ -2365,62 +2451,64 @@ class PresenceBasedLightingCoordinator:
 
 	async def _save_paused_state(self) -> None:
 		"""Persist manually paused and quieted entities for restart recovery."""
-		try:
-			paused_entities = [
-				entity_id
-				for entity_id, entity_state in self._entity_states.items()
-				if entity_state["state"] == EntityAutomationState.PAUSED
-			]
-			quieted_entities = [
-				entity_id
-				for entity_id, entity_state in self._entity_states.items()
-				if entity_state["state"] == EntityAutomationState.QUIETED
-			]
-			override_entities = [
-				entity_id
-				for entity_id in self._entity_states
-				if self._override_manager.get(entity_id) is not None
-			]
-			path = self._get_paused_persistence_path()
+		async with self._paused_state_save_lock:
+			try:
+				paused_entities = [
+					entity_id
+					for entity_id, entity_state in self._entity_states.items()
+					if entity_state["state"] == EntityAutomationState.PAUSED
+				]
+				quieted_entities = [
+					entity_id
+					for entity_id, entity_state in self._entity_states.items()
+					if entity_state["state"] == EntityAutomationState.QUIETED
+				]
+				override_entities = [
+					entity_id
+					for entity_id in self._entity_states
+					if self._override_manager.get(entity_id) is not None
+				]
+				path = self._get_paused_persistence_path()
 
-			if not paused_entities and not quieted_entities and not override_entities:
-				if path.exists():
-					await self.hass.async_add_executor_job(path.unlink)
-				return
-
-			data = {
-				"paused_entities": paused_entities,
-				"paused": {
-					entity_id: (
-						self._entity_states[entity_id].get("pause")
-						or self._build_pause_metadata(
-							entity_id,
-							self._entity_states[entity_id],
-							"pause persisted",
-							"legacy",
-						)
+				if not paused_entities and not quieted_entities and not override_entities:
+					await self.hass.async_add_executor_job(
+						lambda: path.unlink(missing_ok=True)
 					)
-					for entity_id in paused_entities
-				},
-				"saved_at": dt_util.utcnow().isoformat(),
-			}
-			if override_entities:
-				data["external_overrides"] = {
-					entity_id: self._override_persistence_payload(entity_id)
-					for entity_id in override_entities
+					return
+
+				data = {
+					"paused_entities": paused_entities,
+					"paused": {
+						entity_id: (
+							self._entity_states[entity_id].get("pause")
+							or self._build_pause_metadata(
+								entity_id,
+								self._entity_states[entity_id],
+								"pause persisted",
+								"legacy",
+							)
+						)
+						for entity_id in paused_entities
+					},
+					"saved_at": dt_util.utcnow().isoformat(),
 				}
-			if quieted_entities:
-				data["quieted_entities"] = quieted_entities
-				data["quieted"] = {
-					entity_id: self._override_persistence_payload(entity_id)
-					for entity_id in quieted_entities
-				}
-			await self.hass.async_add_executor_job(
-				lambda: path.write_text(json.dumps(data))
-			)
-			_LOGGER.debug("Saved manual pause state: %s", data)
-		except Exception as err:
-			_LOGGER.exception("Failed to save manual pause state: %s", err)
+				if override_entities:
+					data["external_overrides"] = {
+						entity_id: self._override_persistence_payload(entity_id)
+						for entity_id in override_entities
+					}
+				if quieted_entities:
+					data["quieted_entities"] = quieted_entities
+					data["quieted"] = {
+						entity_id: self._override_persistence_payload(entity_id)
+						for entity_id in quieted_entities
+					}
+				await self.hass.async_add_executor_job(
+					lambda: path.write_text(json.dumps(data))
+				)
+				_LOGGER.debug("Saved manual pause state: %s", data)
+			except Exception as err:
+				_LOGGER.exception("Failed to save manual pause state: %s", err)
 
 	async def _load_paused_state(self) -> None:
 		"""Restore manually paused entities from storage."""
@@ -2566,16 +2654,39 @@ class PresenceBasedLightingCoordinator:
 
 			service = event.data.get("service")
 			expanded_entities = self._expand_target_entities(target)
+			direct_targets = set(as_entity_list(target))
 
 			for entity_id in expanded_entities:
+				entity_state = self._entity_states[entity_id]
+				config = entity_state["config"]
+				expected_target_state = None
+				if service == config.get(CONF_PRESENCE_DETECTED_SERVICE):
+					expected_target_state = config.get(CONF_PRESENCE_DETECTED_STATE)
+				elif service == config.get(CONF_PRESENCE_CLEARED_SERVICE):
+					expected_target_state = config.get(CONF_PRESENCE_CLEARED_STATE)
 				origin = self._classify_command_context(
 					entity_id,
 					event.context,
 					include_parent=True,
+					expected_target_state=expected_target_state,
 				)
 				if origin != CommandOrigin.EXTERNAL:
 					continue
-				await self._handle_external_action(entity_id, service, event.context)
+				if expected_target_state == config.get(CONF_PRESENCE_DETECTED_STATE):
+					self._batch_observer.cancel_blocked_commands(entity_id)
+				await self._handle_external_action(
+					entity_id,
+					service,
+					event.context,
+					interceptor_handles_direct_target=(
+						entity_id in direct_targets
+						and self._interceptor is not None
+						and self._interceptor.handles_presence_lock(
+							entity_id,
+							service,
+						)
+					),
+				)
 		except Exception as err:
 			_LOGGER.exception("Error handling service call event: %s", err)
 
@@ -2843,9 +2954,35 @@ class PresenceBasedLightingCoordinator:
 				return  # Presence lock handled the state change
 
 		if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
+			if entity_state["state"] == EntityAutomationState.QUIETED:
+				return
+			if await self._ensure_external_detected_action_expires(
+				entity_id,
+				entity_state,
+				effective_new_state,
+			):
+				return
+			if self._hold_allowed_presence_lock_clear(
+				entity_id,
+				entity_state,
+				effective_new_state,
+				context,
+				resolved,
+			):
+				return
+			self._adopt_external_action_in_flight(
+				entity_id,
+				entity_state,
+				effective_new_state,
+			)
 			return
 
 		if not self._presence_switch_allows_entity(entity_state):
+			return
+		if (
+			entity_state["state"] == EntityAutomationState.QUIETED
+			and effective_new_state == cfg[CONF_PRESENCE_CLEARED_STATE]
+		):
 			return
 
 		# Determine whether this external change should pause or resume automation
@@ -2873,7 +3010,15 @@ class PresenceBasedLightingCoordinator:
 				source="external_state",
 			)
 			if await self._ensure_external_detected_action_expires(
-				entity_id, entity_state, effective_new_state
+				entity_id,
+				entity_state,
+				effective_new_state,
+			):
+				return
+			if self._adopt_external_action_in_flight(
+				entity_id,
+				entity_state,
+				effective_new_state,
 			):
 				return
 			# Reconcile into the correct active state
@@ -2881,7 +3026,12 @@ class PresenceBasedLightingCoordinator:
 
 
 	async def _handle_external_action(
-		self, entity_id: str, service: str | None, context: Context | None = None,
+		self,
+		entity_id: str,
+		service: str | None,
+		context: Context | None = None,
+		*,
+		interceptor_handles_direct_target: bool = False,
 	) -> None:
 		entity_state = self._entity_states[entity_id]
 		cfg = entity_state["config"]
@@ -2893,7 +3043,7 @@ class PresenceBasedLightingCoordinator:
 			target_state = cfg[CONF_PRESENCE_DETECTED_STATE]
 		elif service == cfg[CONF_PRESENCE_CLEARED_SERVICE]:
 			target_state = cfg[CONF_PRESENCE_CLEARED_STATE]
-		
+
 		if target_state and self._presence_lock_should_yield_to_manual_override(
 			entity_state, target_state,
 		):
@@ -2907,6 +3057,10 @@ class PresenceBasedLightingCoordinator:
 		if (
 			not is_bulk
 			and target_state
+			and not (
+				self._using_interceptor
+				and interceptor_handles_direct_target
+			)
 			and await self._check_and_apply_presence_lock(
 				entity_state, target_state, force_fallback=True
 			)
@@ -2914,9 +3068,33 @@ class PresenceBasedLightingCoordinator:
 			return  # Presence lock handled the state change
 
 		if not cfg[CONF_DISABLE_ON_EXTERNAL_CONTROL]:
+			if await self._ensure_external_detected_action_expires(
+				entity_id,
+				entity_state,
+				target_state,
+			):
+				return
+			if self._hold_allowed_presence_lock_clear(
+				entity_id,
+				entity_state,
+				target_state,
+				context,
+				resolved,
+			):
+				return
+			self._adopt_external_action_in_flight(
+				entity_id,
+				entity_state,
+				target_state,
+			)
 			return
 
 		if not self._presence_switch_allows_entity(entity_state):
+			return
+		if (
+			entity_state["state"] == EntityAutomationState.QUIETED
+			and target_state == cfg[CONF_PRESENCE_CLEARED_STATE]
+		):
 			return
 
 		# Determine whether this external action should pause or resume automation
@@ -2945,10 +3123,60 @@ class PresenceBasedLightingCoordinator:
 				source="external_service",
 			)
 			if await self._ensure_external_detected_action_expires(
-				entity_id, entity_state, target_state
+				entity_id,
+				entity_state,
+				target_state,
+			):
+				return
+			if self._adopt_external_action_in_flight(
+				entity_id,
+				entity_state,
+				target_state,
 			):
 				return
 			await self._reconcile_entity(entity_id, entity_state)
+
+	def _hold_allowed_presence_lock_clear(
+		self,
+		entity_id: str,
+		entity_state: dict,
+		target_state: str | None,
+		context: Context | None,
+		resolved: tuple[str, str, Any],
+	) -> bool:
+		"""Keep an allowed external clear dark until a fresh presence edge."""
+		config = entity_state["config"]
+		if target_state != config[CONF_PRESENCE_CLEARED_STATE]:
+			return False
+		if (
+			not self._presence_lock_enabled(entity_state)
+			or self._is_clearing_authority_occupied()
+		):
+			return False
+		if self._resolved_policy_is_confirmed_bulk(resolved):
+			return False
+
+		source, _policy, decision = resolved
+		policy = self._apply_external_policy(
+			entity_id,
+			entity_state,
+			context,
+			"external clear accepted by clearing authority",
+			resolved=(
+				source,
+				EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+				decision,
+			),
+		)
+		if (
+			policy == EXTERNAL_POLICY_REARM_AFTER_CLEAR
+			and self._can_clear_room()
+		):
+			self._override_manager.arm_rearm_latch(
+				entity_id,
+				"already clear at external clear",
+			)
+		return True
 
 	def _get_trusted_effective_controlled_state(self, entity_state: dict) -> str | None:
 		cfg = entity_state["config"]
@@ -3049,20 +3277,80 @@ class PresenceBasedLightingCoordinator:
 		await self._start_entity_off_timer(entity_id, entity_state)
 		return True
 
+	def _adopt_external_action_in_flight(
+		self,
+		entity_id: str,
+		entity_state: dict,
+		target_state: str | None,
+	) -> bool:
+		"""Adopt a compatible external command without racing its state update."""
+		config = entity_state["config"]
+		if not self._entry_is_active():
+			return False
+
+		if target_state == config[CONF_PRESENCE_DETECTED_STATE]:
+			if not self._is_any_occupied() or not self._are_activation_conditions_met():
+				return False
+			desired = DesiredState.DETECTED
+			service_key = CONF_PRESENCE_DETECTED_SERVICE
+			reason = IntentReason.PRESENCE
+			state = EntityAutomationState.OCCUPIED
+		elif target_state == config[CONF_PRESENCE_CLEARED_STATE]:
+			if not self._can_clear_room():
+				return False
+			if self._ownership_manager.other_entry_wants_on(
+				self.entry.entry_id,
+				entity_id,
+			):
+				return False
+			desired = DesiredState.CLEARED
+			service_key = CONF_PRESENCE_CLEARED_SERVICE
+			reason = IntentReason.CLEARING
+			state = EntityAutomationState.IDLE
+		else:
+			return False
+
+		self._cancel_entity_timer(entity_state)
+		self._cancel_entity_actuation(
+			entity_state,
+			"external action in flight",
+		)
+		self._set_entity_state(
+			entity_id,
+			entity_state,
+			state,
+			"external action in flight",
+		)
+		self._set_entity_intent(
+			entity_id,
+			entity_state,
+			desired,
+			service_key,
+			target_state,
+			reason,
+			True,
+		)
+		_LOGGER.debug(
+			"[%s] External action toward %s is in flight; deferring reconciliation",
+			entity_id,
+			target_state,
+		)
+		return True
+
 	async def _check_and_apply_presence_lock(
 		self, entity_state: dict, new_state: str, force_fallback: bool = False
 	) -> bool:
 		"""Check presence lock conditions and revert state if needed.
-		
+
 		Returns True if a presence lock was triggered and the state was reverted.
-		
+
 		When hass-interceptor is active, this is a fallback that should rarely
 		trigger (interceptor blocks proactively). When not active, this is the
 		primary mechanism that reverts state reactively after it changes.
 		"""
 		cfg = entity_state["config"]
 		entity_id = cfg[CONF_ENTITY_ID]
-		
+
 		require_occ = cfg.get(CONF_REQUIRE_OCCUPANCY_FOR_DETECTED, DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED)
 		require_vac = cfg.get(CONF_REQUIRE_VACANCY_FOR_CLEARED, DEFAULT_REQUIRE_VACANCY_FOR_CLEARED)
 
@@ -3086,21 +3374,29 @@ class PresenceBasedLightingCoordinator:
 				new_state,
 			)
 			return False
-		
+
 		# If entity is being turned ON (detected state) but room is empty and lock is enabled
 		if new_state == cfg[CONF_PRESENCE_DETECTED_STATE] and require_occ and not self._is_any_occupied():
 			_LOGGER.debug("Presence lock (fallback): reverting %s to cleared state (room is empty)", entity_id)
 			# Force the reversion without checking current state (since the triggering action may still be in progress)
 			await self._force_apply_action(entity_state, CONF_PRESENCE_CLEARED_SERVICE)
 			return True
-		
+
 		# If entity is being turned OFF (cleared state) but room is occupied and lock is enabled
-		if new_state == cfg[CONF_PRESENCE_CLEARED_STATE] and require_vac and self._is_any_occupied():
-			_LOGGER.debug("Presence lock (fallback): reverting %s to detected state (room is occupied)", entity_id)
+		if (
+			new_state == cfg[CONF_PRESENCE_CLEARED_STATE]
+			and require_vac
+			and self._is_clearing_authority_occupied()
+		):
+			_LOGGER.debug(
+				"Presence lock (fallback): reverting %s to detected state "
+				"(clearing authority occupied)",
+				entity_id,
+			)
 			# Force the reversion without checking current state (since the triggering action may still be in progress)
 			await self._force_apply_action(entity_state, CONF_PRESENCE_DETECTED_SERVICE)
 			return True
-		
+
 		return False
 
 	async def _force_apply_action(self, entity_state: dict, service_key: str) -> None:
@@ -3124,11 +3420,11 @@ class PresenceBasedLightingCoordinator:
 
 	async def _handle_presence_change(self, event: Event) -> None:
 		"""Handle state changes on presence and clearing sensors.
-		
+
 		For real_last_changed sensors, the state is a timestamp that changes when
 		the source entity changes. We read the previous_valid_state attribute to
 		determine if the source is now on or off.
-		
+
 		For regular binary sensors, we use the state directly.
 		"""
 		try:
@@ -3142,20 +3438,20 @@ class PresenceBasedLightingCoordinator:
 			# We need to check previous_valid_state attribute for actual on/off
 			# Pass the state object so we can detect RLC by attribute presence
 			is_rlc = is_real_last_changed_entity(entity_id, new_state)
-			
+
 			if is_rlc:
 				# For RLC sensors, compare the previous_valid_state attribute
 				# The state itself is a timestamp, so we look at the attribute
 				old_effective = old_state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
 				new_effective = new_state.attributes.get(ATTR_PREVIOUS_VALID_STATE)
-				
+
 				# Skip if the effective state didn't actually change
 				if old_effective == new_effective:
-					_LOGGER.debug("RLC sensor %s timestamp changed but previous_valid_state unchanged (%s)", 
+					_LOGGER.debug("RLC sensor %s timestamp changed but previous_valid_state unchanged (%s)",
 								 entity_id, new_effective)
 					return
-				
-				_LOGGER.debug("RLC sensor %s previous_valid_state changed: %s -> %s", 
+
+				_LOGGER.debug("RLC sensor %s previous_valid_state changed: %s -> %s",
 							 entity_id, old_effective, new_effective)
 				if new_effective not in _BINARY_EFFECTIVE_STATES:
 					_LOGGER.warning(
@@ -3180,12 +3476,12 @@ class PresenceBasedLightingCoordinator:
 					return
 				currently_on = new_state.state == STATE_ON
 				currently_off = new_state.state == STATE_OFF
-				_LOGGER.debug("Presence change detected on %s: %s -> %s", 
+				_LOGGER.debug("Presence change detected on %s: %s -> %s",
 							 entity_id, old_state.state, new_state.state)
 
 			presence_sensors = getattr(self, '_presence_sensors', set())
 			clearing_sensors = getattr(self, '_clearing_sensors', set())
-			
+
 			# --- Presence sensor turns ON ---
 			if currently_on and entity_id in presence_sensors:
 				_LOGGER.debug("Presence detected via %s", entity_id)
@@ -3230,6 +3526,7 @@ class PresenceBasedLightingCoordinator:
 						EntityAutomationState.CLEARING,
 						EntityAutomationState.WAITING_FOR_CLEAR,
 						EntityAutomationState.SETTLING_OFF,
+						EntityAutomationState.PENDING_ACTIVATION,
 					):
 						self._cancel_entity_timer(es)
 						self._cancel_entity_actuation(es, "clearing sensor occupied")
@@ -3292,12 +3589,12 @@ class PresenceBasedLightingCoordinator:
 			entity_id = event.data.get("entity_id")
 			new_state = event.data.get("new_state")
 			old_state = event.data.get("old_state")
-			
+
 			if not new_state or not old_state:
 				return
 			if new_state.state == old_state.state:
 				return
-			
+
 			_LOGGER.debug(
 				"Activation condition %s changed: %s -> %s",
 				entity_id, old_state.state, new_state.state
@@ -3353,7 +3650,7 @@ class PresenceBasedLightingCoordinator:
 						# inactive entry must never retain shared on-ownership.
 						self._publish_ownership(eid, es)
 				return
-			
+
 			# Transition PENDING_ACTIVATION entities to OCCUPIED
 			for eid, es in self._entity_states.items():
 				self._publish_ownership(eid, es)
@@ -3361,7 +3658,7 @@ class PresenceBasedLightingCoordinator:
 					continue
 				if (
 					es["state"] == EntityAutomationState.PENDING_ACTIVATION
-					and self._is_any_occupied()
+					and self._activation_catchup_allowed()
 				):
 					_LOGGER.debug(
 						"Activation conditions now met – transitioning %s from PENDING to OCCUPIED", eid
@@ -3369,7 +3666,7 @@ class PresenceBasedLightingCoordinator:
 					self._cancel_entity_timer(es)
 					self._set_entity_state(eid, es, EntityAutomationState.OCCUPIED, "activation conditions met")
 					await self._apply_service_intent(eid, es, CONF_PRESENCE_DETECTED_SERVICE, IntentReason.CONDITIONS)
-			
+
 			# Start off-timer for newly-OCCUPIED entities ONLY if clear
 			# conditions are already met (same primer-sensor guard as in
 			# _handle_presence_change).
@@ -3380,14 +3677,14 @@ class PresenceBasedLightingCoordinator:
 
 	async def _apply_presence_action(self, service_key: str) -> None:
 		"""Apply presence action to all controlled entities that should follow presence.
-		
+
 		Note: With the state machine, most per-entity transitions are handled
 		inline by the event handlers. This helper remains for bulk operations
 		(e.g., auto-reenable) where we want to apply an action to all eligible entities.
 		"""
-		_LOGGER.debug("Applying presence action %s to %d entities: %s", 
+		_LOGGER.debug("Applying presence action %s to %d entities: %s",
 					 service_key, len(self._entity_states), list(self._entity_states.keys()))
-		
+
 		for entity_id, entity_state in self._entity_states.items():
 			entity_id = entity_state["config"].get(CONF_ENTITY_ID, "unknown")
 			if not self._should_follow_presence(entity_state):
@@ -3414,7 +3711,7 @@ class PresenceBasedLightingCoordinator:
 
 	def _should_follow_presence(self, entity_state: dict) -> bool:
 		"""Check if automation should apply to this entity.
-		
+
 		Returns True if presence automation should affect this entity.
 		Requires both:
 		- presence_allowed: User-controlled toggle (persisted across reboots)
@@ -3432,7 +3729,13 @@ class PresenceBasedLightingCoordinator:
 		target_state: str | None,
 	) -> None:
 		"""Register a PBL command before dispatching its service call."""
-		self._entity_states[entity_id]["contexts"].append(context.id)
+		entity_state = self._entity_states[entity_id]
+		contexts = entity_state["contexts"]
+		context_targets = entity_state["context_targets"]
+		if contexts.maxlen and len(contexts) == contexts.maxlen:
+			context_targets.pop(contexts[0], None)
+		contexts.append(context.id)
+		context_targets[context.id] = target_state
 		self._command_context_registry.register(
 			context.id,
 			self.entry.entry_id,
@@ -3446,6 +3749,7 @@ class PresenceBasedLightingCoordinator:
 		context: Context | None,
 		*,
 		include_parent: bool,
+		expected_target_state: str | None = None,
 	) -> CommandOrigin:
 		"""Classify a command context across all PBL config entries."""
 		origin = self._command_context_registry.classify(
@@ -3453,18 +3757,48 @@ class PresenceBasedLightingCoordinator:
 			entity_id,
 			context,
 			include_parent=include_parent,
+			expected_target_state=expected_target_state,
 		)
 		if origin != CommandOrigin.EXTERNAL or context is None:
 			return origin
 
-		context_ids = self._entity_states[entity_id]["contexts"]
+		entity_state = self._entity_states[entity_id]
+		context_ids = entity_state["contexts"]
+		context_targets = entity_state["context_targets"]
 		context_id = getattr(context, "id", None)
 		parent_id = getattr(context, "parent_id", None)
-		if context_id in context_ids:
+		if (
+			context_id in context_ids
+			and (
+				expected_target_state is None
+				or context_targets.get(context_id) == expected_target_state
+			)
+		):
 			return CommandOrigin.OWN
-		if include_parent and parent_id in context_ids:
+		if (
+			include_parent
+			and parent_id in context_ids
+			and (
+				expected_target_state is None
+				or context_targets.get(parent_id) == expected_target_state
+			)
+		):
 			return CommandOrigin.OWN
 		return CommandOrigin.EXTERNAL
+
+	def _classify_interceptor_command(
+		self,
+		entity_id: str,
+		context: Context | None,
+		target_state: str | None,
+	) -> CommandOrigin:
+		"""Classify one intercepted command for its protected entity."""
+		return self._classify_command_context(
+			entity_id,
+			context,
+			include_parent=True,
+			expected_target_state=target_state,
+		)
 
 	def _is_context_ours(self, entity_id: str, context: Context | None) -> bool:
 		return (
@@ -3686,6 +4020,40 @@ class PresenceBasedLightingCoordinator:
 		"""Clear the entity-scoped override shared by every controlling entry."""
 		self._override_manager.clear(entity_id, reason)
 
+	def _loaded_controllers_for_entity(
+		self,
+		entity_id: str,
+	) -> list[PresenceBasedLightingCoordinator]:
+		"""Return loaded coordinators controlling an entity in stable order."""
+		controllers = {self.entry.entry_id: self}
+		domain_data = self.hass.data.get(DOMAIN, {})
+		for entry_id in self._override_manager.entries_for(entity_id):
+			candidate = domain_data.get(entry_id)
+			if (
+				isinstance(candidate, PresenceBasedLightingCoordinator)
+				and entity_id in candidate._entity_states
+			):
+				controllers[entry_id] = candidate
+		return [controllers[entry_id] for entry_id in sorted(controllers)]
+
+	def _clear_scheduled_reset_override(self, entity_id: str) -> bool:
+		"""Clear a non-admin PAUSE at the scheduled auto-reenable reset."""
+		record = self._override_manager.get(entity_id)
+		if record is None or not record.is_paused or record.source == SOURCE_ADMIN:
+			return False
+
+		_LOGGER.info(
+			"Scheduled reset releasing shared pause on %s (source=%s): %s",
+			entity_id,
+			record.source,
+			record.reason,
+		)
+		self._clear_external_override(
+			entity_id,
+			"scheduled auto re-enable reset",
+		)
+		return True
+
 	def _handle_external_override_changed(self, entity_id: str) -> None:
 		"""Sync local automation state to the entity-scoped override record.
 
@@ -3883,9 +4251,85 @@ class PresenceBasedLightingCoordinator:
 					"confirmed bulk command",
 				)
 
+		blocked_commands = self._batch_observer.pop_blocked_for_batch(
+			batch.batch_id,
+			set(self._entity_states),
+		)
+		if blocked_commands:
+			task = asyncio.create_task(
+				self._replay_blocked_batch_commands(blocked_commands)
+			)
+			self._batch_replay_tasks.add(task)
+			task.add_done_callback(self._batch_replay_tasks.discard)
+
+	def _handle_blocked_interceptor_command(
+		self,
+		entity_id: str,
+		service: str,
+		context: Context | None,
+		data: dict,
+	) -> bool:
+		"""Record a blocked external OFF for possible whole-home replay."""
+		service_data = {"entity_id": entity_id}
+		params = data.get("params")
+		if isinstance(params, dict):
+			service_data.update(params)
+		else:
+			service_data.update(
+				{
+					key: value
+					for key, value in data.items()
+					if key != "entity_id"
+				}
+			)
+		target_state = self._entity_states[entity_id]["config"].get(
+			CONF_PRESENCE_CLEARED_STATE,
+			DEFAULT_CLEARED_STATE,
+		)
+		return self._batch_observer.record_blocked_command(
+			getattr(context, "id", None),
+			entity_id,
+			entity_id.split(".", 1)[0],
+			service,
+			target_state,
+			service_data,
+		)
+
+	async def _replay_blocked_batch_commands(
+		self,
+		commands: list[BlockedCommand],
+	) -> None:
+		"""Replay early blocked HomeKit batch commands exactly once."""
+		await asyncio.sleep(0)
+		for command in commands:
+			current = self.hass.states.get(command.entity_id)
+			if current is not None and current.state == command.target_state:
+				continue
+			context = Context(parent_id=command.context_id)
+			self._register_command_context(
+				command.entity_id,
+				context,
+				command.target_state,
+			)
+			try:
+				await self.hass.services.async_call(
+					command.domain,
+					command.service,
+					command.service_data,
+					blocking=True,
+					context=context,
+				)
+			except Exception as err:
+				_LOGGER.warning(
+					"[%s] Failed to replay confirmed bulk %s: %s",
+					command.entity_id,
+					command.service,
+					err,
+				)
+
 	def _is_any_occupied(self) -> bool:
 		"""Check if any presence sensor is occupied (on).
-		
+
 		Uses is_entity_on() helper which handles real_last_changed sensors
 		by reading their previous_valid_state attribute.
 		"""
@@ -3898,7 +4342,7 @@ class PresenceBasedLightingCoordinator:
 
 	def _are_clearing_sensors_clear(self) -> bool:
 		"""Check if all clearing sensors report off (unoccupied).
-		
+
 		Uses is_entity_off() helper which handles real_last_changed sensors
 		by reading their previous_valid_state attribute.
 		"""
@@ -3912,7 +4356,7 @@ class PresenceBasedLightingCoordinator:
 					if effective != "off":
 						_LOGGER.debug("Clearing sensor %s not clear: effective_state=%s", sensor, effective)
 			return result
-		
+
 		# Fallback: check if clearing sensors are configured
 		clearing = self.entry.data.get(CONF_CLEARING_SENSORS, [])
 		if clearing:
@@ -3923,7 +4367,7 @@ class PresenceBasedLightingCoordinator:
 					if effective != "off":
 						_LOGGER.debug("Clearing sensor %s not clear: effective_state=%s", sensor, effective)
 			return result
-		
+
 		# No clearing sensors configured - fall back to presence sensors
 		presence = getattr(self, '_presence_sensors', None)
 		if presence:
@@ -3934,14 +4378,38 @@ class PresenceBasedLightingCoordinator:
 					if effective != "off":
 						_LOGGER.debug("Presence sensor (as clearing) %s not clear: effective_state=%s", sensor, effective)
 			return result
-		
+
 		# Last fallback to original presence sensors
 		presence = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
 		return all(is_entity_off(self.hass, sensor) for sensor in presence)
 
+	def _is_clearing_authority_occupied(self) -> bool:
+		"""Return true only with positive occupied evidence from clear sensors."""
+		clearing = getattr(self, "_clearing_sensors", None)
+		if not clearing:
+			clearing = set(
+				self.entry.data.get(CONF_CLEARING_SENSORS, [])
+				or self.entry.data.get(CONF_PRESENCE_SENSORS, [])
+			)
+		return any(is_entity_on(self.hass, sensor) for sensor in clearing)
+
 	def _can_clear_room(self) -> bool:
 		"""Return true when the configured clearing sensors say the room is clear."""
 		return self._are_clearing_sensors_clear()
+
+	def _activation_catchup_allowed(self) -> bool:
+		"""Return whether existing occupancy may activate after a gate opens."""
+		if not self.entry.data.get(CONF_ACTIVATION_CONDITIONS):
+			return self._is_any_occupied()
+		mode = self.entry.data.get(
+			CONF_ACTIVATION_CATCHUP_MODE,
+			DEFAULT_ACTIVATION_CATCHUP_MODE,
+		)
+		if mode == ACTIVATION_CATCHUP_NONE:
+			return False
+		if mode == ACTIVATION_CATCHUP_CLEARING_AUTHORITY:
+			return not self._are_clearing_sensors_clear()
+		return mode == ACTIVATION_CATCHUP_ANY_TRIGGER and self._is_any_occupied()
 
 	def _entry_is_active(self) -> bool:
 		"""Return whether this config entry's activation gate is open."""
@@ -3949,7 +4417,7 @@ class PresenceBasedLightingCoordinator:
 
 	def _are_activation_conditions_met(self) -> bool:
 		"""Check if all activation conditions are satisfied (AND gate).
-		
+
 		If no activation conditions are configured, returns True (always allow).
 		If any activation condition is off/false, returns False.
 		All conditions must be on/true for lights to activate.
@@ -3960,7 +4428,7 @@ class PresenceBasedLightingCoordinator:
 		if not conditions:
 			# No conditions configured - always allow activation
 			return True
-		
+
 		for condition in conditions:
 			state = self.hass.states.get(condition)
 			if not state or state.state != STATE_ON:
@@ -3969,7 +4437,7 @@ class PresenceBasedLightingCoordinator:
 					condition, state.state if state else "unavailable"
 				)
 				return False
-		
+
 		return True
 
 	async def _start_off_timer(self) -> None:
@@ -4018,7 +4486,7 @@ class PresenceBasedLightingCoordinator:
 		self, entity_id: str, entity_state: dict, delay: int, generation: int | None = None,
 	) -> None:
 		"""Execute the off timer for a specific entity.
-		
+
 		When timer fires:
 		- If clear conditions are met → transition to IDLE (turn off)
 		- If not clear → transition to WAITING_FOR_CLEAR (event-driven recovery)
@@ -4211,6 +4679,34 @@ class PresenceBasedLightingCoordinator:
 
 		if occupied and conditions_met:
 			if cur not in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING, EntityAutomationState.SETTLING_ON):
+				if (
+					cur in (
+						EntityAutomationState.IDLE,
+						EntityAutomationState.PENDING_ACTIVATION,
+					)
+					and not self._activation_catchup_allowed()
+				):
+					self._cancel_entity_timer(entity_state)
+					self._cancel_entity_actuation(
+						entity_state,
+						"activation catch-up suppressed",
+					)
+					self._set_entity_state(
+						entity_id,
+						entity_state,
+						EntityAutomationState.PENDING_ACTIVATION,
+						"activation catch-up suppressed",
+					)
+					self._set_entity_intent(
+						entity_id,
+						entity_state,
+						DesiredState.NONE,
+						None,
+						None,
+						IntentReason.CONDITIONS,
+						False,
+					)
+					return
 				self._cancel_entity_timer(entity_state)
 				self._cancel_entity_actuation(entity_state, "reconcile occupied")
 				self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: occupied + conditions met")
@@ -4268,7 +4764,12 @@ class PresenceBasedLightingCoordinator:
 				# reconciliation keeps the configured delay semantics.
 				current_ha_state = self.hass.states.get(entity_state["config"][CONF_ENTITY_ID])
 				detected_state = entity_state["config"].get(CONF_PRESENCE_DETECTED_STATE, "on")
-				if current_ha_state and current_ha_state.state == detected_state and clearing_clear:
+				if (
+					self._entry_is_active()
+					and current_ha_state
+					and current_ha_state.state == detected_state
+					and clearing_clear
+				):
 					self._set_entity_state(entity_id, entity_state, EntityAutomationState.OCCUPIED, "reconcile: light on but room empty")
 					await self._start_entity_off_timer(entity_id, entity_state)
 
@@ -4392,13 +4893,16 @@ class PresenceBasedLightingCoordinator:
 
 				# IDLE but room is occupied (missed a presence event?)
 				elif cur == EntityAutomationState.IDLE:
-					if self._is_any_occupied() and self._are_activation_conditions_met():
+					if (
+						self._are_activation_conditions_met()
+						and self._activation_catchup_allowed()
+					):
 						_LOGGER.info(
 							"[%s] Reconciliation: IDLE but room occupied + conditions met → OCCUPIED",
 							entity_id,
 						)
 						await self._reconcile_entity(entity_id, es)
-					elif self._can_clear_room():
+					elif self._entry_is_active() and self._can_clear_room():
 						current_state = self.hass.states.get(entity_id)
 						detected_state = es["config"].get(CONF_PRESENCE_DETECTED_STATE, STATE_ON)
 						if current_state and current_state.state == detected_state:
@@ -4410,7 +4914,10 @@ class PresenceBasedLightingCoordinator:
 
 				# PENDING but conditions are actually met
 				elif cur == EntityAutomationState.PENDING_ACTIVATION:
-					if self._are_activation_conditions_met() and self._is_any_occupied():
+					if (
+						self._are_activation_conditions_met()
+						and self._activation_catchup_allowed()
+					):
 						_LOGGER.info(
 							"[%s] Reconciliation: PENDING but conditions met → OCCUPIED",
 							entity_id,
@@ -4442,7 +4949,7 @@ class PresenceBasedLightingCoordinator:
 				"was_occupied": tracking["was_occupied"],
 				"saved_at": dt_util.utcnow().isoformat(),
 			}
-			
+
 			path = self._get_tracking_persistence_path()
 			await self.hass.async_add_executor_job(
 				lambda: path.write_text(json.dumps(data))
@@ -4457,21 +4964,21 @@ class PresenceBasedLightingCoordinator:
 			path = self._get_tracking_persistence_path()
 			if not path.exists():
 				return False
-			
+
 			data = await self.hass.async_add_executor_job(
 				lambda: json.loads(path.read_text())
 			)
-			
+
 			tracking = self._auto_reenable_tracking
 			tracking["is_tracking"] = data.get("is_tracking", False)
 			tracking["occupied_seconds"] = data.get("occupied_seconds", 0.0)
 			tracking["was_occupied"] = data.get("was_occupied", False)
-			
+
 			if data.get("window_start"):
 				tracking["window_start"] = datetime.fromisoformat(data["window_start"])
 			if data.get("last_presence_change"):
 				tracking["last_presence_change"] = datetime.fromisoformat(data["last_presence_change"])
-			
+
 			_LOGGER.debug("Loaded auto-reenable tracking state: %s", data)
 			return tracking["is_tracking"]
 		except Exception as err:
@@ -4497,10 +5004,10 @@ class PresenceBasedLightingCoordinator:
 	def set_auto_reenable_enabled(self, enabled: bool) -> None:
 		"""Set whether auto re-enable is enabled for this room."""
 		self._auto_reenable_enabled = enabled
-		_LOGGER.debug("Auto re-enable %s for %s", 
+		_LOGGER.debug("Auto re-enable %s for %s",
 					 "enabled" if enabled else "disabled",
 					 self.entry.data.get(CONF_ROOM_NAME))
-		
+
 		if enabled:
 			self._schedule_auto_reenable_times()
 		else:
@@ -4510,47 +5017,47 @@ class PresenceBasedLightingCoordinator:
 		"""Get current tracking information for display in entity attributes."""
 		tracking = self._auto_reenable_tracking
 		threshold = self.entry.data.get(
-			CONF_AUTO_REENABLE_VACANCY_THRESHOLD, 
+			CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
 			DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
 		)
-		
+
 		info = {
 			"is_tracking": tracking["is_tracking"],
 			"vacancy_threshold_percent": threshold,
 			"start_time": str(self._auto_reenable_start_time) if self._auto_reenable_start_time else None,
 			"end_time": str(self._auto_reenable_end_time) if self._auto_reenable_end_time else None,
 		}
-		
+
 		if tracking["is_tracking"] and tracking["window_start"]:
 			now = dt_util.utcnow()
 			total_seconds = (now - tracking["window_start"]).total_seconds()
-			
+
 			# Add time from current presence state if occupied
 			current_occupied_seconds = tracking["occupied_seconds"]
 			if tracking["was_occupied"] and tracking["last_presence_change"]:
 				current_occupied_seconds += (now - tracking["last_presence_change"]).total_seconds()
-			
+
 			if total_seconds > 0:
 				vacancy_percent = 100.0 * (1 - current_occupied_seconds / total_seconds)
 			else:
 				vacancy_percent = 100.0
-			
+
 			info["tracking_started"] = tracking["window_start"].isoformat()
 			info["total_tracking_seconds"] = round(total_seconds, 1)
 			info["occupied_seconds"] = round(current_occupied_seconds, 1)
 			info["current_vacancy_percent"] = round(vacancy_percent, 1)
 			info["currently_occupied"] = tracking["was_occupied"]
-		
+
 		return info
 
 	def _schedule_auto_reenable_times(self) -> None:
 		"""Schedule callbacks for start and end times."""
 		self._cancel_auto_reenable_schedules()
-		
+
 		if not self._auto_reenable_start_time or not self._auto_reenable_end_time:
 			_LOGGER.debug("Cannot schedule auto-reenable: start or end time not set")
 			return
-		
+
 		# Schedule start time callback
 		self._auto_reenable_start_time_unsub = async_track_time_change(
 			self.hass,
@@ -4559,7 +5066,7 @@ class PresenceBasedLightingCoordinator:
 			minute=self._auto_reenable_start_time.minute,
 			second=self._auto_reenable_start_time.second,
 		)
-		
+
 		# Schedule end time callback
 		self._auto_reenable_end_time_unsub = async_track_time_change(
 			self.hass,
@@ -4568,7 +5075,7 @@ class PresenceBasedLightingCoordinator:
 			minute=self._auto_reenable_end_time.minute,
 			second=self._auto_reenable_end_time.second,
 		)
-		
+
 		_LOGGER.debug(
 			"Scheduled auto-reenable for %s: start=%s, end=%s",
 			self.entry.data.get(CONF_ROOM_NAME),
@@ -4581,7 +5088,7 @@ class PresenceBasedLightingCoordinator:
 		if self._auto_reenable_start_time_unsub:
 			self._auto_reenable_start_time_unsub()
 			self._auto_reenable_start_time_unsub = None
-		
+
 		if self._auto_reenable_end_time_unsub:
 			self._auto_reenable_end_time_unsub()
 			self._auto_reenable_end_time_unsub = None
@@ -4590,10 +5097,10 @@ class PresenceBasedLightingCoordinator:
 		"""Called when the monitoring window starts."""
 		if not self._auto_reenable_enabled:
 			return
-		
+
 		room_name = self.entry.data.get(CONF_ROOM_NAME)
 		_LOGGER.info("Auto re-enable monitoring started for %s at %s", room_name, now)
-		
+
 		# Initialize tracking state
 		tracking = self._auto_reenable_tracking
 		tracking["is_tracking"] = True
@@ -4601,49 +5108,49 @@ class PresenceBasedLightingCoordinator:
 		tracking["occupied_seconds"] = 0.0
 		tracking["last_presence_change"] = dt_util.utcnow()
 		tracking["was_occupied"] = self._is_auto_reenable_sensors_occupied()
-		
+
 		await self._save_tracking_state()
 
 	async def _handle_auto_reenable_end_time(self, now: datetime) -> None:
 		"""Called when the monitoring window ends - evaluate and potentially re-enable."""
 		if not self._auto_reenable_enabled:
 			return
-		
+
 		await self._evaluate_and_apply_auto_reenable()
 
 	async def _evaluate_and_apply_auto_reenable(self) -> None:
 		"""Evaluate vacancy percentage and re-enable presence lighting if threshold met."""
 		room_name = self.entry.data.get(CONF_ROOM_NAME)
 		tracking = self._auto_reenable_tracking
-		
+
 		if not tracking["is_tracking"]:
 			_LOGGER.debug("Auto re-enable evaluation skipped for %s: not tracking", room_name)
 			return
-		
+
 		now = dt_util.utcnow()
 		total_seconds = (now - tracking["window_start"]).total_seconds()
-		
+
 		# Finalize occupied seconds calculation
 		occupied_seconds = tracking["occupied_seconds"]
 		if tracking["was_occupied"] and tracking["last_presence_change"]:
 			occupied_seconds += (now - tracking["last_presence_change"]).total_seconds()
-		
+
 		# Calculate vacancy percentage
 		if total_seconds > 0:
 			vacancy_percent = 100.0 * (1 - occupied_seconds / total_seconds)
 		else:
 			vacancy_percent = 100.0
-		
+
 		threshold = self.entry.data.get(
 			CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
 			DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
 		)
-		
+
 		_LOGGER.info(
 			"Auto re-enable evaluation for %s: vacancy=%.1f%%, threshold=%d%%, occupied=%.1fs/%.1fs",
 			room_name, vacancy_percent, threshold, occupied_seconds, total_seconds
 		)
-		
+
 		# Reset tracking state
 		tracking["is_tracking"] = False
 		tracking["window_start"] = None
@@ -4651,7 +5158,7 @@ class PresenceBasedLightingCoordinator:
 		tracking["last_presence_change"] = None
 		tracking["was_occupied"] = False
 		await self._clear_tracking_state()
-		
+
 		# Check if we should re-enable
 		if vacancy_percent >= threshold:
 			_LOGGER.info(
@@ -4668,12 +5175,20 @@ class PresenceBasedLightingCoordinator:
 	async def _reenable_presence_lighting(self) -> None:
 		"""Re-enable presence-based lighting for all entities in this room."""
 		room_name = self.entry.data.get(CONF_ROOM_NAME)
-		
+
 		for entity_id, entity_state in self._entity_states.items():
+			released_shared_pause = (
+				self._clear_scheduled_reset_override(entity_id)
+				if self._entity_honors_external_override(entity_state)
+				else False
+			)
+			local_state_changed = False
+
 			if not entity_state["presence_allowed"]:
 				_LOGGER.info("Re-enabling presence lighting for %s in %s", entity_id, room_name)
-				await self.async_set_presence_allowed(entity_id, True)
-			
+				self._set_presence_allowed_value(entity_id, entity_state, True)
+				local_state_changed = True
+
 			# Also resume automation if paused
 			if entity_state["state"] == EntityAutomationState.PAUSED:
 				_LOGGER.info("Resuming automation for %s in %s", entity_id, room_name)
@@ -4683,7 +5198,24 @@ class PresenceBasedLightingCoordinator:
 					reason="auto re-enable",
 					source="auto_reenable",
 				)
-				await self._reconcile_entity(entity_id, entity_state)
+				local_state_changed = True
+
+			if not released_shared_pause and not local_state_changed:
+				continue
+
+			controllers = (
+				self._loaded_controllers_for_entity(entity_id)
+				if released_shared_pause
+				else [self]
+			)
+			await asyncio.gather(
+				*(controller._save_paused_state() for controller in controllers)
+			)
+			for controller in controllers:
+				await controller._reconcile_entity(
+					entity_id,
+					controller._entity_states[entity_id],
+				)
 
 	def _is_auto_reenable_sensors_occupied(self) -> bool:
 		"""Check if any auto-reenable presence sensor is occupied."""
@@ -4691,7 +5223,7 @@ class PresenceBasedLightingCoordinator:
 		if not sensors:
 			# Fall back to main presence sensors if none configured
 			sensors = self.entry.data.get(CONF_PRESENCE_SENSORS, [])
-		
+
 		return any(is_entity_on(self.hass, sensor) for sensor in sensors)
 
 	async def _handle_auto_reenable_presence_change(self, event: Event) -> None:
@@ -4699,21 +5231,21 @@ class PresenceBasedLightingCoordinator:
 		tracking = self._auto_reenable_tracking
 		if not tracking["is_tracking"]:
 			return
-		
+
 		entity_id = event.data.get("entity_id")
 		new_state = event.data.get("new_state")
 		old_state = event.data.get("old_state")
-		
+
 		if not new_state or not old_state:
 			return
-		
+
 		# Determine if currently occupied (any sensor on)
 		is_now_occupied = self._is_auto_reenable_sensors_occupied()
 		was_occupied = tracking["was_occupied"]
-		
+
 		if is_now_occupied != was_occupied:
 			now = dt_util.utcnow()
-			
+
 			# If transitioning from occupied to vacant, add the occupied time
 			if was_occupied and not is_now_occupied:
 				if tracking["last_presence_change"]:
@@ -4728,10 +5260,10 @@ class PresenceBasedLightingCoordinator:
 					"Auto-reenable tracking: %s now occupied",
 					self.entry.data.get(CONF_ROOM_NAME)
 				)
-			
+
 			tracking["last_presence_change"] = now
 			tracking["was_occupied"] = is_now_occupied
-			
+
 			# Persist state periodically
 			await self._save_tracking_state()
 
@@ -4739,26 +5271,26 @@ class PresenceBasedLightingCoordinator:
 		"""Check if we need to continue or evaluate tracking after a restart."""
 		if not self._auto_reenable_enabled:
 			return
-		
+
 		room_name = self.entry.data.get(CONF_ROOM_NAME)
 		was_tracking = await self._load_tracking_state()
-		
+
 		if not was_tracking:
 			_LOGGER.debug("No tracking state to restore for %s", room_name)
 			return
-		
+
 		tracking = self._auto_reenable_tracking
 		now = dt_util.utcnow()
-		
+
 		# Check if we're still in the monitoring window or just past it
 		if not self._auto_reenable_start_time or not self._auto_reenable_end_time:
 			_LOGGER.debug("Cannot check window for %s: times not set", room_name)
 			return
-		
+
 		today = now.date()
 		start_dt = dt_util.as_utc(datetime.combine(today, self._auto_reenable_start_time))
 		end_dt = dt_util.as_utc(datetime.combine(today, self._auto_reenable_end_time))
-		
+
 		# Handle window crossing midnight
 		if end_dt <= start_dt:
 			# Window spans midnight - if we're before end, use yesterday's start
@@ -4767,13 +5299,13 @@ class PresenceBasedLightingCoordinator:
 			else:
 				# We're after end, so next window starts today
 				end_dt = end_dt + timedelta(days=1)
-		
+
 		# Check if window_start is valid for current window
 		if tracking["window_start"]:
 			window_start = tracking["window_start"]
 			if isinstance(window_start, str):
 				window_start = datetime.fromisoformat(window_start)
-			
+
 			# If we were tracking and are now past end time, evaluate
 			if now >= end_dt and window_start < end_dt:
 				_LOGGER.info(
