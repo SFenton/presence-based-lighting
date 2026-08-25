@@ -8,6 +8,7 @@ as manual control and paused indefinitely.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 from unittest.mock import MagicMock, patch
@@ -72,6 +73,10 @@ from custom_components.presence_based_lighting.const import (
     EXTERNAL_POLICY_REARM_AFTER_CLEAR,
     QUIETED_MAX_AGE_ACTION_ARM,
     QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
+    SOURCE_ADMIN,
+    SOURCE_HOMEKIT_BATCH,
+    SOURCE_HOMEKIT_SINGLE,
+    SOURCE_UNKNOWN,
 )
 from custom_components.presence_based_lighting.external_override import (
     ExternalOverrideManager,
@@ -805,7 +810,352 @@ async def test_honor_external_override_false_keeps_entry_local_behaviour(mock_ha
 
 
 # ---------------------------------------------------------------------------
-# 7 / 8: context registry and batch cardinality
+# 7: scheduled auto-reenable reset
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "should_clear"),
+    [
+        (SOURCE_UNKNOWN, True),
+        (SOURCE_HOMEKIT_SINGLE, True),
+        (SOURCE_HOMEKIT_BATCH, True),
+        (SOURCE_ADMIN, False),
+    ],
+)
+async def test_scheduled_reset_clears_only_non_admin_pauses(
+    mock_hass,
+    tmp_path,
+    source,
+    should_clear,
+):
+    """The overnight reset releases machine-attributed PAUSE records only."""
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, FakeClock())
+
+    entry = _entry(entry_id="room", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_PAUSE,
+        source=source,
+        reason="manual off",
+    )
+    assert coordinator.get_automation_paused(LIGHT) is True
+
+    mock_hass.services.clear()
+    await coordinator._reenable_presence_lighting()
+
+    record = manager.get(LIGHT)
+    if should_clear:
+        assert record is None
+        assert coordinator.get_automation_paused(LIGHT) is False
+    else:
+        assert record is not None and record.source == SOURCE_ADMIN
+        assert coordinator.get_automation_paused(LIGHT) is True
+    assert [c for c in mock_hass.services.calls if c["service"] == "turn_on"] == []
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_reset_preserves_quieted_hold(mock_hass, tmp_path):
+    """Quieted holds keep their vacancy-and-reentry release lifecycle."""
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, FakeClock())
+
+    entry = _entry(entry_id="room", room_name="Room")
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+        source=SOURCE_HOMEKIT_BATCH,
+        reason="whole-home off",
+    )
+    assert coordinator.get_quieted(LIGHT) is True
+
+    await coordinator._reenable_presence_lighting()
+
+    record = manager.get(LIGHT)
+    assert record is not None and record.is_quieted
+    assert coordinator.get_quieted(LIGHT) is True
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_opted_out_profile_does_not_clear_shared_pause(mock_hass, tmp_path):
+    """An entry-local compatibility profile cannot release a sibling hold."""
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, FakeClock())
+
+    entry = _entry(
+        entry_id="opted_out",
+        room_name="Opted Out",
+        honor_external_override=False,
+    )
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_PAUSE,
+        source=SOURCE_UNKNOWN,
+        reason="sibling manual off",
+    )
+    await coordinator._reenable_presence_lighting()
+
+    record = manager.get(LIGHT)
+    assert record is not None and record.is_paused
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_starts_first", [True, False])
+async def test_scheduled_reset_releases_paired_profiles_and_active_gate_turns_on(
+    mock_hass,
+    tmp_path,
+    primary_starts_first,
+):
+    """One profile's reset releases the shared pause and reconciles its sibling."""
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, FakeClock())
+
+    primary = _entry(
+        entry_id="primary",
+        room_name="Master Bathroom",
+        activation_condition=BEDROOM_ON,
+        presence_lock=True,
+    )
+    fallback = _entry(
+        entry_id="fallback",
+        room_name="Master Bathroom (Master Bedroom Lights Off)",
+        activation_condition=BEDROOM_OFF,
+    )
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    mock_hass.states.set(BEDROOM_ON, STATE_OFF)
+    mock_hass.states.set(BEDROOM_OFF, STATE_ON)
+
+    primary_coordinator = PresenceBasedLightingCoordinator(mock_hass, primary)
+    fallback_coordinator = PresenceBasedLightingCoordinator(mock_hass, fallback)
+    mock_hass.data[DOMAIN][primary.entry_id] = primary_coordinator
+    mock_hass.data[DOMAIN][fallback.entry_id] = fallback_coordinator
+    coordinators = (
+        [primary_coordinator, fallback_coordinator]
+        if primary_starts_first
+        else [fallback_coordinator, primary_coordinator]
+    )
+    for coordinator in coordinators:
+        await coordinator.async_start()
+
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_PAUSE,
+        source=SOURCE_UNKNOWN,
+        reason="physical wall switch off",
+    )
+    assert primary_coordinator.get_automation_paused(LIGHT) is True
+    assert fallback_coordinator.get_automation_paused(LIGHT) is True
+
+    mock_hass.services.clear()
+    await primary_coordinator._reenable_presence_lighting()
+
+    turn_on_calls = [
+        call for call in mock_hass.services.calls
+        if call["domain"] == "light" and call["service"] == "turn_on"
+    ]
+    assert manager.get(LIGHT) is None
+    assert primary_coordinator.get_automation_paused(LIGHT) is False
+    assert fallback_coordinator.get_automation_paused(LIGHT) is False
+    assert len(turn_on_calls) == 1
+    assert turn_on_calls[0]["service_data"]["entity_id"] == LIGHT
+
+    primary_coordinator.async_stop()
+    fallback_coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_suppression", ["service", "presence_allowed"])
+async def test_scheduled_reset_preserves_sibling_local_suppression(
+    mock_hass,
+    tmp_path,
+    local_suppression,
+):
+    """Clearing the shared hold does not clear a sibling's entry-local choice."""
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, FakeClock())
+
+    primary = _entry(
+        entry_id="primary",
+        room_name="Master Bathroom",
+        activation_condition=BEDROOM_ON,
+    )
+    fallback = _entry(
+        entry_id="fallback",
+        room_name="Master Bathroom Fallback",
+        activation_condition=BEDROOM_OFF,
+    )
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    mock_hass.states.set(BEDROOM_ON, STATE_ON)
+    mock_hass.states.set(BEDROOM_OFF, STATE_OFF)
+
+    primary_coordinator = PresenceBasedLightingCoordinator(mock_hass, primary)
+    fallback_coordinator = PresenceBasedLightingCoordinator(mock_hass, fallback)
+    mock_hass.data[DOMAIN][primary.entry_id] = primary_coordinator
+    mock_hass.data[DOMAIN][fallback.entry_id] = fallback_coordinator
+    await primary_coordinator.async_start()
+    await fallback_coordinator.async_start()
+
+    if local_suppression == "service":
+        primary_coordinator.set_automation_paused(
+            LIGHT,
+            True,
+            reason="explicit pause",
+            source="service",
+        )
+    else:
+        await primary_coordinator.async_set_presence_allowed(LIGHT, False)
+
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_PAUSE,
+        source=SOURCE_UNKNOWN,
+        reason="physical wall switch off",
+    )
+    await fallback_coordinator._reenable_presence_lighting()
+
+    primary_state = primary_coordinator._entity_states[LIGHT]
+    assert manager.get(LIGHT) is None
+    assert primary_coordinator.get_automation_paused(LIGHT) is True
+    if local_suppression == "service":
+        assert primary_state["presence_allowed"] is True
+        assert primary_state["pause"]["source"] == "service"
+    else:
+        assert primary_state["presence_allowed"] is False
+        assert primary_state["pause"]["source"] == "presence_allowed"
+
+    primary_coordinator.async_stop()
+    fallback_coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_paired_resets_clear_and_actuate_once(mock_hass, tmp_path):
+    """Concurrent scheduled callbacks share one clear and one active actuation."""
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, FakeClock())
+
+    primary = _entry(
+        entry_id="primary",
+        room_name="Master Bathroom",
+        activation_condition=BEDROOM_ON,
+        presence_lock=True,
+    )
+    fallback = _entry(
+        entry_id="fallback",
+        room_name="Master Bathroom Fallback",
+        activation_condition=BEDROOM_OFF,
+    )
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+    mock_hass.states.set(BEDROOM_ON, STATE_OFF)
+    mock_hass.states.set(BEDROOM_OFF, STATE_ON)
+
+    primary_coordinator = PresenceBasedLightingCoordinator(mock_hass, primary)
+    fallback_coordinator = PresenceBasedLightingCoordinator(mock_hass, fallback)
+    mock_hass.data[DOMAIN][primary.entry_id] = primary_coordinator
+    mock_hass.data[DOMAIN][fallback.entry_id] = fallback_coordinator
+    await primary_coordinator.async_start()
+    await fallback_coordinator.async_start()
+
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_PAUSE,
+        source=SOURCE_UNKNOWN,
+        reason="physical wall switch off",
+    )
+    mock_hass.services.clear()
+
+    await asyncio.gather(
+        primary_coordinator._reenable_presence_lighting(),
+        fallback_coordinator._reenable_presence_lighting(),
+    )
+
+    turn_on_calls = [
+        call for call in mock_hass.services.calls
+        if call["domain"] == "light" and call["service"] == "turn_on"
+    ]
+    assert manager.get(LIGHT) is None
+    assert len(turn_on_calls) == 1
+
+    primary_coordinator.async_stop()
+    fallback_coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_reset_flushes_all_loaded_pause_files(mock_hass, tmp_path):
+    """A shared clear removes stale override copies from every loaded profile."""
+    _configure_storage(mock_hass, tmp_path)
+    _observer, manager = _install_clock(mock_hass, FakeClock())
+
+    primary = _entry(entry_id="primary", room_name="Master Bathroom")
+    fallback = _entry(entry_id="fallback", room_name="Master Bathroom Fallback")
+    mock_hass.states.set(LIGHT, STATE_OFF)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
+
+    primary_coordinator = PresenceBasedLightingCoordinator(mock_hass, primary)
+    fallback_coordinator = PresenceBasedLightingCoordinator(mock_hass, fallback)
+    mock_hass.data[DOMAIN][primary.entry_id] = primary_coordinator
+    mock_hass.data[DOMAIN][fallback.entry_id] = fallback_coordinator
+    await primary_coordinator.async_start()
+    await fallback_coordinator.async_start()
+
+    manager.set_override(
+        LIGHT,
+        EXTERNAL_POLICY_PAUSE,
+        source=SOURCE_UNKNOWN,
+        reason="physical wall switch off",
+    )
+    await asyncio.gather(
+        primary_coordinator._save_paused_state(),
+        fallback_coordinator._save_paused_state(),
+    )
+
+    paths = [
+        tmp_path / ".storage" / f"pbl_paused_{entry_id}.json"
+        for entry_id in ("primary", "fallback")
+    ]
+    assert all(path.exists() for path in paths)
+
+    await primary_coordinator._reenable_presence_lighting()
+
+    assert manager.get(LIGHT) is None
+    assert all(not path.exists() for path in paths)
+
+    primary_coordinator.async_stop()
+    fallback_coordinator.async_stop()
+
+
+# ---------------------------------------------------------------------------
+# 8 / 9: context registry and batch cardinality
 # ---------------------------------------------------------------------------
 
 
@@ -874,6 +1224,205 @@ def test_batch_window_and_retention(mock_hass):
     assert observer.classify("ctx-b") is not None
     clock.advance_ms(6000)
     assert observer.classify("ctx-b") is None
+
+
+def test_blocked_command_is_claimed_after_batch_confirmation(mock_hass):
+    """Early blocked commands become replayable once their batch confirms."""
+    clock = FakeClock()
+    observer = CommandBatchObserver(mock_hass, time_source=clock)
+    observer.configure_entry(
+        "entry",
+        min_distinct_entities=2,
+        window_ms=250,
+        retain_seconds=10.0,
+    )
+    observer.register_managed_entity("entry", LIGHT)
+
+    first = observer.note_command(LIGHT, "turn_off", "ctx-a")
+    assert first.confirmed is False
+    assert observer.record_blocked_command(
+        "ctx-a",
+        LIGHT,
+        "light",
+        "turn_off",
+        STATE_OFF,
+        {"entity_id": LIGHT},
+    ) is False
+
+    clock.advance_ms(5)
+    confirmed = observer.note_command("light.kitchen", "turn_off", "ctx-b")
+    assert confirmed.confirmed is True
+    blocked = observer.pop_blocked_for_batch(confirmed.batch_id, {LIGHT})
+
+    assert len(blocked) == 1
+    assert blocked[0].context_id == "ctx-a"
+    assert blocked[0].target_state == STATE_OFF
+    assert blocked[0].service_data == {"entity_id": LIGHT}
+    assert observer.pop_blocked_for_batch(confirmed.batch_id, {LIGHT}) == []
+
+
+def test_confirmed_batch_command_passes_without_recording(mock_hass):
+    """A command already in a confirmed batch should not be blocked."""
+    clock = FakeClock()
+    observer = CommandBatchObserver(mock_hass, time_source=clock)
+    observer.configure_entry("entry", min_distinct_entities=2, window_ms=250)
+
+    observer.note_command("light.a", "turn_off", "ctx-a")
+    clock.advance_ms(5)
+    confirmed = observer.note_command("light.b", "turn_off", "ctx-b")
+    assert confirmed.confirmed is True
+
+    assert observer.record_blocked_command(
+        "ctx-b",
+        "light.b",
+        "light",
+        "turn_off",
+        STATE_OFF,
+        {"entity_id": "light.b"},
+    ) is True
+    assert observer.pop_blocked_for_batch(
+        confirmed.batch_id,
+        {"light.b"},
+    ) == []
+
+
+def test_blocked_command_is_cancelled_by_later_on(mock_hass):
+    """A later ON supersedes a blocked OFF before batch confirmation."""
+    clock = FakeClock()
+    observer = CommandBatchObserver(mock_hass, time_source=clock)
+    observer.configure_entry("entry", min_distinct_entities=2, window_ms=250)
+
+    batch = observer.note_command(LIGHT, "turn_off", "ctx-a")
+    observer.record_blocked_command(
+        "ctx-a",
+        LIGHT,
+        "light",
+        "turn_off",
+        STATE_OFF,
+        {"entity_id": LIGHT},
+    )
+    observer.cancel_blocked_commands(LIGHT)
+    clock.advance_ms(5)
+    observer.note_command("light.kitchen", "turn_off", "ctx-b")
+
+    assert observer.pop_blocked_for_batch(batch.batch_id, {LIGHT}) == []
+
+
+def test_observe_mode_never_records_replay_commands(mock_hass):
+    """Observe mode preserves singleton behavior without replaying commands."""
+    clock = FakeClock()
+    observer = CommandBatchObserver(mock_hass, time_source=clock)
+    observer.configure_entry(
+        "entry",
+        mode=BATCH_MODE_OBSERVE,
+        min_distinct_entities=2,
+    )
+    batch = observer.note_command(LIGHT, "turn_off", "ctx-a")
+
+    assert observer.record_blocked_command(
+        "ctx-a",
+        LIGHT,
+        "light",
+        "turn_off",
+        STATE_OFF,
+        {"entity_id": LIGHT},
+    ) is False
+    assert observer.pop_blocked_for_batch(batch.batch_id, {LIGHT}) == []
+
+
+def test_new_context_for_confirmed_entity_notifies_subscribers(mock_hass):
+    """A repeated entity context in a confirmed batch still triggers repair."""
+    clock = FakeClock()
+    observer = CommandBatchObserver(mock_hass, time_source=clock)
+    observer.configure_entry("entry", min_distinct_entities=2, window_ms=250)
+    notifications = []
+    observer.subscribe_confirmed(
+        lambda batch, target: notifications.append((batch.batch_id, target))
+    )
+
+    batch = observer.note_command("light.a", "turn_off", "ctx-a")
+    clock.advance_ms(5)
+    observer.note_command("light.b", "turn_off", "ctx-b")
+    notifications.clear()
+
+    observer.record_blocked_command(
+        "ctx-c",
+        "light.a",
+        "light",
+        "turn_off",
+        STATE_OFF,
+        {"entity_id": "light.a"},
+    )
+    clock.advance_ms(5)
+    observer.note_command("light.a", "turn_off", "ctx-c")
+
+    assert notifications == [(batch.batch_id, "light.a")]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_batch_replays_early_blocked_off_once(mock_hass, tmp_path):
+    """The first blocked HomeKit OFF is replayed once when the batch confirms."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    observer, _manager = _install_clock(mock_hass, clock)
+
+    entry = _entry(
+        entry_id="fallback",
+        room_name="Master Bathroom Fallback",
+        batch_min_entities=2,
+    )
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    mock_hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+    mock_hass.services.clear()
+
+    first_context = MockContext("ctx-a")
+    observer.note_command(LIGHT, "turn_off", first_context.id)
+    assert coordinator._handle_blocked_interceptor_command(
+        LIGHT,
+        "turn_off",
+        first_context,
+        {"entity_id": [LIGHT], "params": {}},
+    ) is False
+
+    clock.advance_ms(5)
+    observer.note_command("light.kitchen", "turn_off", "ctx-b")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    off_calls = [
+        call
+        for call in mock_hass.services.calls
+        if call["domain"] == "light"
+        and call["service"] == "turn_off"
+        and call["service_data"].get("entity_id") == LIGHT
+    ]
+    assert len(off_calls) == 1
+    assert off_calls[0]["context"].parent_id == first_context.id
+
+    coordinator.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_batch_replay_tasks_are_cancelled_on_stop(mock_hass, tmp_path):
+    """Unload must not leave a delayed replay able to call services."""
+    clock = FakeClock()
+    _configure_storage(mock_hass, tmp_path)
+    _install_clock(mock_hass, clock)
+    entry = _entry(entry_id="fallback", room_name="Master Bathroom Fallback")
+    mock_hass.states.set(LIGHT, STATE_ON)
+    mock_hass.states.set(LOCAL_SENSOR, STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
+    await coordinator.async_start()
+
+    task = asyncio.create_task(asyncio.sleep(60))
+    coordinator._batch_replay_tasks.add(task)
+    coordinator.async_stop()
+    await asyncio.sleep(0)
+
+    assert task.cancelled()
 
 
 # ---------------------------------------------------------------------------

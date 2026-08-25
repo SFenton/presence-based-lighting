@@ -64,6 +64,26 @@ def test_context_for_different_entity_is_external():
     ) == CommandOrigin.EXTERNAL
 
 
+def test_context_for_opposite_target_state_is_external():
+    registry = PresenceCommandContextRegistry()
+    registry.register("command", "entry_a", "light.shared", "on")
+
+    assert registry.classify(
+        "entry_a",
+        "light.shared",
+        MockContext("command"),
+        include_parent=False,
+        expected_target_state="off",
+    ) == CommandOrigin.EXTERNAL
+    assert registry.classify(
+        "entry_a",
+        "light.shared",
+        MockContext("command"),
+        include_parent=False,
+        expected_target_state="on",
+    ) == CommandOrigin.OWN
+
+
 def test_registry_evicts_oldest_context_at_capacity():
     registry = PresenceCommandContextRegistry(max_contexts=2)
     registry.register("first", "entry_a", "light.shared", "on")

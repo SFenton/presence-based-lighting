@@ -4,13 +4,17 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 import sys
 
+from custom_components.presence_based_lighting.command_context import CommandOrigin
 from custom_components.presence_based_lighting.const import (
     CONF_CONTROLLED_ENTITIES,
     CONF_ENTITY_ID,
     CONF_MANUAL_DISABLE_STATES,
+    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
     CONF_PRESENCE_CLEARED_SERVICE,
     CONF_PRESENCE_CLEARED_STATE,
+    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
     CONF_PRESENCE_DETECTED_SERVICE,
+    CONF_PRESENCE_DETECTED_TRANSITION,
     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
@@ -38,6 +42,8 @@ def _make_entry(
             {
                 CONF_ENTITY_ID: entity_id,
                 CONF_PRESENCE_DETECTED_SERVICE: "turn_on",
+                CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT: 100,
+                CONF_PRESENCE_DETECTED_TRANSITION: 1.0,
                 CONF_PRESENCE_CLEARED_SERVICE: "turn_off",
                 CONF_PRESENCE_CLEARED_STATE: "off",
                 CONF_REQUIRE_OCCUPANCY_FOR_DETECTED: req_occ,
@@ -120,11 +126,118 @@ class TestPresenceLockInterceptorWithLib:
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             result = interceptor.setup()
             assert result is True
-            # Should register for turn_on (require_occ) and turn_off (require_vac)
-            assert len(self._register_calls) == 2
+            # Presence Lock turn_on/turn_off plus the plain-on normalizer.
+            assert len(self._register_calls) == 3
             services = {c["service"] for c in self._register_calls}
             assert "turn_on" in services
             assert "turn_off" in services
+        finally:
+            self._unpatch()
+
+    def test_two_profiles_share_one_normalizer_registration(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            hass.data = {}
+            first_entry = _make_entry(req_occ=False, req_vac=False)
+            first_entry.entry_id = "entry_a"
+            second_entry = _make_entry(req_occ=False, req_vac=False)
+            second_entry.entry_id = "entry_b"
+
+            first = PresenceLockInterceptor(
+                hass,
+                first_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            second = PresenceLockInterceptor(
+                hass,
+                second_entry,
+                lambda: True,
+                entry_is_active_func=lambda: False,
+            )
+
+            assert first.setup() is True
+            assert second.setup() is True
+            assert len(self._register_calls) == 1
+            assert self._register_calls[0]["priority"] == 200
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_conflicting_active_profiles_leave_plain_on_unchanged(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            hass.data = {}
+            first_entry = _make_entry(req_occ=False, req_vac=False)
+            first_entry.entry_id = "entry_a"
+            second_entry = _make_entry(req_occ=False, req_vac=False)
+            second_entry.entry_id = "entry_b"
+            second_entry.data[CONF_CONTROLLED_ENTITIES][0][
+                CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+            ] = 50
+
+            first = PresenceLockInterceptor(
+                hass,
+                first_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            second = PresenceLockInterceptor(
+                hass,
+                second_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            first.setup()
+            second.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {"entity_id": ["light.living_room"], "params": {}}
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data == {"entity_id": ["light.living_room"], "params": {}}
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_active_profile_wins_normalizer_policy(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            hass.data = {}
+            first_entry = _make_entry(req_occ=False, req_vac=False)
+            first_entry.entry_id = "entry_a"
+            second_entry = _make_entry(req_occ=False, req_vac=False)
+            second_entry.entry_id = "entry_b"
+            second_entry.data[CONF_CONTROLLED_ENTITIES][0][
+                CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+            ] = 50
+
+            first = PresenceLockInterceptor(
+                hass,
+                first_entry,
+                lambda: True,
+                entry_is_active_func=lambda: False,
+            )
+            second = PresenceLockInterceptor(
+                hass,
+                second_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            first.setup()
+            second.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {"entity_id": ["light.living_room"], "params": {}}
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data["params"]["brightness"] == 128
+            assert data["params"]["transition"] == 1.0
         finally:
             self._unpatch()
 
@@ -136,8 +249,16 @@ class TestPresenceLockInterceptorWithLib:
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             result = interceptor.setup()
             assert result is True
-            assert len(self._register_calls) == 1
+            assert len(self._register_calls) == 2
             assert self._register_calls[0]["service"] == "turn_on"
+            assert interceptor.handles_presence_lock(
+                "light.living_room",
+                "turn_on",
+            )
+            assert not interceptor.handles_presence_lock(
+                "light.living_room",
+                "turn_off",
+            )
         finally:
             self._unpatch()
 
@@ -148,7 +269,9 @@ class TestPresenceLockInterceptorWithLib:
             entry = _make_entry(req_occ=False, req_vac=False)
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             result = interceptor.setup()
-            assert result is False  # nothing to register
+            assert result is True
+            assert len(self._register_calls) == 1
+            assert self._register_calls[0]["priority"] == 200
         finally:
             self._unpatch()
 
@@ -157,6 +280,9 @@ class TestPresenceLockInterceptorWithLib:
         try:
             hass = MagicMock()
             entry = _make_entry(req_occ=True, req_vac=True, use_interceptor=False)
+            entry.data[CONF_CONTROLLED_ENTITIES][0][
+                CONF_NORMALIZE_EXTERNAL_PLAIN_ON
+            ] = False
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             result = interceptor.setup()
             assert result is False
@@ -271,6 +397,152 @@ class TestPresenceLockInterceptorWithLib:
             self._unpatch()
 
     @pytest.mark.asyncio
+    async def test_handler_allows_own_turn_off_while_trigger_occupied(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(
+                req_occ=False,
+                req_vac=True,
+                respects_manual_override=False,
+            )
+            interceptor = PresenceLockInterceptor(
+                hass,
+                entry,
+                lambda: True,
+                classify_command_context_func=(
+                    lambda _entity_id, _context, _target_state: CommandOrigin.OWN
+                ),
+                is_clearing_authority_occupied_func=lambda: True,
+            )
+            interceptor.setup()
+
+            registration = next(
+                item
+                for item in self._register_calls
+                if item["service"] == "turn_off"
+            )
+            data = {"entity_id": ["light.living_room"], "params": {}}
+            result = await registration["handler"](MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_handler_allows_sibling_turn_off_while_trigger_occupied(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(
+                req_occ=False,
+                req_vac=True,
+                respects_manual_override=False,
+            )
+            interceptor = PresenceLockInterceptor(
+                hass,
+                entry,
+                lambda: True,
+                classify_command_context_func=(
+                    lambda _entity_id, _context, _target_state: CommandOrigin.SIBLING
+                ),
+                is_clearing_authority_occupied_func=lambda: True,
+            )
+            interceptor.setup()
+
+            registration = next(
+                item
+                for item in self._register_calls
+                if item["service"] == "turn_off"
+            )
+            result = await registration["handler"](
+                MagicMock(),
+                {"entity_id": ["light.living_room"], "params": {}},
+            )
+
+            assert result == self._mock_result.ALLOW
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_handler_allows_external_turn_off_when_clearing_authority_clear(
+        self,
+    ):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(
+                req_occ=False,
+                req_vac=True,
+                respects_manual_override=False,
+            )
+            interceptor = PresenceLockInterceptor(
+                hass,
+                entry,
+                lambda: True,
+                is_clearing_authority_occupied_func=lambda: False,
+            )
+            interceptor.setup()
+
+            registration = next(
+                item
+                for item in self._register_calls
+                if item["service"] == "turn_off"
+            )
+            data = {"entity_id": ["light.living_room"], "params": {}}
+            result = await registration["handler"](MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_handler_records_blocked_external_turn_off(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(
+                req_occ=False,
+                req_vac=True,
+                respects_manual_override=False,
+            )
+            blocked = []
+
+            def record(entity_id, service, context, data):
+                blocked.append((entity_id, service, context, dict(data)))
+                return False
+
+            interceptor = PresenceLockInterceptor(
+                hass,
+                entry,
+                lambda: True,
+                is_clearing_authority_occupied_func=lambda: True,
+                handle_blocked_command_func=record,
+            )
+            interceptor.setup()
+
+            registration = next(
+                item
+                for item in self._register_calls
+                if item["service"] == "turn_off"
+            )
+            context = MagicMock()
+            data = {"entity_id": ["light.living_room"], "params": {}}
+            result = await registration["handler"](
+                MagicMock(context=context),
+                data,
+            )
+
+            assert result == self._mock_result.BLOCK
+            assert blocked[0][:3] == (
+                "light.living_room",
+                "turn_off",
+                context,
+            )
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
     async def test_handler_allows_commands_when_entry_is_inactive(self):
         """Activation-gated entries must not enforce either lock direction."""
         self._patch_interceptor_available()
@@ -294,7 +566,11 @@ class TestPresenceLockInterceptorWithLib:
                 data = {"entity_id": ["light.living_room"]}
                 result = await registration["handler"](call, data)
                 assert result == self._mock_result.ALLOW
-                assert data["entity_id"] == ["light.living_room"]
+                if registration["priority"] == 200:
+                    assert data["brightness"] == 255
+                    assert data["transition"] == 1.0
+                else:
+                    assert data == {"entity_id": ["light.living_room"]}
         finally:
             self._unpatch()
 
@@ -305,8 +581,9 @@ class TestPresenceLockInterceptorWithLib:
             entry = _make_entry(req_occ=False, req_vac=True)
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             result = interceptor.setup()
-            assert result is False
-            assert self._register_calls == []
+            assert result is True
+            assert len(self._register_calls) == 1
+            assert self._register_calls[0]["priority"] == 200
         finally:
             self._unpatch()
 
@@ -318,7 +595,7 @@ class TestPresenceLockInterceptorWithLib:
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             interceptor.setup()
 
-            assert len(interceptor._unregister_funcs) == 2
+            assert len(interceptor._unregister_funcs) == 3
             interceptor.teardown()
             for fn in interceptor._unregister_funcs:
                 # Already called during teardown
@@ -363,6 +640,115 @@ class TestPresenceLockInterceptorWithLib:
             result = await handler(call, data)
             assert result == self._mock_result.ALLOW
             assert data["entity_id"] == ["light.kitchen"]
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_plain_on_normalizer_adds_brightness_and_transition(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(req_occ=False, req_vac=False)
+            interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
+            interceptor.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {
+                "entity_id": ["light.living_room"],
+                "params": {},
+            }
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data == {
+                "entity_id": ["light.living_room"],
+                "params": {
+                    "brightness": 255,
+                    "transition": 1.0,
+                },
+            }
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "explicit_data",
+        [
+            {"brightness": 128},
+            {"brightness_pct": 50},
+            {"brightness_step": 10},
+            {"brightness_step_pct": 10},
+            {"profile": "relax"},
+        ],
+    )
+    async def test_plain_on_normalizer_preserves_explicit_brightness(
+        self,
+        explicit_data,
+    ):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(req_occ=False, req_vac=False)
+            interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
+            interceptor.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {
+                "entity_id": ["light.living_room"],
+                "params": dict(explicit_data),
+            }
+            original = dict(data)
+            original["params"] = dict(data["params"])
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data == original
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_plain_on_normalizer_ignores_schema_none_defaults(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(req_occ=False, req_vac=False)
+            interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
+            interceptor.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {
+                "entity_id": ["light.living_room"],
+                "params": {
+                    "brightness": None,
+                    "brightness_pct": None,
+                    "profile": None,
+                },
+            }
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data["params"]["brightness"] == 255
+            assert data["params"]["transition"] == 1.0
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_plain_on_normalizer_ignores_multi_target_calls(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(req_occ=False, req_vac=False)
+            interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
+            interceptor.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {"entity_id": ["light.living_room", "light.kitchen"]}
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data == {
+                "entity_id": ["light.living_room", "light.kitchen"],
+            }
         finally:
             self._unpatch()
 

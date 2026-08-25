@@ -100,6 +100,7 @@ class PresenceCommandContextRegistry:
 		context: Context | None,
 		*,
 		include_parent: bool,
+		expected_target_state: str | None = None,
 	) -> CommandOrigin:
 		"""Classify a context relative to one coordinator."""
 		if context is None:
@@ -115,6 +116,11 @@ class PresenceCommandContextRegistry:
 				continue
 			record = self._contexts.get(context_id, {}).get(entity_id)
 			if record is None:
+				continue
+			if (
+				expected_target_state is not None
+				and record.target_state != expected_target_state
+			):
 				continue
 			if record.entry_id == entry_id:
 				return CommandOrigin.OWN

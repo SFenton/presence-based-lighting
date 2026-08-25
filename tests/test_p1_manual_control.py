@@ -3,14 +3,20 @@
 import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
 
-from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting import (
+    EntityAutomationState,
+    PresenceBasedLightingCoordinator,
+)
 from custom_components.presence_based_lighting.const import (
+    CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
+    CONF_MANUAL_DISABLE_STATES,
     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
     CONF_RESPECTS_PRESENCE_ALLOWED,
+    EXTERNAL_POLICY_REARM_AFTER_CLEAR,
 )
 from tests.conftest import assert_service_called, setup_entity_states
 
@@ -205,6 +211,112 @@ class TestManualOverrides:
             _entity_event(mock_hass, "light.living_room", STATE_ON, STATE_OFF)
         )
         assert mock_hass.services.calls == []
+
+    @pytest.mark.asyncio
+    async def test_presence_lock_holds_allowed_external_off_until_fresh_presence(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        """An allowed external OFF must stay dark until a fresh presence edge."""
+        entity_config = mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0]
+        entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL] = False
+        entity_config[CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        entity_config[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] = False
+        mock_config_entry.data[CONF_CLEARING_SENSORS] = [
+            "binary_sensor.local_occupancy"
+        ]
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        mock_hass.states.set("binary_sensor.local_occupancy", STATE_OFF)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+        mock_hass.services.clear()
+
+        await coordinator._handle_external_action(
+            "light.living_room",
+            "turn_off",
+        )
+
+        entity_state = coordinator._entity_states["light.living_room"]
+        assert entity_state["state"] == EntityAutomationState.QUIETED
+        assert coordinator.get_quieted("light.living_room") is True
+        assert mock_hass.services.calls == []
+
+        mock_hass.states.set("light.living_room", STATE_OFF)
+        await coordinator._periodic_reconciliation(None)
+        assert entity_state["state"] == EntityAutomationState.QUIETED
+        assert mock_hass.services.calls == []
+
+        await coordinator._handle_presence_change(
+            _entity_event(
+                mock_hass,
+                "binary_sensor.living_room_motion",
+                STATE_OFF,
+                STATE_ON,
+            )
+        )
+        assert coordinator.get_quieted("light.living_room") is False
+        assert_service_called(mock_hass, "light", "turn_on", "light.living_room")
+
+    @pytest.mark.asyncio
+    async def test_presence_lock_holds_external_off_when_clear_sensor_unavailable(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        """Unknown clearing state must not cause a delayed light-on reversal."""
+        entity_config = mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0]
+        entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL] = False
+        entity_config[CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
+        entity_config[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] = False
+        mock_config_entry.data[CONF_CLEARING_SENSORS] = [
+            "binary_sensor.local_occupancy"
+        ]
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+        mock_hass.states.set("binary_sensor.local_occupancy", "unavailable")
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+        mock_hass.services.clear()
+
+        await coordinator._handle_external_action(
+            "light.living_room",
+            "turn_off",
+        )
+
+        assert coordinator.get_quieted("light.living_room") is True
+        assert (
+            coordinator._override_manager.get("light.living_room").rearm_latched
+            is False
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("manual_disable_states", [[], [STATE_OFF]])
+    async def test_quieted_external_off_is_not_cleared_by_sibling_resume_path(
+        self,
+        mock_hass,
+        mock_config_entry,
+        manual_disable_states,
+    ):
+        """A sibling observing the same OFF must preserve the shared hold."""
+        entity_config = mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0]
+        entity_config[CONF_MANUAL_DISABLE_STATES] = manual_disable_states
+        setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+        coordinator._override_manager.set_override(
+            "light.living_room",
+            EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+            reason="sibling accepted external clear",
+            rearm_latched=True,
+        )
+
+        await coordinator._handle_external_action(
+            "light.living_room",
+            "turn_off",
+        )
+
+        assert coordinator.get_quieted("light.living_room") is True
+        assert coordinator._override_manager.get("light.living_room") is not None
 
     @pytest.mark.asyncio
     async def test_presence_lock_manual_off_pauses_instead_of_reverting_when_occupied(

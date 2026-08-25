@@ -19,7 +19,11 @@ _LOGGER = logging.getLogger(__name__)
 from .const import (
 	AUTOMATION_MODE_AUTOMATIC,
 	AUTOMATION_MODE_PRESENCE_LOCK,
+	ACTIVATION_CATCHUP_ANY_TRIGGER,
+	ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
+	ACTIVATION_CATCHUP_NONE,
 	CONF_ACTIVATION_CONDITIONS,
+	CONF_ACTIVATION_CATCHUP_MODE,
 	CONF_AUTOMATION_MODE,
 	CONF_BULK_COMMAND_POLICY,
 	CONF_HONOR_EXTERNAL_OVERRIDE,
@@ -43,10 +47,14 @@ from .const import (
 	CONF_INITIAL_PRESENCE_ALLOWED,
 	CONF_CLEARING_SENSORS,
 	CONF_MANUAL_DISABLE_STATES,
+	CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
 	CONF_OFF_DELAY,
 	CONF_PRESENCE_CLEARED_SERVICE,
 	CONF_PRESENCE_CLEARED_STATE,
+	CONF_PRESENCE_CLEARED_TRANSITION,
+	CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
 	CONF_PRESENCE_DETECTED_SERVICE,
+	CONF_PRESENCE_DETECTED_TRANSITION,
 	CONF_PRESENCE_DETECTED_STATE,
 	CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 	CONF_PRESENCE_SENSORS,
@@ -59,16 +67,21 @@ from .const import (
 	CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
 	CONF_VACANCY_AUTHORITY_SENSORS,
 	DEFAULT_AUTOMATION_MODE,
+	DEFAULT_ACTIVATION_CATCHUP_MODE,
 	DEFAULT_AUTO_REENABLE_END_TIME,
 	DEFAULT_AUTO_REENABLE_START_TIME,
 	DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
 	DEFAULT_CLEARED_SERVICE,
 	DEFAULT_CLEARED_STATE,
+	DEFAULT_PRESENCE_CLEARED_TRANSITION,
 	DEFAULT_DETECTED_SERVICE,
+	DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+	DEFAULT_PRESENCE_DETECTED_TRANSITION,
 	DEFAULT_DETECTED_STATE,
 	DEFAULT_DISABLE_ON_EXTERNAL,
 	DEFAULT_INITIAL_PRESENCE_ALLOWED,
 	DEFAULT_MANUAL_DISABLE_STATES,
+	DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
 	DEFAULT_OFF_DELAY,
 	DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 	DEFAULT_RESPECTS_PRESENCE_ALLOWED,
@@ -435,6 +448,10 @@ class _EntityManagementMixin:
 				CONF_MANUAL_DISABLE_STATES,
 				list(DEFAULT_MANUAL_DISABLE_STATES),
 			)
+			normalize_plain_on = entity.get(
+				CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+				DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
+			)
 			entity_off_delay = entity.get(CONF_ENTITY_OFF_DELAY)
 
 			lines = [
@@ -442,8 +459,31 @@ class _EntityManagementMixin:
 				f"   ↳ Detected: {detected_service} → {detected_state}",
 				f"   ↳ Cleared: {cleared_service} → {cleared_state}",
 			]
+			if (
+				_get_entity_domain(entity_id) == "light"
+				and detected_service == DEFAULT_DETECTED_SERVICE
+			):
+				transition = entity.get(
+					CONF_PRESENCE_DETECTED_TRANSITION,
+					DEFAULT_PRESENCE_DETECTED_TRANSITION,
+				)
+				brightness_pct = entity.get(
+					CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+					DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+				)
+				lines.append(
+					f"   ↳ Turn-on target: {brightness_pct}% over {transition}s"
+				)
+				if cleared_service == DEFAULT_CLEARED_SERVICE:
+					clear_transition = entity.get(
+						CONF_PRESENCE_CLEARED_TRANSITION,
+						DEFAULT_PRESENCE_CLEARED_TRANSITION,
+					)
+					lines.append(f"   ↳ Turn-off transition: {clear_transition}s")
 			if not respects_toggle:
 				lines.append("   ↳ Presence toggle disabled")
+			if not normalize_plain_on and _get_entity_domain(entity_id) == "light":
+				lines.append("   ↳ External plain-ON normalization disabled")
 			if automation_mode == AUTOMATION_MODE_AUTOMATIC:
 				if manual_disable_states:
 					states_str = ", ".join(manual_disable_states)
@@ -489,6 +529,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				CONF_CLEARING_SENSORS: user_input.get(CONF_CLEARING_SENSORS, []),
 				CONF_CLEARING_SENSORS_AUTO_DISCOVERED: False,
 				CONF_ACTIVATION_CONDITIONS: user_input.get(CONF_ACTIVATION_CONDITIONS, []),
+				CONF_ACTIVATION_CATCHUP_MODE: user_input.get(
+					CONF_ACTIVATION_CATCHUP_MODE,
+					DEFAULT_ACTIVATION_CATCHUP_MODE,
+				),
 				CONF_FILE_LOGGING_ENABLED: user_input.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 				CONF_OFF_DELAY: user_input[CONF_OFF_DELAY],
 				CONF_AUTO_REENABLE_PRESENCE_SENSORS: user_input.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
@@ -522,6 +566,28 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "input_boolean"],
 							multiple=True,
+						)
+					),
+					vol.Optional(
+						CONF_ACTIVATION_CATCHUP_MODE,
+						default=DEFAULT_ACTIVATION_CATCHUP_MODE,
+					): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=[
+								selector.SelectOptionDict(
+									value=ACTIVATION_CATCHUP_ANY_TRIGGER,
+									label="Any occupied trigger",
+								),
+								selector.SelectOptionDict(
+									value=ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
+									label="Clearing authority occupied",
+								),
+								selector.SelectOptionDict(
+									value=ACTIVATION_CATCHUP_NONE,
+									label="Fresh trigger only",
+								),
+							],
+							mode=selector.SelectSelectorMode.DROPDOWN,
 						)
 					),
 					vol.Optional(
@@ -597,12 +663,28 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			return await self.async_step_select_entity()
 		defaults = self._current_entity_config.copy()
 		defaults.setdefault(CONF_PRESENCE_DETECTED_SERVICE, DEFAULT_DETECTED_SERVICE)
+		defaults.setdefault(
+			CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+			DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+		)
+		defaults.setdefault(
+			CONF_PRESENCE_DETECTED_TRANSITION,
+			DEFAULT_PRESENCE_DETECTED_TRANSITION,
+		)
 		defaults.setdefault(CONF_PRESENCE_DETECTED_STATE, DEFAULT_DETECTED_STATE)
 		defaults.setdefault(CONF_PRESENCE_CLEARED_SERVICE, DEFAULT_CLEARED_SERVICE)
+		defaults.setdefault(
+			CONF_PRESENCE_CLEARED_TRANSITION,
+			DEFAULT_PRESENCE_CLEARED_TRANSITION,
+		)
 		defaults.setdefault(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
 		defaults.setdefault(CONF_RESPECTS_PRESENCE_ALLOWED, DEFAULT_RESPECTS_PRESENCE_ALLOWED)
 		defaults.setdefault(CONF_AUTOMATION_MODE, DEFAULT_AUTOMATION_MODE)
 		defaults.setdefault(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+		defaults.setdefault(
+			CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+			DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
+		)
 		defaults.setdefault(
 			CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 			DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
@@ -624,7 +706,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
-		
+
 		# Check if RLC integration is available and find potential RLC sensors for this entity
 		rlc_available = is_rlc_integration_available(self.hass)
 		rlc_sensors_for_entity = (
@@ -680,20 +762,20 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 				disable_on_external = automation_mode == AUTOMATION_MODE_AUTOMATIC
 				require_occupancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
 				require_vacancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
-				
+
 				# Get use_interceptor - only relevant for presence_lock mode
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
 				presence_lock_respects_manual_override = user_input.get(
 					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 					DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 				)
-				
+
 				# Get manual_disable_states - Automatic pauses on these states; Presence Lock yields to them.
 				manual_disable_states = user_input.get(
 					CONF_MANUAL_DISABLE_STATES,
 					list(DEFAULT_MANUAL_DISABLE_STATES),
 				)
-				
+
 				# Get RLC tracking entity (optional)
 				rlc_tracking_entity = user_input.get(CONF_RLC_TRACKING_ENTITY)
 
@@ -726,7 +808,24 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 					CONF_REQUIRE_VACANCY_FOR_CLEARED: require_vacancy,
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
-				
+				if _get_entity_domain(entity_id) == "light":
+					updated_config[CONF_NORMALIZE_EXTERNAL_PLAIN_ON] = user_input.get(
+						CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+						defaults[CONF_NORMALIZE_EXTERNAL_PLAIN_ON],
+					)
+					updated_config[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT] = user_input.get(
+						CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+						defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
+					)
+					updated_config[CONF_PRESENCE_DETECTED_TRANSITION] = user_input.get(
+						CONF_PRESENCE_DETECTED_TRANSITION,
+						defaults[CONF_PRESENCE_DETECTED_TRANSITION],
+					)
+					updated_config[CONF_PRESENCE_CLEARED_TRANSITION] = user_input.get(
+						CONF_PRESENCE_CLEARED_TRANSITION,
+						defaults[CONF_PRESENCE_CLEARED_TRANSITION],
+					)
+
 				_carry_forward_entity_settings(updated_config, self._current_entity_config)
 
 				# Only store RLC tracking entity if one was selected
@@ -895,6 +994,23 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
+		if _get_entity_domain(entity_id) == "light":
+			schema_fields[vol.Optional(
+				CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+				default=defaults[CONF_NORMALIZE_EXTERNAL_PLAIN_ON],
+			)] = selector.BooleanSelector()
+			schema_fields[vol.Optional(
+				CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+				default=defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
+			)] = vol.All(vol.Coerce(int), vol.Range(min=1, max=100))
+			schema_fields[vol.Optional(
+				CONF_PRESENCE_DETECTED_TRANSITION,
+				default=defaults[CONF_PRESENCE_DETECTED_TRANSITION],
+			)] = vol.All(vol.Coerce(float), vol.Range(min=0, max=60))
+			schema_fields[vol.Optional(
+				CONF_PRESENCE_CLEARED_TRANSITION,
+				default=defaults[CONF_PRESENCE_CLEARED_TRANSITION],
+			)] = vol.All(vol.Coerce(float), vol.Range(min=0, max=60))
 
 		# Add manual_disable_states multi-select.
 		# Uses the same state options as detected/cleared state fields
@@ -931,7 +1047,7 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 						value=sensor_id,
 						label=friendly,
 					))
-			
+
 			if rlc_options:
 				rlc_default = defaults.get(CONF_RLC_TRACKING_ENTITY)
 				schema_fields[vol.Optional(
@@ -993,6 +1109,10 @@ class PresenceBasedLightingFlowHandler(_EntityManagementMixin, config_entries.Co
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
 			CONF_CLEARING_SENSORS_AUTO_DISCOVERED: self._base_data.get(CONF_CLEARING_SENSORS_AUTO_DISCOVERED, False),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
+			CONF_ACTIVATION_CATCHUP_MODE: self._base_data.get(
+				CONF_ACTIVATION_CATCHUP_MODE,
+				DEFAULT_ACTIVATION_CATCHUP_MODE,
+			),
 			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
@@ -1160,7 +1280,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 
 	def __init__(self, config_entry):
 		"""Initialize options flow.
-		
+
 		Note: config_entry parameter is for test compatibility.
 		In production, self.config_entry is automatically set by OptionsFlow.
 		"""
@@ -1171,7 +1291,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		# Check for private attribute to avoid triggering property during init
 		if not hasattr(self, '_config_entry'):
 			self._config_entry = config_entry
-		
+
 		_LOGGER.debug("Loading config_entry.data: %s", config_entry.data)
 		self._base_data = {
 			CONF_ROOM_NAME: config_entry.data[CONF_ROOM_NAME],
@@ -1179,6 +1299,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_CLEARING_SENSORS: config_entry.data.get(CONF_CLEARING_SENSORS, []),
 			CONF_CLEARING_SENSORS_AUTO_DISCOVERED: config_entry.data.get(CONF_CLEARING_SENSORS_AUTO_DISCOVERED, False),
 			CONF_ACTIVATION_CONDITIONS: config_entry.data.get(CONF_ACTIVATION_CONDITIONS, []),
+			CONF_ACTIVATION_CATCHUP_MODE: config_entry.data.get(
+				CONF_ACTIVATION_CATCHUP_MODE,
+				DEFAULT_ACTIVATION_CATCHUP_MODE,
+			),
 			CONF_FILE_LOGGING_ENABLED: config_entry.data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: config_entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY),
 			CONF_AUTO_REENABLE_PRESENCE_SENSORS: config_entry.data.get(CONF_AUTO_REENABLE_PRESENCE_SENSORS, []),
@@ -1196,7 +1320,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		self._finalize_after_configure: bool = False
 		self._custom_state_ui: dict[str, str | None] = {}
 		_LOGGER.debug("OptionsFlow.__init__ complete. Loaded %d entities", len(self._controlled_entities))
-	
+
 	@property
 	def config_entry(self):
 		"""Return config entry (for test compatibility)."""
@@ -1228,6 +1352,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_CLEARING_SENSORS: self._base_data.get(CONF_CLEARING_SENSORS, []),
 			CONF_CLEARING_SENSORS_AUTO_DISCOVERED: self._base_data.get(CONF_CLEARING_SENSORS_AUTO_DISCOVERED, False),
 			CONF_ACTIVATION_CONDITIONS: self._base_data.get(CONF_ACTIVATION_CONDITIONS, []),
+			CONF_ACTIVATION_CATCHUP_MODE: self._base_data.get(
+				CONF_ACTIVATION_CATCHUP_MODE,
+				DEFAULT_ACTIVATION_CATCHUP_MODE,
+			),
 			CONF_FILE_LOGGING_ENABLED: self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
 			CONF_OFF_DELAY: self._base_data[CONF_OFF_DELAY],
 			CONF_CONTROLLED_ENTITIES: self._controlled_entities,
@@ -1418,6 +1546,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			else:
 				self._base_data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = not submitted_clearing
 			self._base_data[CONF_ACTIVATION_CONDITIONS] = user_input.get(CONF_ACTIVATION_CONDITIONS, [])
+			self._base_data[CONF_ACTIVATION_CATCHUP_MODE] = user_input.get(
+				CONF_ACTIVATION_CATCHUP_MODE,
+				DEFAULT_ACTIVATION_CATCHUP_MODE,
+			)
 			self._base_data[CONF_FILE_LOGGING_ENABLED] = user_input.get(
 				CONF_FILE_LOGGING_ENABLED,
 				self._base_data.get(CONF_FILE_LOGGING_ENABLED, DEFAULT_FILE_LOGGING_ENABLED),
@@ -1464,6 +1596,31 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						selector.EntitySelectorConfig(
 							domain=["binary_sensor", "input_boolean"],
 							multiple=True,
+						)
+					),
+					vol.Optional(
+						CONF_ACTIVATION_CATCHUP_MODE,
+						default=self._base_data.get(
+							CONF_ACTIVATION_CATCHUP_MODE,
+							DEFAULT_ACTIVATION_CATCHUP_MODE,
+						),
+					): selector.SelectSelector(
+						selector.SelectSelectorConfig(
+							options=[
+								selector.SelectOptionDict(
+									value=ACTIVATION_CATCHUP_ANY_TRIGGER,
+									label="Any occupied trigger",
+								),
+								selector.SelectOptionDict(
+									value=ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
+									label="Clearing authority occupied",
+								),
+								selector.SelectOptionDict(
+									value=ACTIVATION_CATCHUP_NONE,
+									label="Fresh trigger only",
+								),
+							],
+							mode=selector.SelectSelectorMode.DROPDOWN,
 						)
 					),
 					vol.Optional(
@@ -1545,11 +1702,23 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			CONF_PRESENCE_DETECTED_SERVICE: self._current_entity_config.get(
 				CONF_PRESENCE_DETECTED_SERVICE, DEFAULT_DETECTED_SERVICE
 			),
+			CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT: self._current_entity_config.get(
+				CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+				DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+			),
+			CONF_PRESENCE_DETECTED_TRANSITION: self._current_entity_config.get(
+				CONF_PRESENCE_DETECTED_TRANSITION,
+				DEFAULT_PRESENCE_DETECTED_TRANSITION,
+			),
 			CONF_PRESENCE_DETECTED_STATE: self._current_entity_config.get(
 				CONF_PRESENCE_DETECTED_STATE, DEFAULT_DETECTED_STATE
 			),
 			CONF_PRESENCE_CLEARED_SERVICE: self._current_entity_config.get(
 				CONF_PRESENCE_CLEARED_SERVICE, DEFAULT_CLEARED_SERVICE
+			),
+			CONF_PRESENCE_CLEARED_TRANSITION: self._current_entity_config.get(
+				CONF_PRESENCE_CLEARED_TRANSITION,
+				DEFAULT_PRESENCE_CLEARED_TRANSITION,
 			),
 			CONF_PRESENCE_CLEARED_STATE: self._current_entity_config.get(
 				CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE
@@ -1562,6 +1731,10 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			),
 			CONF_USE_INTERCEPTOR: self._current_entity_config.get(
 				CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR
+			),
+			CONF_NORMALIZE_EXTERNAL_PLAIN_ON: self._current_entity_config.get(
+				CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+				DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
 			),
 			CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: self._current_entity_config.get(
 				CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
@@ -1593,7 +1766,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 		delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY)
 		if entity_delay_default is not None:
 			delay_field = vol.Optional(CONF_ENTITY_OFF_DELAY, default=entity_delay_default)
-		
+
 		# Check if RLC integration is available and find potential RLC sensors for this entity
 		rlc_available = is_rlc_integration_available(self.hass)
 		rlc_sensors_for_entity = (
@@ -1649,20 +1822,20 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 				disable_on_external = automation_mode == AUTOMATION_MODE_AUTOMATIC
 				require_occupancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
 				require_vacancy = automation_mode == AUTOMATION_MODE_PRESENCE_LOCK
-				
+
 				# Get use_interceptor - only relevant for presence_lock mode
 				use_interceptor = user_input.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
 				presence_lock_respects_manual_override = user_input.get(
 					CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 					DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
 				)
-				
+
 				# Get manual_disable_states - Automatic pauses on these states; Presence Lock yields to them.
 				manual_disable_states = user_input.get(
 					CONF_MANUAL_DISABLE_STATES,
 					list(DEFAULT_MANUAL_DISABLE_STATES),
 				)
-				
+
 				# Get RLC tracking entity (optional)
 				rlc_tracking_entity = user_input.get(CONF_RLC_TRACKING_ENTITY)
 
@@ -1695,7 +1868,24 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 					CONF_REQUIRE_VACANCY_FOR_CLEARED: require_vacancy,
 					CONF_INITIAL_PRESENCE_ALLOWED: DEFAULT_INITIAL_PRESENCE_ALLOWED,
 				}
-				
+				if _get_entity_domain(entity_id) == "light":
+					updated_config[CONF_NORMALIZE_EXTERNAL_PLAIN_ON] = user_input.get(
+						CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+						defaults[CONF_NORMALIZE_EXTERNAL_PLAIN_ON],
+					)
+					updated_config[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT] = user_input.get(
+						CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+						defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
+					)
+					updated_config[CONF_PRESENCE_DETECTED_TRANSITION] = user_input.get(
+						CONF_PRESENCE_DETECTED_TRANSITION,
+						defaults[CONF_PRESENCE_DETECTED_TRANSITION],
+					)
+					updated_config[CONF_PRESENCE_CLEARED_TRANSITION] = user_input.get(
+						CONF_PRESENCE_CLEARED_TRANSITION,
+						defaults[CONF_PRESENCE_CLEARED_TRANSITION],
+					)
+
 				_carry_forward_entity_settings(updated_config, self._current_entity_config)
 
 				# Only store RLC tracking entity if one was selected
@@ -1864,6 +2054,23 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 			): selector.BooleanSelector(),
 			delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
 		}
+		if _get_entity_domain(entity_id) == "light":
+			schema_fields[vol.Optional(
+				CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+				default=defaults[CONF_NORMALIZE_EXTERNAL_PLAIN_ON],
+			)] = selector.BooleanSelector()
+			schema_fields[vol.Optional(
+				CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+				default=defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
+			)] = vol.All(vol.Coerce(int), vol.Range(min=1, max=100))
+			schema_fields[vol.Optional(
+				CONF_PRESENCE_DETECTED_TRANSITION,
+				default=defaults[CONF_PRESENCE_DETECTED_TRANSITION],
+			)] = vol.All(vol.Coerce(float), vol.Range(min=0, max=60))
+			schema_fields[vol.Optional(
+				CONF_PRESENCE_CLEARED_TRANSITION,
+				default=defaults[CONF_PRESENCE_CLEARED_TRANSITION],
+			)] = vol.All(vol.Coerce(float), vol.Range(min=0, max=60))
 
 		# Add manual_disable_states multi-select.
 		# Uses the same state options as detected/cleared state fields
@@ -1900,7 +2107,7 @@ class PresenceBasedLightingOptionsFlowHandler(_EntityManagementMixin, config_ent
 						value=sensor_id,
 						label=friendly,
 					))
-			
+
 			if rlc_options:
 				rlc_default = defaults.get(CONF_RLC_TRACKING_ENTITY)
 				schema_fields[vol.Optional(

@@ -944,6 +944,30 @@ class TestAutoReEnable:
         assert es["state"] != EntityAutomationState.PAUSED
 
     @pytest.mark.asyncio
+    async def test_startup_restores_pauses_before_checking_overdue_reset(self):
+        hass = MockHass()
+        setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        entry = _make_entry()
+        coord = PresenceBasedLightingCoordinator(hass, entry)
+        call_order = []
+
+        async def load_paused_state():
+            call_order.append("load")
+
+        async def check_auto_reenable_startup():
+            call_order.append("check")
+
+        coord._load_paused_state = AsyncMock(side_effect=load_paused_state)
+        coord._check_auto_reenable_startup = AsyncMock(
+            side_effect=check_auto_reenable_startup
+        )
+
+        await coord.async_start()
+
+        assert call_order == ["load", "check"]
+        coord.async_stop()
+
+    @pytest.mark.asyncio
     async def test_handle_presence_change_tracking(self):
         """Presence changes during monitoring window update tracking state."""
         hass = MockHass()

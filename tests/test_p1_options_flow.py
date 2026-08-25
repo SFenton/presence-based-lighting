@@ -27,7 +27,11 @@ from custom_components.presence_based_lighting.const import (  # noqa: E402  # p
     CONF_OFF_DELAY,
     CONF_PRESENCE_CLEARED_SERVICE,
     CONF_PRESENCE_CLEARED_STATE,
+    CONF_PRESENCE_CLEARED_TRANSITION,
+    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
     CONF_PRESENCE_DETECTED_SERVICE,
+    CONF_PRESENCE_DETECTED_TRANSITION,
     CONF_PRESENCE_DETECTED_STATE,
     CONF_PRESENCE_SENSORS,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
@@ -36,7 +40,11 @@ from custom_components.presence_based_lighting.const import (  # noqa: E402  # p
     DEFAULT_AUTOMATION_MODE,
     DEFAULT_CLEARED_SERVICE,
     DEFAULT_CLEARED_STATE,
+    DEFAULT_PRESENCE_CLEARED_TRANSITION,
+    DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
     DEFAULT_DETECTED_SERVICE,
+    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+    DEFAULT_PRESENCE_DETECTED_TRANSITION,
     DEFAULT_DETECTED_STATE,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
@@ -149,6 +157,22 @@ async def test_choose_edit_entity_updates_existing_and_finalizes(_mock_services,
     handler.async_create_entry.assert_called_once()
     updated_entity = handler._controlled_entities[0]  # type: ignore[attr-defined]
     assert updated_entity[CONF_PRESENCE_DETECTED_SERVICE] == "turn_on"
+    assert (
+        updated_entity[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT]
+        == DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
+    )
+    assert (
+        updated_entity[CONF_PRESENCE_DETECTED_TRANSITION]
+        == DEFAULT_PRESENCE_DETECTED_TRANSITION
+    )
+    assert (
+        updated_entity[CONF_PRESENCE_CLEARED_TRANSITION]
+        == DEFAULT_PRESENCE_CLEARED_TRANSITION
+    )
+    assert (
+        updated_entity[CONF_NORMALIZE_EXTERNAL_PLAIN_ON]
+        is DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON
+    )
     assert result == {"type": "create_entry"}
 
 

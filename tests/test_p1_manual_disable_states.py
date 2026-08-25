@@ -8,7 +8,10 @@ automation (any state NOT in the list re-enables automation).
 import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
 
-from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting import (
+    EntityAutomationState,
+    PresenceBasedLightingCoordinator,
+)
 from custom_components.presence_based_lighting.const import (
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -336,6 +339,79 @@ class TestManualDisableStatesServiceCalls:
         await coordinator._handle_external_action("light.living_room", "turn_on")
         assert coordinator.get_automation_paused("light.living_room") is False
 
+    @pytest.mark.asyncio
+    async def test_service_call_turn_on_does_not_race_external_command(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        """An external turn_on in flight should not trigger a duplicate PBL call."""
+        mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_MANUAL_DISABLE_STATES
+        ] = [STATE_OFF]
+        setup_entity_states(
+            mock_hass,
+            lights_state=STATE_ON,
+            occupancy_state=STATE_ON,
+        )
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        coordinator.set_automation_paused("light.living_room", True)
+        mock_hass.states.set("light.living_room", STATE_OFF)
+        mock_hass.services.clear()
+
+        await coordinator._handle_external_action("light.living_room", "turn_on")
+
+        entity_state = coordinator._entity_states["light.living_room"]
+        assert coordinator.get_automation_paused("light.living_room") is False
+        assert entity_state["state"] == EntityAutomationState.OCCUPIED
+        assert mock_hass.services.calls == []
+
+        await coordinator._handle_controlled_entity_change(
+            _entity_event(
+                mock_hass,
+                "light.living_room",
+                STATE_OFF,
+                STATE_ON,
+            )
+        )
+        assert mock_hass.services.calls == []
+
+    @pytest.mark.asyncio
+    async def test_external_turn_on_falls_back_if_state_never_changes(
+        self,
+        mock_hass,
+        mock_config_entry,
+    ):
+        """Periodic reconciliation may retry when the external command fails."""
+        setup_entity_states(
+            mock_hass,
+            lights_state=STATE_ON,
+            occupancy_state=STATE_ON,
+        )
+        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
+        await coordinator.async_start()
+
+        coordinator.set_automation_paused("light.living_room", True)
+        mock_hass.states.set("light.living_room", STATE_OFF)
+        mock_hass.services.clear()
+
+        await coordinator._handle_external_action("light.living_room", "turn_on")
+        assert mock_hass.services.calls == []
+
+        await coordinator._reconcile_entity(
+            "light.living_room",
+            coordinator._entity_states["light.living_room"],
+        )
+
+        assert [
+            call
+            for call in mock_hass.services.calls
+            if call["service"] == "turn_on"
+            and call["service_data"]["entity_id"] == "light.living_room"
+        ]
+
 
 class TestManualDisableStatesInteractionWithOtherSettings:
     """Test interaction between manual_disable_states and other config options."""
@@ -361,7 +437,7 @@ class TestManualDisableStatesInteractionWithOtherSettings:
         # Remove the key if it exists
         if CONF_MANUAL_DISABLE_STATES in mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0]:
             del mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_MANUAL_DISABLE_STATES]
-        
+
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
@@ -391,7 +467,7 @@ class TestManualDisableStatesMultipleEntities:
             CONF_MANUAL_DISABLE_STATES: [STATE_ON],  # Opposite of living room
         })
         mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_MANUAL_DISABLE_STATES] = [STATE_OFF]
-        
+
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         mock_hass.states.set("light.bedroom", STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)

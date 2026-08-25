@@ -1483,8 +1483,8 @@ async def test_sibling_service_context_does_not_resume_manual_pause(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_own_child_service_context_does_not_pause_automation(mock_hass):
-    """A downstream service call from our command remains internally attributed."""
+async def test_opposite_child_service_context_is_external(mock_hass):
+    """A child command in the opposite direction must not inherit trust."""
     entry = _entry(
         entry_id="first",
         room_name="First",
@@ -1520,7 +1520,7 @@ async def test_own_child_service_context_does_not_pause_automation(mock_hass):
         _service_event("turn_off", child_context)
     )
 
-    assert coordinator.get_automation_paused(LIGHT) is False
+    assert coordinator.get_automation_paused(LIGHT) is True
 
 
 @pytest.mark.asyncio

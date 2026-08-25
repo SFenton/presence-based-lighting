@@ -19,6 +19,7 @@ counting entries would inflate a singleton into a false batch.
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import TYPE_CHECKING, Callable
@@ -80,6 +81,19 @@ class BatchDecision:
 	enforcing: bool
 
 
+@dataclass(frozen=True)
+class BlockedCommand:
+	"""One external command blocked while its HomeKit batch was unconfirmed."""
+
+	context_id: str
+	entity_id: str
+	domain: str
+	service: str
+	target_state: str
+	service_data: dict
+	recorded_at: float
+
+
 class CommandBatchObserver:
 	"""Group HomeKit commands into batches and expose context -> batch lookup."""
 
@@ -93,6 +107,7 @@ class CommandBatchObserver:
 		self._batches: dict[str, CommandBatch] = {}
 		self._context_to_batch: dict[str, str] = {}
 		self._open_batch_by_service: dict[str, str] = {}
+		self._blocked_commands: dict[tuple[str, str, str], BlockedCommand] = {}
 		self._managed_entities: dict[str, set[str]] = {}
 		self._entry_configs: dict[str, dict] = {}
 		self._listening_entries: set[str] = set()
@@ -322,6 +337,7 @@ class CommandBatchObserver:
 		self._batches.clear()
 		self._context_to_batch.clear()
 		self._open_batch_by_service.clear()
+		self._blocked_commands.clear()
 		self._confirm_callbacks.clear()
 
 	# ------------------------------------------------------------------
@@ -353,6 +369,7 @@ class CommandBatchObserver:
 		batch = self._open_batch_for(service, now)
 		entity_was_new = entity_id not in batch.entity_ids
 		batch.last_seen_at = now
+		context_was_new = context_id not in batch.context_ids
 		batch.context_ids.add(context_id)
 		batch.entity_ids.add(entity_id)
 		if self.is_managed(entity_id):
@@ -373,7 +390,10 @@ class CommandBatchObserver:
 				batch.batch_id,
 				self._mode,
 			)
-		if newly_confirmed or (batch.confirmed and entity_was_new):
+		if newly_confirmed or (
+			batch.confirmed
+			and (entity_was_new or context_was_new)
+		):
 			new_target = None if newly_confirmed else entity_id
 			for callback in list(self._confirm_callbacks):
 				try:
@@ -429,6 +449,58 @@ class CommandBatchObserver:
 		batch = self._batches.get(batch_id)
 		return set(batch.context_ids) if batch else set()
 
+	def record_blocked_command(
+		self,
+		context_id: str | None,
+		entity_id: str,
+		domain: str,
+		service: str,
+		target_state: str,
+		service_data: dict,
+	) -> bool:
+		"""Record an intercepted command or allow it if its batch is confirmed."""
+		if not context_id or not self.enforcing:
+			return False
+		self._purge(self._now())
+		decision = self.classify(context_id)
+		if decision is not None and decision.confirmed and decision.enforcing:
+			return True
+		key = (context_id, entity_id, service)
+		self._blocked_commands[key] = BlockedCommand(
+			context_id=context_id,
+			entity_id=entity_id,
+			domain=domain,
+			service=service,
+			target_state=target_state,
+			service_data=deepcopy(service_data),
+			recorded_at=self._now(),
+		)
+		return False
+
+	def cancel_blocked_commands(self, entity_id: str) -> None:
+		"""Cancel blocked OFF commands superseded by a later external ON."""
+		for key, command in list(self._blocked_commands.items()):
+			if command.entity_id == entity_id:
+				self._blocked_commands.pop(key, None)
+
+	def pop_blocked_for_batch(
+		self,
+		batch_id: str,
+		entity_ids: set[str],
+	) -> list[BlockedCommand]:
+		"""Atomically claim blocked commands belonging to a confirmed batch."""
+		self._purge(self._now())
+		context_ids = self.context_ids_for_batch(batch_id)
+		commands: list[BlockedCommand] = []
+		for key, command in list(self._blocked_commands.items()):
+			if (
+				command.context_id in context_ids
+				and command.entity_id in entity_ids
+			):
+				commands.append(command)
+				self._blocked_commands.pop(key, None)
+		return commands
+
 	def _purge(self, now: float) -> None:
 		"""Drop batches past the retention horizon."""
 		cutoff = now - self._retain_seconds
@@ -441,6 +513,9 @@ class CommandBatchObserver:
 			for context_id in batch.context_ids:
 				if self._context_to_batch.get(context_id) == batch_id:
 					self._context_to_batch.pop(context_id, None)
+		for key, command in list(self._blocked_commands.items()):
+			if command.recorded_at < cutoff:
+				self._blocked_commands.pop(key, None)
 
 
 def get_batch_observer(hass: HomeAssistant) -> CommandBatchObserver:
@@ -458,6 +533,7 @@ __all__ = [
 	"BATCH_MODE_OBSERVE",
 	"BATCH_MODE_OFF",
 	"BatchDecision",
+	"BlockedCommand",
 	"CommandBatch",
 	"CommandBatchObserver",
 	"get_batch_observer",

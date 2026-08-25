@@ -9,18 +9,28 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
 from .const import (
+    CONF_ACTIVATION_CATCHUP_MODE,
     CONF_AUTOMATION_MODE,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
     CONF_ENTITY_ID,
     CONF_INITIAL_PRESENCE_ALLOWED,
     CONF_MANUAL_DISABLE_STATES,
+    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+    CONF_PRESENCE_CLEARED_TRANSITION,
+    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+    CONF_PRESENCE_DETECTED_TRANSITION,
     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_ROOM_NAME,
     CONF_USE_INTERCEPTOR,
+    DEFAULT_ACTIVATION_CATCHUP_MODE,
     DEFAULT_AUTOMATION_MODE,
     DEFAULT_MANUAL_DISABLE_STATES,
+    DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
+    DEFAULT_PRESENCE_CLEARED_TRANSITION,
+    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+    DEFAULT_PRESENCE_DETECTED_TRANSITION,
     DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
     DEFAULT_USE_INTERCEPTOR,
     DOMAIN,
@@ -32,16 +42,16 @@ from .const import (
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up per-entity presence switches and auto re-enable switch."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    
+
     # Per-entity presence switches
     entities = [
         PresenceEntitySwitch(coordinator, entry, entity_config)
         for entity_config in entry.data.get(CONF_CONTROLLED_ENTITIES, [])
     ]
-    
+
     # Auto re-enable switch for the room
     entities.append(AutoReEnableSwitch(coordinator, entry))
-    
+
     async_add_entities(entities)
 
 
@@ -140,6 +150,26 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
                 CONF_USE_INTERCEPTOR,
                 DEFAULT_USE_INTERCEPTOR,
             ),
+            CONF_NORMALIZE_EXTERNAL_PLAIN_ON: self._entity_config.get(
+                CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+                DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
+            ),
+            CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT: self._entity_config.get(
+                CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+                DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+            ),
+            CONF_PRESENCE_DETECTED_TRANSITION: self._entity_config.get(
+                CONF_PRESENCE_DETECTED_TRANSITION,
+                DEFAULT_PRESENCE_DETECTED_TRANSITION,
+            ),
+            CONF_PRESENCE_CLEARED_TRANSITION: self._entity_config.get(
+                CONF_PRESENCE_CLEARED_TRANSITION,
+                DEFAULT_PRESENCE_CLEARED_TRANSITION,
+            ),
+            CONF_ACTIVATION_CATCHUP_MODE: self._entry.data.get(
+                CONF_ACTIVATION_CATCHUP_MODE,
+                DEFAULT_ACTIVATION_CATCHUP_MODE,
+            ),
             "automation_paused": self._coordinator.get_automation_paused(self._entity_id),
             "automation_state": self._coordinator.get_entity_automation_state(self._entity_id),
         }
@@ -178,7 +208,7 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
 
 class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
     """Switch controlling whether auto re-enable is active for this room.
-    
+
     When enabled, the coordinator will track presence during the configured
     time window and automatically re-enable presence-based lighting if the
     room was empty for the configured threshold percentage of time.
@@ -189,10 +219,10 @@ class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
         self._coordinator = coordinator
         self._entry = entry
         self._is_on = False
-        
+
         room_name = entry.data.get(CONF_ROOM_NAME, "Unknown")
         sanitized_room = slugify(room_name)
-        
+
         self._attr_name = f"{room_name} Auto Re-Enable Presence Lighting"
         self._attr_unique_id = f"{entry.entry_id}_auto_reenable"
         self._attr_icon = ICON_AUTO_REENABLE
@@ -218,12 +248,12 @@ class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
         attrs = {
             "room": self._entry.data.get(CONF_ROOM_NAME),
         }
-        
+
         # Add tracking info from coordinator if available
         if hasattr(self._coordinator, 'get_auto_reenable_tracking_info'):
             tracking_info = self._coordinator.get_auto_reenable_tracking_info()
             attrs.update(tracking_info)
-        
+
         return attrs
 
     async def async_turn_on(self, **kwargs) -> None:
@@ -243,13 +273,13 @@ class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
     async def async_added_to_hass(self) -> None:
         """Restore state on startup."""
         await super().async_added_to_hass()
-        
+
         last_state = await self.async_get_last_state()
         if last_state is not None:
             self._is_on = last_state.state == STATE_ON
         else:
             self._is_on = False
-        
+
         # Notify coordinator of initial state
         if hasattr(self._coordinator, 'set_auto_reenable_enabled'):
             self._coordinator.set_auto_reenable_enabled(self._is_on)
