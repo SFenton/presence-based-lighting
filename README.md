@@ -25,7 +25,7 @@ Drive lights, fans, or any switchable entity directly from HA service metadata. 
 - 🎯 **Smart manual override** – external control pauses automation until you re-enable it
 - 🏠 **Multi-room + multi-entity** – configure multiple rooms, each with any number of controlled entities
 - ⏱️ **Global or per-entity delays** – override turn-off timers per device when needed
-- 🌅 **Single-stage light activation** – PBL and intercepted plain light turn-ons target a configurable brightness and transition before dispatch
+- 🌅 **Single-stage light activation** – PBL and intercepted plain light turn-ons target a configurable brightness and transition before dispatch; explicit brightness requests keep their requested level and gain only the missing transition
 - 🌙 **Smooth light clearing** – presence-driven light turn-offs use a configurable transition
 - 🔧 **Completely UI-based** – no YAML, selectors are built-in to the config flow
 - � **Presence Allowed switches** – each entity gets its own switch entity for dashboards or automations
@@ -74,9 +74,10 @@ Each controlled entity gets its own switch (`switch.<room>_presence_<entity>_pre
 
 Install [Hass Interceptor](https://github.com/SFenton/hass-interceptor) and add
 `hass_interceptor:` to `configuration.yaml` to normalize external plain
-`light.turn_on` calls before they reach the device. PBL continues to operate
-without it, but manual HomeKit/HA turn-ons then retain their original service
-data.
+`light.turn_on` calls before they reach the device. Single-target absolute
+brightness requests also receive the configured transition without changing
+their requested brightness. PBL continues to operate without Hass Interceptor,
+but manual HomeKit/HA turn-ons then retain their original service data.
 
 ## Configuration
 

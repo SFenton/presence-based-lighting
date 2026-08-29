@@ -1,29 +1,46 @@
 """Tests for interceptor.py – PresenceLockInterceptor."""
+import sys
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-import sys
-
 from custom_components.presence_based_lighting.command_context import CommandOrigin
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
 from custom_components.presence_based_lighting.const import (
-    CONF_CONTROLLED_ENTITIES,
-    CONF_ENTITY_ID,
-    CONF_MANUAL_DISABLE_STATES,
     CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_TRANSITION,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_USE_INTERCEPTOR,
-    DEFAULT_USE_INTERCEPTOR,
-    DOMAIN,
 )
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import CONF_USE_INTERCEPTOR
+from custom_components.presence_based_lighting.const import DEFAULT_USE_INTERCEPTOR
+from custom_components.presence_based_lighting.const import DOMAIN
 from custom_components.presence_based_lighting.interceptor import (
     is_interceptor_available,
+)
+from custom_components.presence_based_lighting.interceptor import (
     PresenceLockInterceptor,
 )
 
@@ -89,6 +106,7 @@ class TestPresenceLockInterceptorWithLib:
     def _patch_interceptor_available(self):
         """Patch the module to simulate hass-interceptor being installed."""
         import custom_components.presence_based_lighting.interceptor as mod
+
         self._orig_has = mod.HAS_INTERCEPTOR
         mod.HAS_INTERCEPTOR = True
 
@@ -102,27 +120,36 @@ class TestPresenceLockInterceptorWithLib:
 
         # Create mock register_interceptor
         self._register_calls = []
+
         def mock_register(hass, domain, service, handler, priority, integration):
-            self._register_calls.append({
-                "domain": domain, "service": service,
-                "handler": handler, "priority": priority,
-            })
+            self._register_calls.append(
+                {
+                    "domain": domain,
+                    "service": service,
+                    "handler": handler,
+                    "priority": priority,
+                }
+            )
             return MagicMock()  # unregister function
+
         mod.register_interceptor = mock_register
 
     def _unpatch(self):
         import custom_components.presence_based_lighting.interceptor as mod
+
         mod.HAS_INTERCEPTOR = self._orig_has
-        if hasattr(mod, 'InterceptResult') and hasattr(self, '_mock_result'):
+        if hasattr(mod, "InterceptResult") and hasattr(self, "_mock_result"):
             del mod.InterceptResult
-        if hasattr(mod, 'register_interceptor'):
+        if hasattr(mod, "register_interceptor"):
             del mod.register_interceptor
 
     def test_setup_registers_interceptors(self):
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=True, req_vac=True, respects_manual_override=False)
+            entry = _make_entry(
+                req_occ=True, req_vac=True, respects_manual_override=False
+            )
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             result = interceptor.setup()
             assert result is True
@@ -199,6 +226,91 @@ class TestPresenceLockInterceptorWithLib:
 
             assert result == self._mock_result.ALLOW
             assert data == {"entity_id": ["light.living_room"], "params": {}}
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_conflicting_brightness_profiles_share_explicit_transition(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            hass.data = {}
+            first_entry = _make_entry(req_occ=False, req_vac=False)
+            first_entry.entry_id = "entry_a"
+            second_entry = _make_entry(req_occ=False, req_vac=False)
+            second_entry.entry_id = "entry_b"
+            second_entry.data[CONF_CONTROLLED_ENTITIES][0][
+                CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+            ] = 50
+
+            first = PresenceLockInterceptor(
+                hass,
+                first_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            second = PresenceLockInterceptor(
+                hass,
+                second_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            first.setup()
+            second.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {
+                "entity_id": ["light.living_room"],
+                "params": {"brightness": 51},
+            }
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data["params"] == {
+                "brightness": 51,
+                "transition": 1.0,
+            }
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_conflicting_transition_profiles_leave_brightness_unchanged(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            hass.data = {}
+            first_entry = _make_entry(req_occ=False, req_vac=False)
+            first_entry.entry_id = "entry_a"
+            second_entry = _make_entry(req_occ=False, req_vac=False)
+            second_entry.entry_id = "entry_b"
+            second_entry.data[CONF_CONTROLLED_ENTITIES][0][
+                CONF_PRESENCE_DETECTED_TRANSITION
+            ] = 2.0
+
+            first = PresenceLockInterceptor(
+                hass,
+                first_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            second = PresenceLockInterceptor(
+                hass,
+                second_entry,
+                lambda: True,
+                entry_is_active_func=lambda: True,
+            )
+            first.setup()
+            second.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {
+                "entity_id": ["light.living_room"],
+                "params": {"brightness": 51},
+            }
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data["params"] == {"brightness": 51}
         finally:
             self._unpatch()
 
@@ -383,7 +495,9 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=False, req_vac=True, respects_manual_override=False)
+            entry = _make_entry(
+                req_occ=False, req_vac=True, respects_manual_override=False
+            )
             is_occupied = MagicMock(return_value=True)
             interceptor = PresenceLockInterceptor(hass, entry, is_occupied)
             interceptor.setup()
@@ -418,9 +532,7 @@ class TestPresenceLockInterceptorWithLib:
             interceptor.setup()
 
             registration = next(
-                item
-                for item in self._register_calls
-                if item["service"] == "turn_off"
+                item for item in self._register_calls if item["service"] == "turn_off"
             )
             data = {"entity_id": ["light.living_room"], "params": {}}
             result = await registration["handler"](MagicMock(), data)
@@ -451,9 +563,7 @@ class TestPresenceLockInterceptorWithLib:
             interceptor.setup()
 
             registration = next(
-                item
-                for item in self._register_calls
-                if item["service"] == "turn_off"
+                item for item in self._register_calls if item["service"] == "turn_off"
             )
             result = await registration["handler"](
                 MagicMock(),
@@ -485,9 +595,7 @@ class TestPresenceLockInterceptorWithLib:
             interceptor.setup()
 
             registration = next(
-                item
-                for item in self._register_calls
-                if item["service"] == "turn_off"
+                item for item in self._register_calls if item["service"] == "turn_off"
             )
             data = {"entity_id": ["light.living_room"], "params": {}}
             result = await registration["handler"](MagicMock(), data)
@@ -522,9 +630,7 @@ class TestPresenceLockInterceptorWithLib:
             interceptor.setup()
 
             registration = next(
-                item
-                for item in self._register_calls
-                if item["service"] == "turn_off"
+                item for item in self._register_calls if item["service"] == "turn_off"
             )
             context = MagicMock()
             data = {"entity_id": ["light.living_room"], "params": {}}
@@ -591,7 +697,9 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=True, req_vac=True, respects_manual_override=False)
+            entry = _make_entry(
+                req_occ=True, req_vac=True, respects_manual_override=False
+            )
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             interceptor.setup()
 
@@ -629,7 +737,9 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=False, req_vac=True, respects_manual_override=False)
+            entry = _make_entry(
+                req_occ=False, req_vac=True, respects_manual_override=False
+            )
             is_occupied = MagicMock(return_value=True)
             interceptor = PresenceLockInterceptor(hass, entry, is_occupied)
             interceptor.setup()
@@ -676,12 +786,80 @@ class TestPresenceLockInterceptorWithLib:
         [
             {"brightness": 128},
             {"brightness_pct": 50},
+        ],
+    )
+    async def test_plain_on_normalizer_adds_transition_to_explicit_brightness(
+        self,
+        explicit_data,
+    ):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(req_occ=False, req_vac=False)
+            interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
+            interceptor.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {
+                "entity_id": ["light.living_room"],
+                "params": dict(explicit_data),
+            }
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data["params"] == {
+                **explicit_data,
+                "transition": 1.0,
+            }
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    async def test_plain_on_normalizer_preserves_explicit_transition_zero(self):
+        self._patch_interceptor_available()
+        try:
+            hass = MagicMock()
+            entry = _make_entry(req_occ=False, req_vac=False)
+            interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
+            interceptor.setup()
+
+            handler = self._register_calls[0]["handler"]
+            data = {
+                "entity_id": ["light.living_room"],
+                "params": {
+                    "brightness": 51,
+                    "transition": 0,
+                },
+            }
+            result = await handler(MagicMock(), data)
+
+            assert result == self._mock_result.ALLOW
+            assert data["params"] == {
+                "brightness": 51,
+                "transition": 0,
+            }
+        finally:
+            self._unpatch()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "explicit_data",
+        [
             {"brightness_step": 10},
             {"brightness_step_pct": 10},
             {"profile": "relax"},
+            {"effect": "candle"},
+            {"flash": "short"},
+            {"hs_color": (30, 50)},
+            {"color_temp_kelvin": 2700},
+            {"white": 128},
+            {"brightness": 0},
+            {"brightness_pct": 0},
+            {"brightness": 128, "effect": "candle"},
+            {"brightness": 128, "hs_color": (30, 50)},
         ],
     )
-    async def test_plain_on_normalizer_preserves_explicit_brightness(
+    async def test_plain_on_normalizer_preserves_excluded_turn_on_shapes(
         self,
         explicit_data,
     ):
@@ -755,16 +933,19 @@ class TestPresenceLockInterceptorWithLib:
     def test_setup_register_runtime_error(self):
         """RuntimeError from register_interceptor should be caught gracefully."""
         import custom_components.presence_based_lighting.interceptor as mod
+
         orig_has = mod.HAS_INTERCEPTOR
         mod.HAS_INTERCEPTOR = True
 
         class MockInterceptResult:
             ALLOW = "allow"
             BLOCK = "block"
+
         mod.InterceptResult = MockInterceptResult
 
         def bad_register(*args, **kwargs):
             raise RuntimeError("conflict")
+
         mod.register_interceptor = bad_register
 
         try:
@@ -777,9 +958,9 @@ class TestPresenceLockInterceptorWithLib:
             assert isinstance(result, bool)
         finally:
             mod.HAS_INTERCEPTOR = orig_has
-            if hasattr(mod, 'InterceptResult'):
+            if hasattr(mod, "InterceptResult"):
                 del mod.InterceptResult
-            if hasattr(mod, 'register_interceptor'):
+            if hasattr(mod, "register_interceptor"):
                 del mod.register_interceptor
 
     def test_teardown_unregister_error(self):
@@ -787,7 +968,9 @@ class TestPresenceLockInterceptorWithLib:
         self._patch_interceptor_available()
         try:
             hass = MagicMock()
-            entry = _make_entry(req_occ=True, req_vac=True, respects_manual_override=False)
+            entry = _make_entry(
+                req_occ=True, req_vac=True, respects_manual_override=False
+            )
             interceptor = PresenceLockInterceptor(hass, entry, lambda: True)
             interceptor.setup()
 
