@@ -11,37 +11,36 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
+from typing import TYPE_CHECKING
 
 from .command_context import CommandOrigin
-from .const import (
-    CONF_CONTROLLED_ENTITIES,
-    CONF_ENTITY_ID,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_DETECTED_TRANSITION,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_USE_INTERCEPTOR,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
-    DEFAULT_MANUAL_DISABLE_STATES,
-    DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
-    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-    DEFAULT_PRESENCE_DETECTED_TRANSITION,
-    DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
-    DEFAULT_USE_INTERCEPTOR,
-    DOMAIN,
-)
+from .const import CONF_CONTROLLED_ENTITIES
+from .const import CONF_ENTITY_ID
+from .const import CONF_MANUAL_DISABLE_STATES
+from .const import CONF_NORMALIZE_EXTERNAL_PLAIN_ON
+from .const import CONF_PRESENCE_CLEARED_SERVICE
+from .const import CONF_PRESENCE_CLEARED_STATE
+from .const import CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+from .const import CONF_PRESENCE_DETECTED_SERVICE
+from .const import CONF_PRESENCE_DETECTED_STATE
+from .const import CONF_PRESENCE_DETECTED_TRANSITION
+from .const import CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import CONF_REQUIRE_OCCUPANCY_FOR_DETECTED
+from .const import CONF_REQUIRE_VACANCY_FOR_CLEARED
+from .const import CONF_USE_INTERCEPTOR
+from .const import DEFAULT_CLEARED_STATE
+from .const import DEFAULT_DETECTED_SERVICE
+from .const import DEFAULT_DETECTED_STATE
+from .const import DEFAULT_MANUAL_DISABLE_STATES
+from .const import DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON
+from .const import DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
+from .const import DEFAULT_PRESENCE_DETECTED_TRANSITION
+from .const import DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED
+from .const import DEFAULT_REQUIRE_VACANCY_FOR_CLEARED
+from .const import DEFAULT_USE_INTERCEPTOR
+from .const import DOMAIN
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -56,13 +55,53 @@ NORMALIZER_INTERCEPTOR_PRIORITY = 200
 NORMALIZER_INTEGRATION = f"{DOMAIN}_plain_on_normalizer"
 NORMALIZER_MANAGER_KEY = "_light_turn_on_normalizer"
 
-_EXPLICIT_BRIGHTNESS_KEYS = {
+_ABSOLUTE_BRIGHTNESS_KEYS = {
     "brightness",
     "brightness_pct",
+}
+_TRANSITION_SHAPING_EXCLUDED_KEYS = {
     "brightness_step",
     "brightness_step_pct",
+    "color_name",
+    "color_temp",
+    "color_temp_kelvin",
+    "effect",
+    "flash",
+    "hs_color",
     "profile",
+    "rgb_color",
+    "rgbw_color",
+    "rgbww_color",
+    "white",
+    "xy_color",
 }
+_NON_BARE_TURN_ON_KEYS = _ABSOLUTE_BRIGHTNESS_KEYS | _TRANSITION_SHAPING_EXCLUDED_KEYS
+
+
+def _has_positive_absolute_brightness(params: dict) -> bool:
+    """Return whether a turn-on requests a positive absolute brightness."""
+    for key in _ABSOLUTE_BRIGHTNESS_KEYS:
+        value = params.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return True
+    return False
+
+
+def _has_explicit_turn_on_target(params: dict) -> bool:
+    """Return whether a turn-on carries target data beyond a bare ON."""
+    return any(params.get(key) is not None for key in _NON_BARE_TURN_ON_KEYS)
+
+
+def _may_shape_absolute_brightness_transition(params: dict) -> bool:
+    """Return whether only a missing transition may be added safely."""
+    return (
+        "transition" not in params
+        and _has_positive_absolute_brightness(params)
+        and not any(
+            params.get(key) is not None for key in _TRANSITION_SHAPING_EXCLUDED_KEYS
+        )
+    )
+
 
 # Try to import hass-interceptor
 try:
@@ -70,10 +109,12 @@ try:
         InterceptResult,
         register_interceptor,
     )
+
     HAS_INTERCEPTOR = True
 except ImportError:
     try:
         from hass_interceptor import InterceptResult, register_interceptor
+
         HAS_INTERCEPTOR = True
     except ImportError:
         HAS_INTERCEPTOR = False
@@ -95,7 +136,9 @@ def _presence_lock_respects_manual_override(entity_config: dict) -> bool:
 
 
 def _cleared_state_is_manual_override(entity_config: dict) -> bool:
-    cleared_state = entity_config.get(CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE)
+    cleared_state = entity_config.get(
+        CONF_PRESENCE_CLEARED_STATE, DEFAULT_CLEARED_STATE
+    )
     manual_disable_states = entity_config.get(
         CONF_MANUAL_DISABLE_STATES,
         DEFAULT_MANUAL_DISABLE_STATES,
@@ -121,7 +164,7 @@ class LightTurnOnNormalizer:
         self.hass = hass
         self._policies: dict[str, dict[str, LightNormalizationPolicy]] = {}
         self._unregister: Callable[[], None] | None = None
-        self._warned_conflicts: set[str] = set()
+        self._warned_conflicts: set[tuple[str, str]] = set()
 
     def register_policy(
         self,
@@ -168,7 +211,9 @@ class LightTurnOnNormalizer:
             policies.pop(entry_id, None)
             if not policies:
                 self._policies.pop(entity_id, None)
-                self._warned_conflicts.discard(entity_id)
+                self._warned_conflicts = {
+                    key for key in self._warned_conflicts if key[0] != entity_id
+                }
             if not self._policies and self._unregister is not None:
                 self._unregister()
                 self._unregister = None
@@ -187,27 +232,43 @@ class LightTurnOnNormalizer:
             integration=NORMALIZER_INTEGRATION,
         )
 
-    def _resolve_policy(self, entity_id: str) -> LightNormalizationPolicy | None:
+    def _resolve_policy(
+        self,
+        entity_id: str,
+        *,
+        transition_only: bool,
+    ) -> LightNormalizationPolicy | None:
         policies = list(self._policies.get(entity_id, {}).values())
         if not policies:
             return None
         active = [policy for policy in policies if policy.is_active()]
         candidates = active or policies
-        action_values = {
-            (policy.brightness_pct, policy.transition)
-            for policy in candidates
-        }
+        action_values = (
+            {policy.transition for policy in candidates}
+            if transition_only
+            else {(policy.brightness_pct, policy.transition) for policy in candidates}
+        )
+        conflict_kind = "transition" if transition_only else "plain_on"
+        conflict_key = (entity_id, conflict_kind)
         if len(action_values) > 1:
-            if entity_id not in self._warned_conflicts:
-                _LOGGER.warning(
-                    "Conflicting plain-on policies for %s across entries %s; "
-                    "leaving external command unchanged",
-                    entity_id,
-                    sorted(policy.entry_id for policy in candidates),
-                )
-                self._warned_conflicts.add(entity_id)
+            if conflict_key not in self._warned_conflicts:
+                if transition_only:
+                    _LOGGER.warning(
+                        "Conflicting turn-on transition policies for %s across "
+                        "entries %s; leaving explicit brightness command unchanged",
+                        entity_id,
+                        sorted(policy.entry_id for policy in candidates),
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Conflicting plain-on policies for %s across entries %s; "
+                        "leaving external command unchanged",
+                        entity_id,
+                        sorted(policy.entry_id for policy in candidates),
+                    )
+                self._warned_conflicts.add(conflict_key)
             return None
-        self._warned_conflicts.discard(entity_id)
+        self._warned_conflicts.discard(conflict_key)
         return min(candidates, key=lambda policy: policy.entry_id)
 
     async def _normalize(self, call: ServiceCall, data: dict):
@@ -216,14 +277,34 @@ class LightTurnOnNormalizer:
             target_entities = [target_entities]
         if len(target_entities) != 1:
             return InterceptResult.ALLOW
-        policy = self._resolve_policy(target_entities[0])
-        if policy is None:
-            return InterceptResult.ALLOW
 
         params = data.get("params")
         if not isinstance(params, dict):
             params = data
-        if any(params.get(key) is not None for key in _EXPLICIT_BRIGHTNESS_KEYS):
+
+        if _may_shape_absolute_brightness_transition(params):
+            policy = self._resolve_policy(
+                target_entities[0],
+                transition_only=True,
+            )
+            if policy is None:
+                return InterceptResult.ALLOW
+            params.setdefault("transition", policy.transition)
+            _LOGGER.debug(
+                "Added %ss transition to explicit brightness turn-on for %s",
+                params["transition"],
+                policy.entity_id,
+            )
+            return InterceptResult.ALLOW
+
+        if _has_explicit_turn_on_target(params):
+            return InterceptResult.ALLOW
+
+        policy = self._resolve_policy(
+            target_entities[0],
+            transition_only=False,
+        )
+        if policy is None:
             return InterceptResult.ALLOW
 
         params["brightness"] = round(255 * policy.brightness_pct / 100)
@@ -267,10 +348,10 @@ class PresenceLockInterceptor:
         is_clearing_authority_occupied_func: Callable[[], bool] | None = None,
         classify_command_context_func: Callable[
             [str, object | None, str | None], CommandOrigin
-        ] | None = None,
-        handle_blocked_command_func: Callable[
-            [str, str, object | None, dict], bool
-        ] | None = None,
+        ]
+        | None = None,
+        handle_blocked_command_func: Callable[[str, str, object | None, dict], bool]
+        | None = None,
     ) -> None:
         """Initialize the interceptor manager.
 
@@ -293,12 +374,10 @@ class PresenceLockInterceptor:
         self.entry = entry
         self._is_occupied = is_occupied_func
         self._is_clearing_authority_occupied = (
-            is_clearing_authority_occupied_func
-            or self._is_occupied
+            is_clearing_authority_occupied_func or self._is_occupied
         )
-        self._classify_command_context = (
-            classify_command_context_func
-            or (lambda _entity_id, _context, _target_state: CommandOrigin.EXTERNAL)
+        self._classify_command_context = classify_command_context_func or (
+            lambda _entity_id, _context, _target_state: CommandOrigin.EXTERNAL
         )
         self._handle_blocked_command = handle_blocked_command_func
         self._entity_may_enforce = entity_may_enforce_func or (lambda _entity_id: True)
@@ -334,7 +413,9 @@ class PresenceLockInterceptor:
             if not entity_id:
                 continue
 
-            use_interceptor = entity_config.get(CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR)
+            use_interceptor = entity_config.get(
+                CONF_USE_INTERCEPTOR, DEFAULT_USE_INTERCEPTOR
+            )
             normalize_plain_on = entity_config.get(
                 CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
                 DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
@@ -376,10 +457,9 @@ class PresenceLockInterceptor:
             if use_interceptor and require_vac:
                 cleared_service = entity_config.get(CONF_PRESENCE_CLEARED_SERVICE)
                 if cleared_service and cleared_service != "none":
-                    if (
-                        _presence_lock_respects_manual_override(entity_config)
-                        and _cleared_state_is_manual_override(entity_config)
-                    ):
+                    if _presence_lock_respects_manual_override(
+                        entity_config
+                    ) and _cleared_state_is_manual_override(entity_config):
                         _LOGGER.debug(
                             "Skipping cleared-state interceptor for %s because manual override is allowed",
                             entity_id,
@@ -401,9 +481,7 @@ class PresenceLockInterceptor:
                 and domain == "light"
                 and detected_service == DEFAULT_DETECTED_SERVICE
             ):
-                unregister = get_light_turn_on_normalizer(
-                    self.hass
-                ).register_policy(
+                unregister = get_light_turn_on_normalizer(self.hass).register_policy(
                     self.entry.entry_id,
                     entity_config,
                     self._entry_is_active,
@@ -471,7 +549,9 @@ class PresenceLockInterceptor:
                 # Block turn_on when room is empty
                 _LOGGER.debug(
                     "Presence Lock: Blocking %s.%s for %s (room is empty)",
-                    domain, service, entity_id,
+                    domain,
+                    service,
+                    entity_id,
                 )
                 # Remove the protected entity from the call
                 remaining = [e for e in target_entities if e != entity_id]
@@ -494,7 +574,9 @@ class PresenceLockInterceptor:
                     return InterceptResult.ALLOW
                 _LOGGER.debug(
                     "Presence Lock: Blocking %s.%s for %s (clearing authority occupied)",
-                    domain, service, entity_id,
+                    domain,
+                    service,
+                    entity_id,
                 )
                 # Remove the protected entity from the call
                 remaining = [e for e in target_entities if e != entity_id]
@@ -519,12 +601,16 @@ class PresenceLockInterceptor:
             self._presence_lock_registration_count += 1
             _LOGGER.debug(
                 "Registered presence-lock interceptor for %s.%s protecting %s",
-                domain, service, entity_id,
+                domain,
+                service,
+                entity_id,
             )
         except RuntimeError as err:
             _LOGGER.warning(
                 "Failed to register interceptor for %s.%s: %s",
-                domain, service, err,
+                domain,
+                service,
+                err,
             )
 
     def teardown(self) -> None:
@@ -538,4 +624,6 @@ class PresenceLockInterceptor:
         self._unregister_funcs.clear()
         self._registered_services.clear()
         self._presence_lock_registration_count = 0
-        _LOGGER.debug("Cleaned up presence-lock interceptors for entry %s", self.entry.entry_id)
+        _LOGGER.debug(
+            "Cleaned up presence-lock interceptors for entry %s", self.entry.entry_id
+        )
