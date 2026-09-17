@@ -357,7 +357,9 @@ async def test_newer_manual_off_supersedes_manual_on_with_quieted_hold(
     mock_hass, mock_config_entry
 ):
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     context = _context(user_id="user")
     assert await coordinator._accept_manual_control(
@@ -407,6 +409,44 @@ async def test_manual_authority_action_mismatch_preserves_quieted_hold(
             expected_action="turn_off",
         )
         == "turn_off"
+    )
+
+
+@pytest.mark.asyncio
+async def test_turn_on_authority_mismatched_turn_off_enters_quieted(
+    mock_hass, mock_config_entry
+):
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
+    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    await coordinator.async_start()
+    context = _context(user_id="user")
+    await coordinator.async_manual_control(
+        "light.living_room",
+        "turn_on",
+        {},
+        context,
+    )
+
+    await coordinator._handle_service_call(
+        SimpleNamespace(
+            data={
+                "domain": "light",
+                "service": "turn_off",
+                "service_data": {"entity_id": "light.living_room"},
+            },
+            context=context,
+        )
+    )
+
+    assert coordinator.get_quieted("light.living_room")
+    assert (
+        coordinator._command_context_registry.claim_manual_authority(
+            coordinator.entry.entry_id,
+            "light.living_room",
+            context,
+            expected_action="turn_on",
+        )
+        == "turn_on"
     )
 
 

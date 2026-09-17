@@ -3325,14 +3325,14 @@ class PresenceBasedLightingCoordinator:
                 )
                 if manual_authority_action:
                     continue
-                if (
+                pending_manual_action = (
                     self._command_context_registry.manual_authority_action(
                         self.entry.entry_id,
                         entity_id,
                         event.context,
                     )
-                    is not None
-                ):
+                )
+                if pending_manual_action is not None and service != "turn_off":
                     continue
                 direct_manual_action = None
                 if (
