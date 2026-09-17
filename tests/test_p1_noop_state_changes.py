@@ -1,11 +1,10 @@
 """No-op service call behavior for per-entity presence automation."""
-
 import asyncio
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
 from tests.conftest import setup_entity_states
 
 
@@ -34,12 +33,16 @@ class TestNoOpServiceCalls:
     entity = "light.living_room"
 
     @pytest.mark.asyncio
-    async def test_external_turn_off_disables_presence(self, mock_hass, mock_config_entry):
+    async def test_external_turn_off_disables_presence(
+        self, mock_hass, mock_config_entry
+    ):
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
-        await coordinator._handle_service_call(_service_event("light", "turn_off", [self.entity]))
+        await coordinator._handle_service_call(
+            _service_event("light", "turn_off", [self.entity])
+        )
         assert coordinator.get_automation_paused(self.entity) is True
 
     @pytest.mark.asyncio
@@ -52,53 +55,75 @@ class TestNoOpServiceCalls:
         requested state; treating those as manual control left untouched rooms
         paused for no reason.
         """
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
-        await coordinator._handle_service_call(_service_event("light", "turn_off", [self.entity]))
+        await coordinator._handle_service_call(
+            _service_event("light", "turn_off", [self.entity])
+        )
         assert coordinator.get_automation_paused(self.entity) is False
 
     @pytest.mark.asyncio
-    async def test_external_turn_on_keeps_presence_allowed(self, mock_hass, mock_config_entry):
+    async def test_external_turn_on_keeps_presence_allowed(
+        self, mock_hass, mock_config_entry
+    ):
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
-        await coordinator._handle_service_call(_service_event("light", "turn_on", [self.entity]))
+        await coordinator._handle_service_call(
+            _service_event("light", "turn_on", [self.entity])
+        )
         assert coordinator.get_presence_allowed(self.entity) is True
 
     @pytest.mark.asyncio
-    async def test_bulk_routine_disables_targeted_entity(self, mock_hass, mock_config_entry):
+    async def test_bulk_routine_disables_targeted_entity(
+        self, mock_hass, mock_config_entry
+    ):
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
         await coordinator._handle_service_call(
-            _service_event("light", "turn_off", [self.entity, "light.kitchen", "light.hallway"])
+            _service_event(
+                "light", "turn_off", [self.entity, "light.kitchen", "light.hallway"]
+            )
         )
         assert coordinator.get_automation_paused(self.entity) is True
 
     @pytest.mark.asyncio
     async def test_other_domains_ignored(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
-        await coordinator._handle_service_call(_service_event("switch", "turn_off", "switch.living_room"))
+        await coordinator._handle_service_call(
+            _service_event("switch", "turn_off", "switch.living_room")
+        )
         assert coordinator.get_presence_allowed(self.entity) is True
 
     @pytest.mark.asyncio
     async def test_other_entities_ignored(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
-        await coordinator._handle_service_call(_service_event("light", "turn_off", "light.bedroom"))
+        await coordinator._handle_service_call(
+            _service_event("light", "turn_off", "light.bedroom")
+        )
         assert coordinator.get_presence_allowed(self.entity) is True
 
     @pytest.mark.asyncio
-    async def test_manual_state_change_still_disables(self, mock_hass, mock_config_entry):
+    async def test_manual_state_change_still_disables(
+        self, mock_hass, mock_config_entry
+    ):
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
@@ -114,7 +139,9 @@ class TestNoOpServiceCalls:
             {
                 "data": {
                     "entity_id": self.entity,
-                    "old_state": type("State", (), {"state": STATE_ON, "context": None})(),
+                    "old_state": type(
+                        "State", (), {"state": STATE_ON, "context": None}
+                    )(),
                     "new_state": mock_hass.states.get(self.entity),
                 }
             },
@@ -138,15 +165,21 @@ class TestNoOpServiceCalls:
         assert coordinator.get_presence_allowed(self.entity) is True
 
     @pytest.mark.asyncio
-    async def test_detected_service_resets_allowance(self, mock_hass, mock_config_entry):
+    async def test_detected_service_resets_allowance(
+        self, mock_hass, mock_config_entry
+    ):
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
-        await coordinator._handle_service_call(_service_event("light", "turn_off", self.entity))
+        await coordinator._handle_service_call(
+            _service_event("light", "turn_off", self.entity)
+        )
         assert coordinator.get_automation_paused(self.entity) is True
 
-        await coordinator._handle_service_call(_service_event("light", "turn_on", self.entity))
+        await coordinator._handle_service_call(
+            _service_event("light", "turn_on", self.entity)
+        )
         assert coordinator.get_automation_paused(self.entity) is False
 
     @pytest.mark.asyncio
@@ -162,8 +195,12 @@ class TestNoOpServiceCalls:
                 {
                     "data": {
                         "entity_id": "binary_sensor.living_room_motion",
-                        "old_state": type("State", (), {"state": STATE_ON, "context": None})(),
-                        "new_state": type("State", (), {"state": STATE_OFF, "context": None})(),
+                        "old_state": type(
+                            "State", (), {"state": STATE_ON, "context": None}
+                        )(),
+                        "new_state": type(
+                            "State", (), {"state": STATE_OFF, "context": None}
+                        )(),
                     }
                 },
             )()
@@ -171,4 +208,3 @@ class TestNoOpServiceCalls:
 
         await asyncio.sleep(1.1)
         assert coordinator.get_presence_allowed(self.entity) is True
-

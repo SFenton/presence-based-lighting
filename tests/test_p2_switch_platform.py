@@ -1,47 +1,76 @@
 """Tests for switch.py – PresenceEntitySwitch and AutoReEnableSwitch."""
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
+from unittest.mock import PropertyMock
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
-from homeassistant.const import STATE_ON, STATE_OFF
-
 from custom_components.presence_based_lighting.const import (
-    CONF_ACTIVATION_CATCHUP_MODE,
     AUTOMATION_MODE_PRESENCE_LOCK,
-    CONF_AUTOMATION_MODE,
-    CONF_CONTROLLED_ENTITIES,
+)
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CATCHUP_MODE
+from custom_components.presence_based_lighting.const import CONF_AUTOMATION_MODE
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import (
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
     CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_MANUAL_DISABLE_STATES,
+)
+from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
+from custom_components.presence_based_lighting.const import (
     CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    CONF_USE_INTERCEPTOR,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import CONF_USE_INTERCEPTOR
+from custom_components.presence_based_lighting.const import (
     DEFAULT_ACTIVATION_CATCHUP_MODE,
-    DOMAIN,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_DETECTED_TRANSITION,
-    ICON,
-    ICON_AUTO_REENABLE,
 )
-from custom_components.presence_based_lighting.switch import (
-    async_setup_entry,
-    PresenceEntitySwitch,
-    AutoReEnableSwitch,
-)
-
+from custom_components.presence_based_lighting.const import DOMAIN
+from custom_components.presence_based_lighting.const import ICON
+from custom_components.presence_based_lighting.const import ICON_AUTO_REENABLE
+from custom_components.presence_based_lighting.switch import async_setup_entry
+from custom_components.presence_based_lighting.switch import AutoReEnableSwitch
+from custom_components.presence_based_lighting.switch import PresenceEntitySwitch
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_coordinator(mock_hass, entry, paused=False, presence_allowed=True, automation_state="idle"):
+
+def _make_coordinator(
+    mock_hass, entry, paused=False, presence_allowed=True, automation_state="idle"
+):
     """Return a mock coordinator with the methods that switches call."""
     coord = MagicMock()
     coord.hass = mock_hass
@@ -51,10 +80,12 @@ def _make_coordinator(mock_hass, entry, paused=False, presence_allowed=True, aut
     coord.get_automation_paused = MagicMock(return_value=paused)
     coord.get_entity_automation_state = MagicMock(return_value=automation_state)
     coord.register_presence_switch = MagicMock(return_value=lambda: None)
-    coord.get_auto_reenable_tracking_info = MagicMock(return_value={
-        "is_tracking": False,
-        "vacancy_threshold_percent": 80,
-    })
+    coord.get_auto_reenable_tracking_info = MagicMock(
+        return_value={
+            "is_tracking": False,
+            "vacancy_threshold_percent": 80,
+        }
+    )
     coord.set_auto_reenable_enabled = MagicMock()
     return coord
 
@@ -93,6 +124,7 @@ def _make_entity_config(entity_id="light.living_room"):
 # async_setup_entry
 # ---------------------------------------------------------------------------
 
+
 class TestAsyncSetupEntry:
     @pytest.mark.asyncio
     async def test_creates_switches_and_calls_add_entities(self):
@@ -115,7 +147,9 @@ class TestAsyncSetupEntry:
     async def test_multiple_entities(self):
         hass = MagicMock()
         entry = _make_entry()
-        entry.data[CONF_CONTROLLED_ENTITIES].append(_make_entity_config("light.kitchen"))
+        entry.data[CONF_CONTROLLED_ENTITIES].append(
+            _make_entity_config("light.kitchen")
+        )
         coord = _make_coordinator(hass, entry)
         hass.data = {DOMAIN: {entry.entry_id: coord}}
         add_entities = MagicMock()
@@ -129,6 +163,7 @@ class TestAsyncSetupEntry:
 # ---------------------------------------------------------------------------
 # PresenceEntitySwitch
 # ---------------------------------------------------------------------------
+
 
 class TestPresenceEntitySwitch:
     def test_init_sets_basic_attrs(self):
@@ -178,7 +213,9 @@ class TestPresenceEntitySwitch:
 
         await switch.async_turn_on()
 
-        coord.async_set_presence_allowed.assert_awaited_once_with("light.living_room", True)
+        coord.async_set_presence_allowed.assert_awaited_once_with(
+            "light.living_room", True
+        )
 
     @pytest.mark.asyncio
     async def test_async_turn_off(self):
@@ -188,11 +225,15 @@ class TestPresenceEntitySwitch:
 
         await switch.async_turn_off()
 
-        coord.async_set_presence_allowed.assert_awaited_once_with("light.living_room", False)
+        coord.async_set_presence_allowed.assert_awaited_once_with(
+            "light.living_room", False
+        )
 
     def test_extra_state_attributes(self):
         entry = _make_entry()
-        coord = _make_coordinator(MagicMock(), entry, paused=True, automation_state="PAUSED")
+        coord = _make_coordinator(
+            MagicMock(), entry, paused=True, automation_state="PAUSED"
+        )
         switch = PresenceEntitySwitch(coord, entry, _make_entity_config())
 
         attrs = switch.extra_state_attributes
@@ -219,10 +260,7 @@ class TestPresenceEntitySwitch:
             attrs[CONF_PRESENCE_CLEARED_TRANSITION]
             == DEFAULT_PRESENCE_CLEARED_TRANSITION
         )
-        assert (
-            attrs[CONF_ACTIVATION_CATCHUP_MODE]
-            == DEFAULT_ACTIVATION_CATCHUP_MODE
-        )
+        assert attrs[CONF_ACTIVATION_CATCHUP_MODE] == DEFAULT_ACTIVATION_CATCHUP_MODE
         assert attrs["automation_paused"] is True
         assert attrs["automation_state"] == "PAUSED"
 
@@ -260,7 +298,9 @@ class TestPresenceEntitySwitch:
         hass.states = None  # no states object
 
         coord = _make_coordinator(hass, entry)
-        switch = PresenceEntitySwitch(coord, entry, _make_entity_config("light.desk_lamp"))
+        switch = PresenceEntitySwitch(
+            coord, entry, _make_entity_config("light.desk_lamp")
+        )
         switch.hass = None
         name = switch._derive_target_friendly_name()
         assert name == "Desk Lamp"
@@ -282,7 +322,12 @@ class TestPresenceEntitySwitch:
         last_state = MagicMock()
         last_state.state = STATE_ON
 
-        with patch.object(switch, "async_get_last_state", new_callable=AsyncMock, return_value=last_state):
+        with patch.object(
+            switch,
+            "async_get_last_state",
+            new_callable=AsyncMock,
+            return_value=last_state,
+        ):
             switch.hass = MagicMock()
             switch._attr_entity_id = None
             await switch.async_added_to_hass()
@@ -300,7 +345,12 @@ class TestPresenceEntitySwitch:
         last_state = MagicMock()
         last_state.state = STATE_OFF
 
-        with patch.object(switch, "async_get_last_state", new_callable=AsyncMock, return_value=last_state):
+        with patch.object(
+            switch,
+            "async_get_last_state",
+            new_callable=AsyncMock,
+            return_value=last_state,
+        ):
             switch.hass = MagicMock()
             switch._attr_entity_id = None
             await switch.async_added_to_hass()
@@ -314,7 +364,9 @@ class TestPresenceEntitySwitch:
         coord = _make_coordinator(MagicMock(), entry)
         switch = PresenceEntitySwitch(coord, entry, _make_entity_config())
 
-        with patch.object(switch, "async_get_last_state", new_callable=AsyncMock, return_value=None):
+        with patch.object(
+            switch, "async_get_last_state", new_callable=AsyncMock, return_value=None
+        ):
             switch.hass = MagicMock()
             switch._attr_entity_id = None
             await switch.async_added_to_hass()
@@ -369,6 +421,7 @@ class TestPresenceEntitySwitch:
     def test_derive_friendly_name_from_registry_entry_name(self):
         """Friendly name from entity registry entry.name."""
         from tests.conftest import _MockRegistryEntry, _MockEntityRegistry
+
         entry = _make_entry()
         hass = MagicMock()
         hass.states.get.return_value = None  # No state
@@ -387,6 +440,7 @@ class TestPresenceEntitySwitch:
     def test_derive_friendly_name_from_registry_original_name(self):
         """Friendly name from entity registry entry.original_name when name is None."""
         from tests.conftest import _MockRegistryEntry, _MockEntityRegistry
+
         entry = _make_entry()
         hass = MagicMock()
         hass.states.get.return_value = None
@@ -404,6 +458,7 @@ class TestPresenceEntitySwitch:
     def test_update_display_metadata_preserves_entity_id(self):
         """Friendly-name refreshes must not rename registered entities."""
         from tests.conftest import _MockRegistryEntry, _MockEntityRegistry
+
         entry = _make_entry(room="Office")
         hass = MagicMock()
         hass.states.get.return_value = None
@@ -429,6 +484,7 @@ class TestPresenceEntitySwitch:
     def test_update_display_metadata_rename_value_error(self):
         """_update_display_metadata gracefully handles ValueError on rename."""
         from tests.conftest import _MockRegistryEntry, _MockEntityRegistry
+
         entry = _make_entry(room="Office")
         hass = MagicMock()
         hass.states.get.return_value = None
@@ -450,6 +506,7 @@ class TestPresenceEntitySwitch:
 # ---------------------------------------------------------------------------
 # AutoReEnableSwitch
 # ---------------------------------------------------------------------------
+
 
 class TestAutoReEnableSwitch:
     def test_init(self):
@@ -528,7 +585,12 @@ class TestAutoReEnableSwitch:
         last_state = MagicMock()
         last_state.state = STATE_ON
 
-        with patch.object(switch, "async_get_last_state", new_callable=AsyncMock, return_value=last_state):
+        with patch.object(
+            switch,
+            "async_get_last_state",
+            new_callable=AsyncMock,
+            return_value=last_state,
+        ):
             await switch.async_added_to_hass()
 
         assert switch._is_on is True
@@ -543,7 +605,12 @@ class TestAutoReEnableSwitch:
         last_state = MagicMock()
         last_state.state = STATE_OFF
 
-        with patch.object(switch, "async_get_last_state", new_callable=AsyncMock, return_value=last_state):
+        with patch.object(
+            switch,
+            "async_get_last_state",
+            new_callable=AsyncMock,
+            return_value=last_state,
+        ):
             await switch.async_added_to_hass()
 
         assert switch._is_on is False
@@ -555,7 +622,9 @@ class TestAutoReEnableSwitch:
         coord = _make_coordinator(MagicMock(), entry)
         switch = AutoReEnableSwitch(coord, entry)
 
-        with patch.object(switch, "async_get_last_state", new_callable=AsyncMock, return_value=None):
+        with patch.object(
+            switch, "async_get_last_state", new_callable=AsyncMock, return_value=None
+        ):
             await switch.async_added_to_hass()
 
         assert switch._is_on is False

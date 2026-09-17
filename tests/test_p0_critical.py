@@ -1,25 +1,43 @@
 """Critical tests for multi-entity Presence Based Lighting automation."""
-
 import asyncio
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
 from custom_components.presence_based_lighting.const import (
-    CONF_ENTITY_ID,
     CONF_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_TRANSITION,
-    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_DETECTED_TRANSITION,
 )
-from tests.conftest import assert_service_called, setup_entity_states
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from tests.conftest import assert_service_called
+from tests.conftest import setup_entity_states
 
 
 def _state(state, attributes=None):
-    return type("State", (), {"state": state, "attributes": attributes or {}, "context": type("Ctx", (), {"id": "ctx", "parent_id": None})()})()
+    return type(
+        "State",
+        (),
+        {
+            "state": state,
+            "attributes": attributes or {},
+            "context": type("Ctx", (), {"id": "ctx", "parent_id": None})(),
+        },
+    )()
 
 
 def _event(mock_hass, entity_id, old_state, new_state, old_attrs=None, new_attrs=None):
@@ -41,8 +59,12 @@ class TestPresenceAutomation:
     """Core behavior validation for presence-driven automation."""
 
     @pytest.mark.asyncio
-    async def test_presence_detected_turns_on_allowed_entities(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+    async def test_presence_detected_turns_on_allowed_entities(
+        self, mock_hass, mock_config_entry
+    ):
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
@@ -60,7 +82,9 @@ class TestPresenceAutomation:
             call["service_data"]["brightness_pct"]
             == DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
         )
-        assert call["service_data"]["transition"] == DEFAULT_PRESENCE_DETECTED_TRANSITION
+        assert (
+            call["service_data"]["transition"] == DEFAULT_PRESENCE_DETECTED_TRANSITION
+        )
 
     @pytest.mark.asyncio
     async def test_presence_detected_uses_configured_light_transition(
@@ -68,7 +92,9 @@ class TestPresenceAutomation:
         mock_hass,
         mock_config_entry,
     ):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
         mock_config_entry.data["controlled_entities"][0][
             CONF_PRESENCE_DETECTED_TRANSITION
         ] = 2.5
@@ -99,8 +125,12 @@ class TestPresenceAutomation:
         mock_hass,
         mock_config_entry,
     ):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        mock_config_entry.data["controlled_entities"][0][CONF_ENTITY_ID] = "switch.living_room"
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
+        mock_config_entry.data["controlled_entities"][0][
+            CONF_ENTITY_ID
+        ] = "switch.living_room"
         mock_hass.states.set("switch.living_room", STATE_OFF)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
@@ -117,7 +147,9 @@ class TestPresenceAutomation:
         assert call["service_data"] == {"entity_id": "switch.living_room"}
 
     @pytest.mark.asyncio
-    async def test_presence_cleared_turns_off_after_delay(self, mock_hass, mock_config_entry):
+    async def test_presence_cleared_turns_off_after_delay(
+        self, mock_hass, mock_config_entry
+    ):
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()

@@ -1,4 +1,5 @@
 """Switch platform for Presence Based Lighting."""
+
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
@@ -8,35 +9,39 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
-from .const import (
-    CONF_ACTIVATION_CATCHUP_MODE,
-    CONF_AUTOMATION_MODE,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
-    CONF_PRESENCE_CLEARED_TRANSITION,
-    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-    CONF_PRESENCE_DETECTED_TRANSITION,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    CONF_USE_INTERCEPTOR,
-    DEFAULT_ACTIVATION_CATCHUP_MODE,
-    DEFAULT_AUTOMATION_MODE,
-    DEFAULT_MANUAL_DISABLE_STATES,
-    DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
-    DEFAULT_PRESENCE_CLEARED_TRANSITION,
-    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-    DEFAULT_PRESENCE_DETECTED_TRANSITION,
-    DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    DEFAULT_USE_INTERCEPTOR,
-    DOMAIN,
-    ICON,
-    ICON_AUTO_REENABLE,
-)
+from .const import CONF_ACTIVATION_CATCHUP_MODE
+from .const import CONF_AUTOMATION_MODE
+from .const import CONF_CONTROL_LEASE_BLOCKERS
+from .const import CONF_CONTROL_LEASE_CORRECT_LATE_ON
+from .const import CONF_CONTROL_LEASE_MODE
+from .const import CONF_CONTROLLED_ENTITIES
+from .const import CONF_DISABLE_ON_EXTERNAL_CONTROL
+from .const import CONF_ENTITY_ID
+from .const import CONF_INITIAL_PRESENCE_ALLOWED
+from .const import CONF_MANUAL_DISABLE_STATES
+from .const import CONF_NORMALIZE_EXTERNAL_PLAIN_ON
+from .const import CONF_PRESENCE_CLEARED_TRANSITION
+from .const import CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+from .const import CONF_PRESENCE_DETECTED_TRANSITION
+from .const import CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import CONF_RESPECTS_PRESENCE_ALLOWED
+from .const import CONF_ROOM_NAME
+from .const import CONF_USE_INTERCEPTOR
+from .const import DEFAULT_ACTIVATION_CATCHUP_MODE
+from .const import DEFAULT_AUTOMATION_MODE
+from .const import DEFAULT_CONTROL_LEASE_BLOCKERS
+from .const import DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON
+from .const import DEFAULT_CONTROL_LEASE_MODE
+from .const import DEFAULT_MANUAL_DISABLE_STATES
+from .const import DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON
+from .const import DEFAULT_PRESENCE_CLEARED_TRANSITION
+from .const import DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
+from .const import DEFAULT_PRESENCE_DETECTED_TRANSITION
+from .const import DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import DEFAULT_USE_INTERCEPTOR
+from .const import DOMAIN
+from .const import ICON
+from .const import ICON_AUTO_REENABLE
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -132,8 +137,12 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
     def extra_state_attributes(self):
         attributes = {
             "controlled_entity": self._entity_id,
-            CONF_RESPECTS_PRESENCE_ALLOWED: self._entity_config[CONF_RESPECTS_PRESENCE_ALLOWED],
-            CONF_DISABLE_ON_EXTERNAL_CONTROL: self._entity_config[CONF_DISABLE_ON_EXTERNAL_CONTROL],
+            CONF_RESPECTS_PRESENCE_ALLOWED: self._entity_config[
+                CONF_RESPECTS_PRESENCE_ALLOWED
+            ],
+            CONF_DISABLE_ON_EXTERNAL_CONTROL: self._entity_config[
+                CONF_DISABLE_ON_EXTERNAL_CONTROL
+            ],
             CONF_AUTOMATION_MODE: self._entity_config.get(
                 CONF_AUTOMATION_MODE,
                 DEFAULT_AUTOMATION_MODE,
@@ -170,8 +179,24 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
                 CONF_ACTIVATION_CATCHUP_MODE,
                 DEFAULT_ACTIVATION_CATCHUP_MODE,
             ),
-            "automation_paused": self._coordinator.get_automation_paused(self._entity_id),
-            "automation_state": self._coordinator.get_entity_automation_state(self._entity_id),
+            CONF_CONTROL_LEASE_MODE: self._entity_config.get(
+                CONF_CONTROL_LEASE_MODE,
+                DEFAULT_CONTROL_LEASE_MODE,
+            ),
+            CONF_CONTROL_LEASE_BLOCKERS: self._entity_config.get(
+                CONF_CONTROL_LEASE_BLOCKERS,
+                list(DEFAULT_CONTROL_LEASE_BLOCKERS),
+            ),
+            CONF_CONTROL_LEASE_CORRECT_LATE_ON: self._entity_config.get(
+                CONF_CONTROL_LEASE_CORRECT_LATE_ON,
+                DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON,
+            ),
+            "automation_paused": self._coordinator.get_automation_paused(
+                self._entity_id
+            ),
+            "automation_state": self._coordinator.get_entity_automation_state(
+                self._entity_id
+            ),
         }
         get_quieted = getattr(self._coordinator, "get_quieted", None)
         if get_quieted is not None:
@@ -184,9 +209,7 @@ class PresenceEntitySwitch(SwitchEntity, RestoreEntity):
         self._update_display_metadata()
         last_state = await self.async_get_last_state()
         if last_state is None:
-            initial_state = self._entity_config.get(
-                CONF_INITIAL_PRESENCE_ALLOWED, True
-            )
+            initial_state = self._entity_config.get(CONF_INITIAL_PRESENCE_ALLOWED, True)
         else:
             initial_state = last_state.state == STATE_ON
 
@@ -250,7 +273,7 @@ class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
         }
 
         # Add tracking info from coordinator if available
-        if hasattr(self._coordinator, 'get_auto_reenable_tracking_info'):
+        if hasattr(self._coordinator, "get_auto_reenable_tracking_info"):
             tracking_info = self._coordinator.get_auto_reenable_tracking_info()
             attrs.update(tracking_info)
 
@@ -259,14 +282,14 @@ class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
     async def async_turn_on(self, **kwargs) -> None:
         """Enable auto re-enable."""
         self._is_on = True
-        if hasattr(self._coordinator, 'set_auto_reenable_enabled'):
+        if hasattr(self._coordinator, "set_auto_reenable_enabled"):
             self._coordinator.set_auto_reenable_enabled(True)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable auto re-enable."""
         self._is_on = False
-        if hasattr(self._coordinator, 'set_auto_reenable_enabled'):
+        if hasattr(self._coordinator, "set_auto_reenable_enabled"):
             self._coordinator.set_auto_reenable_enabled(False)
         self.async_write_ha_state()
 
@@ -281,5 +304,5 @@ class AutoReEnableSwitch(SwitchEntity, RestoreEntity):
             self._is_on = False
 
         # Notify coordinator of initial state
-        if hasattr(self._coordinator, 'set_auto_reenable_enabled'):
+        if hasattr(self._coordinator, "set_auto_reenable_enabled"):
             self._coordinator.set_auto_reenable_enabled(self._is_on)

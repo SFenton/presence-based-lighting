@@ -11,76 +11,103 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-from homeassistant.util import dt as dt_util
-
-from custom_components.presence_based_lighting import (
-    EntityAutomationState,
-    PresenceBasedLightingCoordinator,
-    async_migrate_entry,
-)
+from custom_components.presence_based_lighting import async_migrate_entry
+from custom_components.presence_based_lighting import EntityAutomationState
+from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
 from custom_components.presence_based_lighting.batch_observer import (
     CommandBatchObserver,
 )
+from custom_components.presence_based_lighting.command_context import CommandOrigin
 from custom_components.presence_based_lighting.command_context import (
-    CommandOrigin,
     PresenceCommandContextRegistry,
 )
+from custom_components.presence_based_lighting.const import BATCH_MODE_ENFORCE
+from custom_components.presence_based_lighting.const import BATCH_MODE_OBSERVE
+from custom_components.presence_based_lighting.const import BATCH_MODE_OFF
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CONDITIONS
 from custom_components.presence_based_lighting.const import (
-    BATCH_MODE_ENFORCE,
-    BATCH_MODE_OBSERVE,
-    BATCH_MODE_OFF,
-    CONF_ACTIVATION_CONDITIONS,
     CONF_BATCH_MIN_DISTINCT_ENTITIES,
-    CONF_BATCH_RETAIN_SECONDS,
-    CONF_BATCH_WINDOW_MS,
-    CONF_BULK_COMMAND_POLICY,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_HOMEKIT_BATCH_MODE,
-    CONF_HONOR_EXTERNAL_OVERRIDE,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_PRESENCE_SENSORS,
-    CONF_QUIETED_MAX_AGE,
-    CONF_QUIETED_MAX_AGE_ACTION,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    CONF_UNKNOWN_SOURCE_POLICY,
-    DEFAULT_BATCH_MIN_DISTINCT_ENTITIES,
-    DEFAULT_BULK_COMMAND_POLICY,
-    DEFAULT_HOMEKIT_BATCH_MODE,
-    DEFAULT_HONOR_EXTERNAL_OVERRIDE,
-    DEFAULT_QUIETED_MAX_AGE,
-    DEFAULT_QUIETED_MAX_AGE_ACTION,
-    DEFAULT_UNKNOWN_SOURCE_POLICY,
-    DOMAIN,
-    EVENT_COMMAND_INTENT,
-    EVENT_HOMEKIT_STATE_CHANGE,
-    EXTERNAL_POLICY_PAUSE,
-    EXTERNAL_POLICY_REARM_AFTER_CLEAR,
-    QUIETED_MAX_AGE_ACTION_ARM,
-    QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
-    SOURCE_ADMIN,
-    SOURCE_HOMEKIT_BATCH,
-    SOURCE_HOMEKIT_SINGLE,
-    SOURCE_UNKNOWN,
 )
+from custom_components.presence_based_lighting.const import CONF_BATCH_RETAIN_SECONDS
+from custom_components.presence_based_lighting.const import CONF_BATCH_WINDOW_MS
+from custom_components.presence_based_lighting.const import CONF_BULK_COMMAND_POLICY
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import (
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import CONF_HOMEKIT_BATCH_MODE
+from custom_components.presence_based_lighting.const import CONF_HONOR_EXTERNAL_OVERRIDE
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import CONF_QUIETED_MAX_AGE
+from custom_components.presence_based_lighting.const import CONF_QUIETED_MAX_AGE_ACTION
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import CONF_UNKNOWN_SOURCE_POLICY
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_BATCH_MIN_DISTINCT_ENTITIES,
+)
+from custom_components.presence_based_lighting.const import DEFAULT_BULK_COMMAND_POLICY
+from custom_components.presence_based_lighting.const import DEFAULT_HOMEKIT_BATCH_MODE
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_HONOR_EXTERNAL_OVERRIDE,
+)
+from custom_components.presence_based_lighting.const import DEFAULT_QUIETED_MAX_AGE
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_QUIETED_MAX_AGE_ACTION,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_UNKNOWN_SOURCE_POLICY,
+)
+from custom_components.presence_based_lighting.const import DOMAIN
+from custom_components.presence_based_lighting.const import EVENT_COMMAND_INTENT
+from custom_components.presence_based_lighting.const import EVENT_HOMEKIT_STATE_CHANGE
+from custom_components.presence_based_lighting.const import EXTERNAL_POLICY_PAUSE
+from custom_components.presence_based_lighting.const import (
+    EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+)
+from custom_components.presence_based_lighting.const import QUIETED_MAX_AGE_ACTION_ARM
+from custom_components.presence_based_lighting.const import (
+    QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
+)
+from custom_components.presence_based_lighting.const import SOURCE_ADMIN
+from custom_components.presence_based_lighting.const import SOURCE_HOMEKIT_BATCH
+from custom_components.presence_based_lighting.const import SOURCE_HOMEKIT_SINGLE
+from custom_components.presence_based_lighting.const import SOURCE_UNKNOWN
 from custom_components.presence_based_lighting.external_override import (
     ExternalOverrideManager,
 )
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from homeassistant.util import dt as dt_util
 from tests.conftest import MockContext
 
 LIGHT = "light.master_bathroom_dimmer_switch"
@@ -109,8 +136,22 @@ INCIDENT_ENTITIES = [
     "light.dining_room_dimmer_switch",
 ]
 INCIDENT_OFFSETS_MS = [
-    0.0, 11.855, 12.988, 13.263, 13.958, 14.301, 14.5, 14.773,
-    22.686, 23.096, 23.408, 24.581, 24.741, 24.923, 25.2, 25.387,
+    0.0,
+    11.855,
+    12.988,
+    13.263,
+    13.958,
+    14.301,
+    14.5,
+    14.773,
+    22.686,
+    23.096,
+    23.408,
+    24.581,
+    24.741,
+    24.923,
+    25.2,
+    25.387,
 ]
 
 
@@ -194,7 +235,11 @@ def _state_event(entity_id, old_state, new_state, context, attributes=None):
                 "old_state": type(
                     "State",
                     (),
-                    {"state": old_state, "attributes": {}, "context": MockContext("old")},
+                    {
+                        "state": old_state,
+                        "attributes": {},
+                        "context": MockContext("old"),
+                    },
                 )(),
                 "new_state": type(
                     "State",
@@ -279,7 +324,9 @@ async def _replay_incident_burst(
     listeners = mock_hass.bus.listeners_for(EVENT_HOMEKIT_STATE_CHANGE)
     start = clock.value
     for index, entity_id in enumerate(entities):
-        offset = INCIDENT_OFFSETS_MS[index] if index < len(INCIDENT_OFFSETS_MS) else index
+        offset = (
+            INCIDENT_OFFSETS_MS[index] if index < len(INCIDENT_OFFSETS_MS) else index
+        )
         clock.value = start + offset / 1000.0
         context = MockContext(f"homekit-{index}")
         contexts[entity_id] = context
@@ -671,7 +718,9 @@ async def test_legacy_max_age_arm_action_remains_available(mock_hass, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_paired_entries_share_override_and_gate_flip_cannot_resurrect(mock_hass, tmp_path):
+async def test_paired_entries_share_override_and_gate_flip_cannot_resurrect(
+    mock_hass, tmp_path
+):
     """Both Master Bathroom profiles honour the override across a gate flip."""
     clock = FakeClock()
     _configure_storage(mock_hass, tmp_path)
@@ -781,7 +830,9 @@ async def test_paired_batch_does_not_overwrite_explicit_entry_pause(
 
 
 @pytest.mark.asyncio
-async def test_honor_external_override_false_keeps_entry_local_behaviour(mock_hass, tmp_path):
+async def test_honor_external_override_false_keeps_entry_local_behaviour(
+    mock_hass, tmp_path
+):
     """The compatibility escape hatch opts an entry out of shared overrides."""
     clock = FakeClock()
     _configure_storage(mock_hass, tmp_path)
@@ -978,7 +1029,8 @@ async def test_scheduled_reset_releases_paired_profiles_and_active_gate_turns_on
     await primary_coordinator._reenable_presence_lighting()
 
     turn_on_calls = [
-        call for call in mock_hass.services.calls
+        call
+        for call in mock_hass.services.calls
         if call["domain"] == "light" and call["service"] == "turn_on"
     ]
     assert manager.get(LIGHT) is None
@@ -1100,7 +1152,8 @@ async def test_concurrent_paired_resets_clear_and_actuate_once(mock_hass, tmp_pa
     )
 
     turn_on_calls = [
-        call for call in mock_hass.services.calls
+        call
+        for call in mock_hass.services.calls
         if call["domain"] == "light" and call["service"] == "turn_on"
     ]
     assert manager.get(LIGHT) is None
@@ -1167,17 +1220,29 @@ def test_one_context_covers_many_entities():
         registry.register("shared-ctx", "entry_a", entity_id, STATE_OFF)
 
     for entity_id in entities:
-        assert registry.classify(
-            "entry_a", entity_id, MockContext("shared-ctx"), include_parent=False
-        ) == CommandOrigin.OWN
-        assert registry.classify(
-            "entry_b", entity_id, MockContext("shared-ctx"), include_parent=False
-        ) == CommandOrigin.SIBLING
+        assert (
+            registry.classify(
+                "entry_a", entity_id, MockContext("shared-ctx"), include_parent=False
+            )
+            == CommandOrigin.OWN
+        )
+        assert (
+            registry.classify(
+                "entry_b", entity_id, MockContext("shared-ctx"), include_parent=False
+            )
+            == CommandOrigin.SIBLING
+        )
 
     assert registry.entities_for_context("shared-ctx") == set(entities)
-    assert registry.classify(
-        "entry_a", "light.unrelated", MockContext("shared-ctx"), include_parent=False
-    ) == CommandOrigin.EXTERNAL
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.unrelated",
+            MockContext("shared-ctx"),
+            include_parent=False,
+        )
+        == CommandOrigin.EXTERNAL
+    )
 
 
 def test_shared_entity_in_two_entries_does_not_inflate_batch_cardinality(mock_hass):
@@ -1204,7 +1269,9 @@ def test_batch_window_and_retention(mock_hass):
     """Commands outside the window form separate batches; lookups are retained."""
     clock = FakeClock()
     observer = CommandBatchObserver(mock_hass, time_source=clock)
-    observer.configure_entry("entry", min_distinct_entities=2, window_ms=250, retain_seconds=10.0)
+    observer.configure_entry(
+        "entry", min_distinct_entities=2, window_ms=250, retain_seconds=10.0
+    )
     observer.register_managed_entity("e", "light.a")
     observer.register_managed_entity("e", "light.b")
 
@@ -1240,14 +1307,17 @@ def test_blocked_command_is_claimed_after_batch_confirmation(mock_hass):
 
     first = observer.note_command(LIGHT, "turn_off", "ctx-a")
     assert first.confirmed is False
-    assert observer.record_blocked_command(
-        "ctx-a",
-        LIGHT,
-        "light",
-        "turn_off",
-        STATE_OFF,
-        {"entity_id": LIGHT},
-    ) is False
+    assert (
+        observer.record_blocked_command(
+            "ctx-a",
+            LIGHT,
+            "light",
+            "turn_off",
+            STATE_OFF,
+            {"entity_id": LIGHT},
+        )
+        is False
+    )
 
     clock.advance_ms(5)
     confirmed = observer.note_command("light.kitchen", "turn_off", "ctx-b")
@@ -1272,18 +1342,24 @@ def test_confirmed_batch_command_passes_without_recording(mock_hass):
     confirmed = observer.note_command("light.b", "turn_off", "ctx-b")
     assert confirmed.confirmed is True
 
-    assert observer.record_blocked_command(
-        "ctx-b",
-        "light.b",
-        "light",
-        "turn_off",
-        STATE_OFF,
-        {"entity_id": "light.b"},
-    ) is True
-    assert observer.pop_blocked_for_batch(
-        confirmed.batch_id,
-        {"light.b"},
-    ) == []
+    assert (
+        observer.record_blocked_command(
+            "ctx-b",
+            "light.b",
+            "light",
+            "turn_off",
+            STATE_OFF,
+            {"entity_id": "light.b"},
+        )
+        is True
+    )
+    assert (
+        observer.pop_blocked_for_batch(
+            confirmed.batch_id,
+            {"light.b"},
+        )
+        == []
+    )
 
 
 def test_blocked_command_is_cancelled_by_later_on(mock_hass):
@@ -1319,14 +1395,17 @@ def test_observe_mode_never_records_replay_commands(mock_hass):
     )
     batch = observer.note_command(LIGHT, "turn_off", "ctx-a")
 
-    assert observer.record_blocked_command(
-        "ctx-a",
-        LIGHT,
-        "light",
-        "turn_off",
-        STATE_OFF,
-        {"entity_id": LIGHT},
-    ) is False
+    assert (
+        observer.record_blocked_command(
+            "ctx-a",
+            LIGHT,
+            "light",
+            "turn_off",
+            STATE_OFF,
+            {"entity_id": LIGHT},
+        )
+        is False
+    )
     assert observer.pop_blocked_for_batch(batch.batch_id, {LIGHT}) == []
 
 
@@ -1380,12 +1459,15 @@ async def test_confirmed_batch_replays_early_blocked_off_once(mock_hass, tmp_pat
 
     first_context = MockContext("ctx-a")
     observer.note_command(LIGHT, "turn_off", first_context.id)
-    assert coordinator._handle_blocked_interceptor_command(
-        LIGHT,
-        "turn_off",
-        first_context,
-        {"entity_id": [LIGHT], "params": {}},
-    ) is False
+    assert (
+        coordinator._handle_blocked_interceptor_command(
+            LIGHT,
+            "turn_off",
+            first_context,
+            {"entity_id": [LIGHT], "params": {}},
+        )
+        is False
+    )
 
     clock.advance_ms(5)
     observer.note_command("light.kitchen", "turn_off", "ctx-b")
@@ -1453,7 +1535,11 @@ async def test_expansion_follows_ha_and_z2m_groups_with_dedupe(mock_hass, tmp_pa
         "light.lights",
         STATE_ON,
         attributes={
-            "entity_id": ["light.master_bedroom", "light.master_bedroom_closet_light", LIGHT]
+            "entity_id": [
+                "light.master_bedroom",
+                "light.master_bedroom_closet_light",
+                LIGHT,
+            ]
         },
     )
     # Zigbee2MQTT group exposes members via attributes.group_entities.
@@ -1485,7 +1571,9 @@ async def test_expansion_follows_ha_and_z2m_groups_with_dedupe(mock_hass, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_redundant_turn_off_of_already_off_entity_does_not_pause(mock_hass, tmp_path):
+async def test_redundant_turn_off_of_already_off_entity_does_not_pause(
+    mock_hass, tmp_path
+):
     """An already-off entity told to turn off must not be paused."""
     clock = FakeClock()
     _configure_storage(mock_hass, tmp_path)
@@ -1683,7 +1771,9 @@ async def test_confirmed_batch_preserves_explicit_entry_pause(
         (BATCH_MODE_OFF, False, True),
     ],
 )
-async def test_batch_mode_kill_switch(mock_hass, tmp_path, mode, expect_quieted, expect_paused):
+async def test_batch_mode_kill_switch(
+    mock_hass, tmp_path, mode, expect_quieted, expect_paused
+):
     """observe and off keep legacy PAUSE; only enforce changes behaviour."""
     clock = FakeClock()
     _configure_storage(mock_hass, tmp_path)
@@ -1721,8 +1811,8 @@ async def test_batch_mode_kill_switch(mock_hass, tmp_path, mode, expect_quieted,
 
 
 @pytest.mark.asyncio
-async def test_migration_v10_to_v12_backfills_new_settings():
-    """v10 entries gain the v11/v12 keys with safe defaults."""
+async def test_migration_v10_to_v13_backfills_new_settings():
+    """v10 entries gain the v11-v13 keys with safe defaults."""
     hass = MagicMock()
     entry = _entry(entry_id="legacy", room_name="Legacy", version=10)
     for key in (
@@ -1750,7 +1840,7 @@ async def test_migration_v10_to_v12_backfills_new_settings():
     hass.config_entries.async_update_entry = track_update
 
     assert await async_migrate_entry(hass, entry) is True
-    assert entry.version == 12
+    assert entry.version == 13
 
     assert entry.data[CONF_HOMEKIT_BATCH_MODE] == DEFAULT_HOMEKIT_BATCH_MODE
     assert (
@@ -1766,10 +1856,7 @@ async def test_migration_v10_to_v12_backfills_new_settings():
     assert entity_config[CONF_UNKNOWN_SOURCE_POLICY] == EXTERNAL_POLICY_PAUSE
     assert entity_config[CONF_BULK_COMMAND_POLICY] == DEFAULT_BULK_COMMAND_POLICY
     assert entity_config[CONF_QUIETED_MAX_AGE] == DEFAULT_QUIETED_MAX_AGE
-    assert (
-        entity_config[CONF_QUIETED_MAX_AGE_ACTION]
-        == DEFAULT_QUIETED_MAX_AGE_ACTION
-    )
+    assert entity_config[CONF_QUIETED_MAX_AGE_ACTION] == DEFAULT_QUIETED_MAX_AGE_ACTION
 
 
 @pytest.mark.asyncio
@@ -1792,11 +1879,13 @@ async def test_migration_is_idempotent_and_preserves_explicit_values():
     assert await async_migrate_entry(hass, entry) is True
     assert entry.data[CONF_HOMEKIT_BATCH_MODE] == BATCH_MODE_OBSERVE
     assert entry.data[CONF_BATCH_MIN_DISTINCT_ENTITIES] == 12
-    assert entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_HONOR_EXTERNAL_OVERRIDE] is False
+    assert (
+        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_HONOR_EXTERNAL_OVERRIDE] is False
+    )
 
-    # Already at v12: a second pass is a no-op.
+    # Already at v13: a second pass is a no-op.
     assert await async_migrate_entry(hass, entry) is True
-    assert entry.version == 12
+    assert entry.version == 13
 
 
 @pytest.mark.asyncio
@@ -1828,10 +1917,7 @@ async def test_options_flow_round_trip_preserves_new_entity_settings():
     assert fresh[CONF_UNKNOWN_SOURCE_POLICY] == DEFAULT_UNKNOWN_SOURCE_POLICY
     assert fresh[CONF_BULK_COMMAND_POLICY] == DEFAULT_BULK_COMMAND_POLICY
     assert fresh[CONF_QUIETED_MAX_AGE] == DEFAULT_QUIETED_MAX_AGE
-    assert (
-        fresh[CONF_QUIETED_MAX_AGE_ACTION]
-        == DEFAULT_QUIETED_MAX_AGE_ACTION
-    )
+    assert fresh[CONF_QUIETED_MAX_AGE_ACTION] == DEFAULT_QUIETED_MAX_AGE_ACTION
 
 
 @pytest.mark.asyncio
@@ -2010,9 +2096,7 @@ async def test_quieted_max_age_is_not_reset_by_restart(mock_hass, tmp_path):
     # 59 wall-clock minutes pass while Home Assistant is down.
     coordinator.async_stop()
     now = _dt.datetime.now(_dt.timezone.utc)
-    with patch.object(
-        dt_util, "utcnow", lambda: now + _dt.timedelta(minutes=59)
-    ):
+    with patch.object(dt_util, "utcnow", lambda: now + _dt.timedelta(minutes=59)):
         restart_clock = FakeClock(start=50_000.0)
         observer2, manager2 = _install_clock(mock_hass, restart_clock)
         restarted = PresenceBasedLightingCoordinator(mock_hass, entry)
@@ -2240,6 +2324,7 @@ async def test_stale_external_pause_is_dropped_if_light_was_turned_on(
 
 def test_observer_config_is_order_independent(mock_hass):
     """The reduced configuration must not depend on entry setup order."""
+
     def build(order):
         observer = CommandBatchObserver(mock_hass)
         for entry_id, config in order:
@@ -2247,12 +2332,33 @@ def test_observer_config_is_order_independent(mock_hass):
         return observer.effective_config
 
     configs = [
-        ("a", {"mode": BATCH_MODE_ENFORCE, "window_ms": 250,
-               "retain_seconds": 10.0, "min_distinct_entities": 8}),
-        ("b", {"mode": BATCH_MODE_OBSERVE, "window_ms": 400,
-               "retain_seconds": 30.0, "min_distinct_entities": 4}),
-        ("c", {"mode": BATCH_MODE_ENFORCE, "window_ms": 150,
-               "retain_seconds": 5.0, "min_distinct_entities": 12}),
+        (
+            "a",
+            {
+                "mode": BATCH_MODE_ENFORCE,
+                "window_ms": 250,
+                "retain_seconds": 10.0,
+                "min_distinct_entities": 8,
+            },
+        ),
+        (
+            "b",
+            {
+                "mode": BATCH_MODE_OBSERVE,
+                "window_ms": 400,
+                "retain_seconds": 30.0,
+                "min_distinct_entities": 4,
+            },
+        ),
+        (
+            "c",
+            {
+                "mode": BATCH_MODE_ENFORCE,
+                "window_ms": 150,
+                "retain_seconds": 5.0,
+                "min_distinct_entities": 12,
+            },
+        ),
     ]
 
     forward = build(configs)
@@ -2287,10 +2393,20 @@ def test_observer_mode_precedence_off_beats_observe_beats_enforce(mock_hass):
 def test_observer_recomputes_on_unregister_and_reload(mock_hass):
     """Removing an entry recomputes; re-adding it re-applies its settings."""
     observer = CommandBatchObserver(mock_hass)
-    observer.configure_entry("a", mode=BATCH_MODE_ENFORCE, window_ms=250,
-                             retain_seconds=10.0, min_distinct_entities=8)
-    observer.configure_entry("strict", mode=BATCH_MODE_OFF, window_ms=100,
-                             retain_seconds=60.0, min_distinct_entities=20)
+    observer.configure_entry(
+        "a",
+        mode=BATCH_MODE_ENFORCE,
+        window_ms=250,
+        retain_seconds=10.0,
+        min_distinct_entities=8,
+    )
+    observer.configure_entry(
+        "strict",
+        mode=BATCH_MODE_OFF,
+        window_ms=100,
+        retain_seconds=60.0,
+        min_distinct_entities=20,
+    )
     assert observer.mode == BATCH_MODE_OFF
     assert observer.effective_config["window_ms"] == 100
     assert observer.effective_config["min_distinct_entities"] == 20
@@ -2304,16 +2420,26 @@ def test_observer_recomputes_on_unregister_and_reload(mock_hass):
     assert observer.effective_config["configured_entries"] == ["a"]
 
     # Reload restores the stricter values deterministically.
-    observer.configure_entry("strict", mode=BATCH_MODE_OFF, window_ms=100,
-                             retain_seconds=60.0, min_distinct_entities=20)
+    observer.configure_entry(
+        "strict",
+        mode=BATCH_MODE_OFF,
+        window_ms=100,
+        retain_seconds=60.0,
+        min_distinct_entities=20,
+    )
     assert observer.mode == BATCH_MODE_OFF
 
 
 def test_observer_falls_back_to_defaults_when_no_entries(mock_hass):
     """With every entry gone the observer returns to documented defaults."""
     observer = CommandBatchObserver(mock_hass)
-    observer.configure_entry("a", mode=BATCH_MODE_OFF, window_ms=999,
-                             retain_seconds=99.0, min_distinct_entities=42)
+    observer.configure_entry(
+        "a",
+        mode=BATCH_MODE_OFF,
+        window_ms=999,
+        retain_seconds=99.0,
+        min_distinct_entities=42,
+    )
     observer.unregister_entry("a")
 
     config = observer.effective_config
@@ -2388,9 +2514,7 @@ async def test_listener_lifecycle_across_entry_setup_and_unload(mock_hass, tmp_p
     second = _entry(
         entry_id="second", room_name="Second", controlled_entity="light.second"
     )
-    third = _entry(
-        entry_id="third", room_name="Third", controlled_entity="light.third"
-    )
+    third = _entry(entry_id="third", room_name="Third", controlled_entity="light.third")
     for eid in (LIGHT, "light.second", "light.third"):
         mock_hass.states.set(eid, STATE_OFF)
     mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
@@ -2406,7 +2530,9 @@ async def test_listener_lifecycle_across_entry_setup_and_unload(mock_hass, tmp_p
     assert listener_count() == 1
     assert observer.is_listening is True
     assert observer.effective_config["listening_entries"] == [
-        "first", "second", "third"
+        "first",
+        "second",
+        "third",
     ]
 
     # Partial unload keeps the listener alive for the remaining entries.
@@ -2484,7 +2610,9 @@ async def test_batch_mode_off_entry_detaches_shared_listener(mock_hass, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_partial_unload_does_not_drop_sibling_batch_callbacks(mock_hass, tmp_path):
+async def test_partial_unload_does_not_drop_sibling_batch_callbacks(
+    mock_hass, tmp_path
+):
     """Unloading one entry must not disable bulk handling for its siblings."""
     clock = FakeClock()
     _configure_storage(mock_hass, tmp_path)
@@ -2492,7 +2620,9 @@ async def test_partial_unload_does_not_drop_sibling_batch_callbacks(mock_hass, t
 
     keep = _entry(entry_id="keep", room_name="Keep", batch_min_entities=8)
     drop = _entry(
-        entry_id="drop", room_name="Drop", controlled_entity="light.drop",
+        entry_id="drop",
+        room_name="Drop",
+        controlled_entity="light.drop",
         batch_min_entities=8,
     )
     mock_hass.states.set(LIGHT, STATE_ON)

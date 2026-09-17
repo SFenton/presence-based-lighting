@@ -2,79 +2,129 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
+import pytest
+import tests.conftest  # noqa: F401
+from custom_components.presence_based_lighting.config_flow import ACTION_ADD_ENTITY
+from custom_components.presence_based_lighting.config_flow import ACTION_DELETE_ENTITIES
+from custom_components.presence_based_lighting.config_flow import ACTION_EDIT_ENTITY
+from custom_components.presence_based_lighting.config_flow import ACTION_NO_ACTION
+from custom_components.presence_based_lighting.config_flow import FIELD_LANDING_ACTION
+from custom_components.presence_based_lighting.config_flow import (
+    FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
+)
+from custom_components.presence_based_lighting.config_flow import (
+    FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
+)
+from custom_components.presence_based_lighting.config_flow import NO_ACTION
+from custom_components.presence_based_lighting.config_flow import (
+    PresenceBasedLightingFlowHandler,
+)
+from custom_components.presence_based_lighting.config_flow import STATE_OPTION_CUSTOM
+from custom_components.presence_based_lighting.config_flow import (
+    STEP_CHOOSE_EDIT_ENTITY,
+)
+from custom_components.presence_based_lighting.config_flow import STEP_DELETE_ENTITIES
+from custom_components.presence_based_lighting.config_flow import STEP_SELECT_ENTITY
+from custom_components.presence_based_lighting.const import AUTOMATION_MODE_AUTOMATIC
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CATCHUP_MODE
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CONDITIONS
+from custom_components.presence_based_lighting.const import CONF_AUTO_REENABLE_END_TIME
+from custom_components.presence_based_lighting.const import (
+    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_AUTO_REENABLE_START_TIME,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
+)
+from custom_components.presence_based_lighting.const import CONF_AUTOMATION_MODE
+from custom_components.presence_based_lighting.const import CONF_BULK_COMMAND_POLICY
+from custom_components.presence_based_lighting.const import CONF_CLEARING_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
+)
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import (
+    CONF_CONTROL_LEASE_BLOCKERS,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_CONTROL_LEASE_CORRECT_LATE_ON,
+)
+from custom_components.presence_based_lighting.const import CONF_CONTROL_LEASE_MODE
+from custom_components.presence_based_lighting.const import (
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import CONF_FILE_LOGGING_ENABLED
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import CONF_QUIETED_MAX_AGE
+from custom_components.presence_based_lighting.const import CONF_QUIETED_MAX_AGE_ACTION
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_ACTIVATION_CATCHUP_MODE,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_AUTO_REENABLE_END_TIME,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_AUTO_REENABLE_START_TIME,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
+)
+from custom_components.presence_based_lighting.const import DEFAULT_AUTOMATION_MODE
+from custom_components.presence_based_lighting.const import DEFAULT_BULK_COMMAND_POLICY
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_FILE_LOGGING_ENABLED
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import DEFAULT_OFF_DELAY
+from custom_components.presence_based_lighting.const import DEFAULT_QUIETED_MAX_AGE
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_QUIETED_MAX_AGE_ACTION,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_RESPECTS_PRESENCE_ALLOWED,
+)
 from voluptuous.schema_builder import UNDEFINED
 
 # Ensure HA stubs defined before importing the config flow
-import tests.conftest  # noqa: F401
-
-import pytest
-
-from custom_components.presence_based_lighting.config_flow import (
-    ACTION_ADD_ENTITY,
-    ACTION_DELETE_ENTITIES,
-    ACTION_EDIT_ENTITY,
-    ACTION_NO_ACTION,
-    FIELD_LANDING_ACTION,
-    FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
-    FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
-    NO_ACTION,
-    PresenceBasedLightingFlowHandler,
-    STATE_OPTION_CUSTOM,
-    STEP_CHOOSE_EDIT_ENTITY,
-    STEP_DELETE_ENTITIES,
-    STEP_SELECT_ENTITY,
-)
-from custom_components.presence_based_lighting.const import (
-    AUTOMATION_MODE_AUTOMATIC,
-    CONF_ACTIVATION_CONDITIONS,
-    CONF_ACTIVATION_CATCHUP_MODE,
-    CONF_AUTOMATION_MODE,
-    CONF_BULK_COMMAND_POLICY,
-    CONF_AUTO_REENABLE_END_TIME,
-    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
-    CONF_AUTO_REENABLE_START_TIME,
-    CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
-    CONF_CLEARING_SENSORS,
-    CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_FILE_LOGGING_ENABLED,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_OFF_DELAY,
-    CONF_QUIETED_MAX_AGE,
-    CONF_QUIETED_MAX_AGE_ACTION,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_SENSORS,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    DEFAULT_AUTOMATION_MODE,
-    DEFAULT_BULK_COMMAND_POLICY,
-    DEFAULT_AUTO_REENABLE_END_TIME,
-    DEFAULT_AUTO_REENABLE_START_TIME,
-    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
-    DEFAULT_ACTIVATION_CATCHUP_MODE,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
-    DEFAULT_FILE_LOGGING_ENABLED,
-    DEFAULT_INITIAL_PRESENCE_ALLOWED,
-    DEFAULT_OFF_DELAY,
-    DEFAULT_QUIETED_MAX_AGE,
-    DEFAULT_QUIETED_MAX_AGE_ACTION,
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
-    DEFAULT_RESPECTS_PRESENCE_ALLOWED,
-)
-
 
 SERVICE_OPTION_FIXTURE = [
     {"value": NO_ACTION, "label": "No Action"},
@@ -160,7 +210,9 @@ async def test_manage_entities_creates_entry_when_ready():
     }
     handler._controlled_entities = [_entity_fixture("light.office")]  # type: ignore[attr-defined]
 
-    result = await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_NO_ACTION})
+    result = await handler.async_step_manage_entities(
+        {FIELD_LANDING_ACTION: ACTION_NO_ACTION}
+    )
 
     expected_payload = {
         CONF_ROOM_NAME: "Office",
@@ -177,7 +229,9 @@ async def test_manage_entities_creates_entry_when_ready():
         CONF_AUTO_REENABLE_START_TIME: DEFAULT_AUTO_REENABLE_START_TIME,
         CONF_AUTO_REENABLE_END_TIME: DEFAULT_AUTO_REENABLE_END_TIME,
     }
-    handler.async_create_entry.assert_called_once_with(title="Office", data=expected_payload)
+    handler.async_create_entry.assert_called_once_with(
+        title="Office", data=expected_payload
+    )
     assert result == {"type": "create_entry"}
 
 
@@ -197,19 +251,27 @@ async def test_manage_entities_routes_to_edit_delete_and_add():
         _entity_fixture("light.hallway_2"),
     ]
 
-    result_edit = await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_EDIT_ENTITY})
+    result_edit = await handler.async_step_manage_entities(
+        {FIELD_LANDING_ACTION: ACTION_EDIT_ENTITY}
+    )
     assert result_edit == "form"
     handler.async_show_form.assert_called_once()
-    assert handler.async_show_form.call_args.kwargs["step_id"] == STEP_CHOOSE_EDIT_ENTITY
+    assert (
+        handler.async_show_form.call_args.kwargs["step_id"] == STEP_CHOOSE_EDIT_ENTITY
+    )
 
     handler.async_show_form.reset_mock()
-    result_delete = await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_DELETE_ENTITIES})
+    result_delete = await handler.async_step_manage_entities(
+        {FIELD_LANDING_ACTION: ACTION_DELETE_ENTITIES}
+    )
     assert result_delete == "form"
     handler.async_show_form.assert_called_once()
     assert handler.async_show_form.call_args.kwargs["step_id"] == STEP_DELETE_ENTITIES
 
     handler.async_show_form.reset_mock()
-    result_add = await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_ADD_ENTITY})
+    result_add = await handler.async_step_manage_entities(
+        {FIELD_LANDING_ACTION: ACTION_ADD_ENTITY}
+    )
     assert result_add == "form"
     handler.async_show_form.assert_called_once()
     assert handler.async_show_form.call_args.kwargs["step_id"] == STEP_SELECT_ENTITY
@@ -222,7 +284,9 @@ async def test_manage_entities_routes_to_edit_delete_and_add():
     "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
     return_value=SERVICE_OPTION_FIXTURE,
 )
-async def test_configure_entity_uses_state_dropdown_when_options_available(_mock_services):
+async def test_configure_entity_uses_state_dropdown_when_options_available(
+    _mock_services,
+):
     """State fields should render dropdown selectors when HA exposes options."""
     handler = PresenceBasedLightingFlowHandler()
     handler.hass = MagicMock()
@@ -247,27 +311,37 @@ async def test_configure_entity_uses_state_dropdown_when_options_available(_mock
     await handler.async_step_configure_entity()
 
     schema = handler.async_show_form.call_args.kwargs["data_schema"]
-    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
-    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+    detected_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE
+    )
+    cleared_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE
+    )
 
     detected_selector = schema.schema[detected_field]
     cleared_selector = schema.schema[cleared_field]
 
     assert "select" in detected_selector
     assert detected_selector["select"]["options"][0]["value"] == "auto"
-    option_values = [option["value"] for option in detected_selector["select"]["options"]]
+    option_values = [
+        option["value"] for option in detected_selector["select"]["options"]
+    ]
     assert option_values[-1] == STATE_OPTION_CUSTOM
     assert "select" in cleared_selector
 
     detected_custom_field = [
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+        field
+        for field in schema.schema
+        if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
     ]
     assert len(detected_custom_field) == 1
     assert schema.schema[detected_custom_field[0]]["text"]["multiline"] is False
     assert detected_custom_field[0].default is UNDEFINED
 
     cleared_custom_field = [
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+        field
+        for field in schema.schema
+        if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
     ]
     assert len(cleared_custom_field) == 1
     assert schema.schema[cleared_custom_field[0]]["text"]["multiline"] is False
@@ -280,13 +354,25 @@ async def test_configure_entity_uses_state_dropdown_when_options_available(_mock
         field for field in schema.schema if field.schema == CONF_QUIETED_MAX_AGE
     )
     max_age_action_field = next(
-        field
-        for field in schema.schema
-        if field.schema == CONF_QUIETED_MAX_AGE_ACTION
+        field for field in schema.schema if field.schema == CONF_QUIETED_MAX_AGE_ACTION
     )
     assert schema.schema[bulk_policy_field]["select"]["mode"] == "dropdown"
     assert max_age_field.default() == DEFAULT_QUIETED_MAX_AGE
     assert schema.schema[max_age_action_field]["select"]["mode"] == "dropdown"
+    lease_mode_field = next(
+        field for field in schema.schema if field.schema == CONF_CONTROL_LEASE_MODE
+    )
+    lease_blockers_field = next(
+        field for field in schema.schema if field.schema == CONF_CONTROL_LEASE_BLOCKERS
+    )
+    late_on_field = next(
+        field
+        for field in schema.schema
+        if field.schema == CONF_CONTROL_LEASE_CORRECT_LATE_ON
+    )
+    assert schema.schema[lease_mode_field]["select"]["mode"] == "dropdown"
+    assert schema.schema[lease_blockers_field]["entity"]["multiple"] is True
+    assert "boolean" in schema.schema[late_on_field]
 
 
 @pytest.mark.asyncio
@@ -294,7 +380,9 @@ async def test_configure_entity_uses_state_dropdown_when_options_available(_mock
     "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
     return_value=SERVICE_OPTION_FIXTURE,
 )
-async def test_configure_entity_falls_back_to_text_when_no_state_options(_mock_services):
+async def test_configure_entity_falls_back_to_text_when_no_state_options(
+    _mock_services,
+):
     """State inputs should fall back to text fields when HA provides no options."""
     handler = PresenceBasedLightingFlowHandler()
     handler.hass = MagicMock()
@@ -313,8 +401,12 @@ async def test_configure_entity_falls_back_to_text_when_no_state_options(_mock_s
     await handler.async_step_configure_entity()
 
     schema = handler.async_show_form.call_args.kwargs["data_schema"]
-    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
-    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+    detected_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE
+    )
+    cleared_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE
+    )
 
     assert schema.schema[detected_field] is str
     assert schema.schema[cleared_field] is str
@@ -329,7 +421,9 @@ async def test_configure_entity_falls_back_to_text_when_no_state_options(_mock_s
     "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
     return_value=SERVICE_OPTION_FIXTURE,
 )
-async def test_history_states_populate_dropdown_when_live_state_missing(_mock_services, mock_history):
+async def test_history_states_populate_dropdown_when_live_state_missing(
+    _mock_services, mock_history
+):
     """Recorder history should seed dropdowns when present."""
     mock_history.return_value = ["occupied", "vacant"]
 
@@ -350,14 +444,20 @@ async def test_history_states_populate_dropdown_when_live_state_missing(_mock_se
     await handler.async_step_configure_entity()
 
     schema = handler.async_show_form.call_args.kwargs["data_schema"]
-    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
-    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+    detected_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE
+    )
+    cleared_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE
+    )
 
     detected_selector = schema.schema[detected_field]
     cleared_selector = schema.schema[cleared_field]
 
     assert detected_selector == cleared_selector
-    option_values = [option["value"] for option in detected_selector["select"]["options"]]
+    option_values = [
+        option["value"] for option in detected_selector["select"]["options"]
+    ]
     assert option_values == [
         "occupied",
         "vacant",
@@ -394,24 +494,36 @@ async def test_state_dropdown_includes_defaults_for_both_fields(_mock_services):
     await handler.async_step_configure_entity()
 
     schema = handler.async_show_form.call_args.kwargs["data_schema"]
-    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
-    cleared_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE)
+    detected_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE
+    )
+    cleared_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_CLEARED_STATE
+    )
 
     detected_selector = schema.schema[detected_field]
     cleared_selector = schema.schema[cleared_field]
 
     assert detected_selector == cleared_selector
     values = [option["value"] for option in detected_selector["select"]["options"]]
-    assert values == [DEFAULT_DETECTED_STATE, DEFAULT_CLEARED_STATE, STATE_OPTION_CUSTOM]
+    assert values == [
+        DEFAULT_DETECTED_STATE,
+        DEFAULT_CLEARED_STATE,
+        STATE_OPTION_CUSTOM,
+    ]
 
     detected_custom_field = [
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+        field
+        for field in schema.schema
+        if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
     ]
     assert len(detected_custom_field) == 1
     assert detected_custom_field[0].default is UNDEFINED
 
     cleared_custom_field = [
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+        field
+        for field in schema.schema
+        if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
     ]
     assert len(cleared_custom_field) == 1
     assert cleared_custom_field[0].default is UNDEFINED
@@ -427,7 +539,10 @@ async def test_configure_entity_saves_custom_state_when_selected(_mock_services)
     handler = PresenceBasedLightingFlowHandler()
     handler.hass = MagicMock()
     state_obj = MagicMock()
-    state_obj.attributes = {"friendly_name": "Office Lamp", "options": ["auto", "manual"]}
+    state_obj.attributes = {
+        "friendly_name": "Office Lamp",
+        "options": ["auto", "manual"],
+    }
     state_obj.state = "auto"
     handler.hass.states.get.return_value = state_obj
     handler.async_show_form = MagicMock(return_value={"type": "form"})
@@ -487,16 +602,25 @@ async def test_existing_custom_state_shows_text_field(_mock_services):
     await handler.async_step_configure_entity()
 
     schema = handler.async_show_form.call_args.kwargs["data_schema"]
-    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
-    assert schema.schema[detected_field]["select"]["options"][-1]["value"] == STATE_OPTION_CUSTOM
+    detected_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE
+    )
+    assert (
+        schema.schema[detected_field]["select"]["options"][-1]["value"]
+        == STATE_OPTION_CUSTOM
+    )
     custom_field = next(
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+        field
+        for field in schema.schema
+        if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
     )
     assert schema.schema[custom_field]["text"]["multiline"] is False
     assert callable(custom_field.default)
     assert custom_field.default() == "dimmed"
     cleared_custom_field = next(
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+        field
+        for field in schema.schema
+        if getattr(field, "schema", None) == FIELD_PRESENCE_CLEARED_STATE_CUSTOM
     )
     assert cleared_custom_field.default is UNDEFINED
 
@@ -506,7 +630,9 @@ async def test_existing_custom_state_shows_text_field(_mock_services):
     "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
     return_value=SERVICE_OPTION_FIXTURE,
 )
-async def test_configure_entity_requires_custom_text_when_option_selected(_mock_services):
+async def test_configure_entity_requires_custom_text_when_option_selected(
+    _mock_services,
+):
     """Custom selection without text should surface a validation error."""
     handler = PresenceBasedLightingFlowHandler()
     handler.hass = MagicMock()
@@ -531,11 +657,20 @@ async def test_configure_entity_requires_custom_text_when_option_selected(_mock_
     result = await handler.async_step_configure_entity(custom_input)
 
     assert result == {"type": "form"}
-    assert handler._errors == {FIELD_PRESENCE_DETECTED_STATE_CUSTOM: "custom_state_required"}
+    assert handler._errors == {
+        FIELD_PRESENCE_DETECTED_STATE_CUSTOM: "custom_state_required"
+    }
     schema = handler.async_show_form.call_args.kwargs["data_schema"]
-    detected_field = next(field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE)
-    assert schema.schema[detected_field]["select"]["options"][-1]["value"] == STATE_OPTION_CUSTOM
+    detected_field = next(
+        field for field in schema.schema if field.schema == CONF_PRESENCE_DETECTED_STATE
+    )
+    assert (
+        schema.schema[detected_field]["select"]["options"][-1]["value"]
+        == STATE_OPTION_CUSTOM
+    )
     custom_field = next(
-        field for field in schema.schema if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+        field
+        for field in schema.schema
+        if getattr(field, "schema", None) == FIELD_PRESENCE_DETECTED_STATE_CUSTOM
     )
     assert "text" in schema.schema[custom_field]

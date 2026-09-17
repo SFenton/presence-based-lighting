@@ -1,52 +1,85 @@
 """Additional option flow coverage tests for Presence Based Lighting."""
-
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-
-from custom_components.presence_based_lighting.config_flow import (  # noqa: E402  # pylint: disable=wrong-import-position
-    ACTION_ADD_ENTITY,
-    ACTION_DELETE_ENTITIES,
-    ACTION_EDIT_ENTITY,
-    ACTION_NO_ACTION,
-    FIELD_DELETE_ENTITIES,
-    FIELD_EDIT_ENTITY,
-    FIELD_LANDING_ACTION,
-    NO_ACTION,
-    PresenceBasedLightingOptionsFlowHandler,
-    ServiceOptionsUnavailable,
+from custom_components.presence_based_lighting.config_flow import (
     _get_services_for_entity,
 )
-from custom_components.presence_based_lighting.const import (  # noqa: E402  # pylint: disable=wrong-import-position
-    AUTOMATION_MODE_AUTOMATIC,
-    CONF_AUTOMATION_MODE,
+from custom_components.presence_based_lighting.config_flow import ACTION_ADD_ENTITY
+from custom_components.presence_based_lighting.config_flow import ACTION_DELETE_ENTITIES
+from custom_components.presence_based_lighting.config_flow import ACTION_EDIT_ENTITY
+from custom_components.presence_based_lighting.config_flow import ACTION_NO_ACTION
+from custom_components.presence_based_lighting.config_flow import FIELD_DELETE_ENTITIES
+from custom_components.presence_based_lighting.config_flow import FIELD_EDIT_ENTITY
+from custom_components.presence_based_lighting.config_flow import FIELD_LANDING_ACTION
+from custom_components.presence_based_lighting.config_flow import NO_ACTION
+from custom_components.presence_based_lighting.config_flow import (
+    PresenceBasedLightingOptionsFlowHandler,
+)
+from custom_components.presence_based_lighting.config_flow import (
+    ServiceOptionsUnavailable,
+)
+from custom_components.presence_based_lighting.const import AUTOMATION_MODE_AUTOMATIC
+from custom_components.presence_based_lighting.const import CONF_AUTOMATION_MODE
+from custom_components.presence_based_lighting.const import (
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
     CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
+)
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_TRANSITION,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_SENSORS,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import (
     CONF_RESPECTS_PRESENCE_ALLOWED,
-    DEFAULT_AUTOMATION_MODE,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import DEFAULT_AUTOMATION_MODE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
     DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
-    DEFAULT_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_PRESENCE_CLEARED_TRANSITION,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_DETECTED_TRANSITION,
-    DEFAULT_DETECTED_STATE,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 )
 
@@ -95,7 +128,9 @@ async def test_landing_requires_entities_before_submit(mock_config_entry):
     handler._controlled_entities = []  # type: ignore[attr-defined]
     handler.async_show_form = MagicMock(return_value="manage_form")
 
-    result = await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_NO_ACTION})
+    result = await handler.async_step_manage_entities(
+        {FIELD_LANDING_ACTION: ACTION_NO_ACTION}
+    )
 
     assert handler._errors["base"] == "no_controlled_entities"  # type: ignore[attr-defined]
     handler.async_show_form.assert_called_once()
@@ -110,7 +145,9 @@ async def test_landing_submit_finalizes_changes(mock_config_entry):
     handler.hass.config_entries = MagicMock()
     handler.async_create_entry = MagicMock(return_value={"type": "create_entry"})
 
-    result = await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_NO_ACTION})
+    result = await handler.async_step_manage_entities(
+        {FIELD_LANDING_ACTION: ACTION_NO_ACTION}
+    )
 
     handler.hass.config_entries.async_update_entry.assert_called_once()
     handler.async_create_entry.assert_called_once_with(title="", data={})
@@ -129,13 +166,17 @@ SERVICE_OPTION_FIXTURE = [
     "custom_components.presence_based_lighting.config_flow._get_services_for_entity",
     return_value=SERVICE_OPTION_FIXTURE,
 )
-async def test_choose_edit_entity_updates_existing_and_finalizes(_mock_services, mock_config_entry):
+async def test_choose_edit_entity_updates_existing_and_finalizes(
+    _mock_services, mock_config_entry
+):
     """Edit flow should let the user update an entity and then finalize the entry."""
     handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
     handler.hass = MagicMock()
     handler.hass.config_entries = MagicMock()
     handler.hass.states = MagicMock()
-    handler.hass.states.get = MagicMock(return_value=MagicMock(attributes={"friendly_name": "Living Room Light"}))
+    handler.hass.states.get = MagicMock(
+        return_value=MagicMock(attributes={"friendly_name": "Living Room Light"})
+    )
     handler.async_create_entry = MagicMock(return_value={"type": "create_entry"})
     handler.async_show_form = MagicMock(return_value="form")
 
@@ -208,11 +249,15 @@ async def test_add_new_entity_from_landing(_mock_services, mock_config_entry):
     handler.hass = MagicMock()
     handler.hass.config_entries = MagicMock()
     handler.hass.states = MagicMock()
-    handler.hass.states.get = MagicMock(return_value=MagicMock(attributes={"friendly_name": "Bedroom Light"}))
+    handler.hass.states.get = MagicMock(
+        return_value=MagicMock(attributes={"friendly_name": "Bedroom Light"})
+    )
     handler.async_create_entry = MagicMock(return_value={"type": "create_entry"})
 
     handler.async_show_form = MagicMock(return_value="form")
-    result = await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_ADD_ENTITY})
+    result = await handler.async_step_manage_entities(
+        {FIELD_LANDING_ACTION: ACTION_ADD_ENTITY}
+    )
     assert result == "form"
 
     await handler.async_step_select_entity({CONF_ENTITY_ID: "light.bedroom"})
@@ -235,8 +280,13 @@ async def test_delete_entities_flow_removes_selected(mock_config_entry_multi):
 
     registry = MagicMock()
     registry.async_get_entity_id.return_value = "switch.living_room_presence_toggle"
-    with patch("custom_components.presence_based_lighting.config_flow.er.async_get", return_value=registry) as mock_get:
-        await handler.async_step_manage_entities({FIELD_LANDING_ACTION: ACTION_DELETE_ENTITIES})
+    with patch(
+        "custom_components.presence_based_lighting.config_flow.er.async_get",
+        return_value=registry,
+    ) as mock_get:
+        await handler.async_step_manage_entities(
+            {FIELD_LANDING_ACTION: ACTION_DELETE_ENTITIES}
+        )
         await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: ["0"]})
 
     mock_get.assert_called_once_with(handler.hass)
@@ -263,7 +313,9 @@ async def test_options_flow_loads_existing_entities_on_init(mock_config_entry):
 
 
 @pytest.mark.asyncio
-async def test_options_flow_preserves_entities_when_updating_base_settings(mock_config_entry):
+async def test_options_flow_preserves_entities_when_updating_base_settings(
+    mock_config_entry,
+):
     """Updating presence sensors and delay should not drop entities."""
     handler = PresenceBasedLightingOptionsFlowHandler(mock_config_entry)
     assert len(handler._controlled_entities) == 1  # type: ignore[attr-defined]
@@ -275,7 +327,10 @@ async def test_options_flow_preserves_entities_when_updating_base_settings(mock_
     handler.async_step_manage_entities = mock_manage_entities
 
     user_input = {
-        CONF_PRESENCE_SENSORS: ["binary_sensor.new_sensor_1", "binary_sensor.new_sensor_2"],
+        CONF_PRESENCE_SENSORS: [
+            "binary_sensor.new_sensor_1",
+            "binary_sensor.new_sensor_2",
+        ],
         CONF_OFF_DELAY: 30,
     }
 

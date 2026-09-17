@@ -3,6 +3,7 @@
 ## What You'll Get
 
 After setting up Presence Based Lighting, you'll have intelligent room automation that:
+
 - ✅ Turns lights on when you enter
 - ✅ Turns lights off when you leave (after a delay)
 - ✅ Respects manual control (manual off = automation pauses)
@@ -11,6 +12,7 @@ After setting up Presence Based Lighting, you'll have intelligent room automatio
 ## Prerequisites
 
 Before you start, make sure you have:
+
 - ✅ Occupancy/motion sensors (binary_sensor with device_class: occupancy)
 - ✅ Lights or light groups you want to automate
 - ✅ Home Assistant running (any recent version)
@@ -20,6 +22,7 @@ Before you start, make sure you have:
 ### 1. Install the Integration
 
 **Option A: HACS (Recommended)**
+
 1. Open HACS → Integrations
 2. Click ⋮ → Custom repositories
 3. Add: `https://github.com/sfenton/presence_based_lighting`
@@ -27,6 +30,7 @@ Before you start, make sure you have:
 5. Restart Home Assistant
 
 **Option B: Manual**
+
 1. Download this repository
 2. Copy `custom_components/presence_based_lighting` to your HA config
 3. Restart Home Assistant
@@ -39,9 +43,10 @@ Before you start, make sure you have:
 4. Fill in the form:
 
    **Example: Living Room**
+
    ```
    Room Name: Living Room
-   Lights to Control: 
+   Lights to Control:
      - light.living_room_ceiling
      - light.living_room_lamp
    Presence Sensors:
@@ -54,9 +59,11 @@ Before you start, make sure you have:
 ### 3. Verify It Works
 
 You should now have a new switch entity:
+
 - `switch.living_room_presence_automation`
 
 **Test it:**
+
 1. Make sure the switch is ON
 2. Trigger your motion sensor
 3. Lights should turn on automatically
@@ -66,8 +73,9 @@ You should now have a new switch entity:
 ### 4. Add More Rooms (Optional)
 
 Repeat step 2 for each room you want to automate:
+
 - Bedroom
-- Office  
+- Office
 - Kitchen
 - Bathroom
 - etc.
@@ -77,6 +85,7 @@ Each room gets its own independent automation and switch entity.
 ## Common Configurations
 
 ### Home Office
+
 ```
 Room Name: Office
 Lights: light.desk_lamp, light.overhead
@@ -85,6 +94,7 @@ Delay: 120 seconds (2 minutes - for focused work)
 ```
 
 ### Bathroom
+
 ```
 Room Name: Bathroom
 Lights: light.bathroom
@@ -93,6 +103,7 @@ Delay: 60 seconds (1 minute - quick trips)
 ```
 
 ### Bedroom
+
 ```
 Room Name: Bedroom
 Lights: light.bedroom_ceiling, light.bedside_lamps
@@ -101,16 +112,18 @@ Delay: 300 seconds (5 minutes - getting ready)
 ```
 
 ### Multi-Sensor Room
+
 ```
 Room Name: Living Room
 Lights: light.living_room_group
-Sensors: 
+Sensors:
   - binary_sensor.living_room_motion_1
   - binary_sensor.living_room_motion_2
   - binary_sensor.hallway_motion
 Delay: 30 seconds
 ```
-*(Lights stay on if ANY sensor detects motion)*
+
+_(Lights stay on if ANY sensor detects motion)_
 
 ## Using the Switch
 
@@ -165,30 +178,34 @@ automation:
 
 Understanding how manual control works:
 
-| You Do                    | Integration Does                              |
-|---------------------------|-----------------------------------------------|
-| Turn lights OFF manually  | Automation disables (switch turns OFF)        |
-| Turn lights ON manually   | Automation re-enables (switch turns ON)       |
-| Toggle the switch OFF     | Automation stops (lights stay as-is)          |
-| Toggle the switch ON      | Automation resumes (evaluates current state)  |
+| You Do                   | Integration Does                             |
+| ------------------------ | -------------------------------------------- |
+| Turn lights OFF manually | Automation disables (switch turns OFF)       |
+| Turn lights ON manually  | Automation re-enables (switch turns ON)      |
+| Toggle the switch OFF    | Automation stops (lights stay as-is)         |
+| Toggle the switch ON     | Automation resumes (evaluates current state) |
 
 ## Troubleshooting
 
 ### Lights don't turn on automatically
+
 - ✅ Check the switch is ON: `switch.<room>_presence_automation`
 - ✅ Verify your sensors are working (check their state in Developer Tools)
 - ✅ Check Home Assistant logs for errors
 
 ### Lights turn off too quickly
+
 - Increase the "Turn Off Delay" in the integration options
 - Go to Settings → Devices & Services → Presence Based Lighting → Configure
 
 ### Lights don't turn off
+
 - Verify ALL your presence sensors eventually go to "off"
 - Check that lights are included in the configuration
 - Make sure the switch is ON
 
 ### Manual control doesn't work as expected
+
 - Remember: Manual OFF disables automation
 - If lights are controlled by another automation, use the switch to control presence automation instead
 
@@ -197,12 +214,15 @@ Understanding how manual control works:
 You can control individual lights OR groups:
 
 **Option 1: Individual Lights**
+
 ```
 Lights: light.lamp_1, light.lamp_2, light.lamp_3
 ```
+
 All turn on/off together
 
 **Option 2: Use Light Groups**
+
 ```
 First, create a group in configuration.yaml:
 light:
@@ -227,4 +247,4 @@ Lights: light.living_room_all_lights
 ## Need Help?
 
 - 📖 See [README.md](README.md) for full documentation
--  Found a bug? [Open an issue](https://github.com/sfenton/presence_based_lighting/issues)
+- Found a bug? [Open an issue](https://github.com/sfenton/presence_based_lighting/issues)

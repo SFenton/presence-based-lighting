@@ -1,8 +1,9 @@
 """Constants for Presence Based Lighting."""
+
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"
-VERSION = "2.4.3"
+VERSION = "2.5.1"
 
 ISSUE_URL = "https://github.com/sfenton/presence_based_lighting/issues"
 
@@ -42,9 +43,15 @@ CONF_AUTOMATION_MODE = "automation_mode"
 CONF_USE_INTERCEPTOR = "use_interceptor"
 CONF_NORMALIZE_EXTERNAL_PLAIN_ON = "normalize_external_plain_on"
 CONF_MANUAL_DISABLE_STATES = "manual_disable_states"
-CONF_RLC_TRACKING_ENTITY = "rlc_tracking_entity"  # Optional RLC sensor that tracks this entity's real state
-CONF_PRESENCE_SENSOR_MAPPINGS = "presence_sensor_mappings"  # Maps presence sensors to their source entities
-CONF_CLEARING_SENSOR_MAPPINGS = "clearing_sensor_mappings"  # Maps clearing sensors to their source entities
+CONF_RLC_TRACKING_ENTITY = (
+    "rlc_tracking_entity"  # Optional RLC sensor that tracks this entity's real state
+)
+CONF_PRESENCE_SENSOR_MAPPINGS = (
+    "presence_sensor_mappings"  # Maps presence sensors to their source entities
+)
+CONF_CLEARING_SENSOR_MAPPINGS = (
+    "clearing_sensor_mappings"  # Maps clearing sensors to their source entities
+)
 CONF_ACTIVATION_CONDITIONS = "activation_conditions"  # Optional binary_sensor/input_boolean entities that must ALL be on for lights to activate
 CONF_ACTIVATION_CATCHUP_MODE = "activation_catchup_mode"
 
@@ -54,21 +61,46 @@ CONF_ACTIVATION_CATCHUP_MODE = "activation_catchup_mode"
 # paired room profiles cannot resurrect a light another profile just released.
 CONF_HONOR_EXTERNAL_OVERRIDE = "honor_external_override"  # Per-entity: consult entity-scoped overrides recorded by sibling entries
 CONF_UNKNOWN_SOURCE_POLICY = "unknown_source_policy"  # Policy for external commands we cannot attribute to a known source
-CONF_BULK_COMMAND_POLICY = "bulk_command_policy"  # pause | rearm_after_clear for confirmed whole-home commands
-CONF_QUIETED_MAX_AGE = "quieted_max_age"  # Seconds before a quieted hold is considered stale
+CONF_BULK_COMMAND_POLICY = (
+    "bulk_command_policy"  # pause | rearm_after_clear for confirmed whole-home commands
+)
+CONF_QUIETED_MAX_AGE = (
+    "quieted_max_age"  # Seconds before a quieted hold is considered stale
+)
 CONF_QUIETED_MAX_AGE_ACTION = "quieted_max_age_action"  # diagnostic | pause | arm
+
+# Temporary external control leases.
+#
+# Leases are intentionally separate from ExternalOverrideRecord. An override
+# records a manual/admin suppression fact, while a lease temporarily delegates
+# actuation authority to a caller such as the HA-owned wake-light coordinator.
+CONF_CONTROL_LEASE_MODE = "control_lease_mode"
+CONF_CONTROL_LEASE_BLOCKERS = "control_lease_blockers"
+CONF_CONTROL_LEASE_CORRECT_LATE_ON = "control_lease_correct_late_on"
 
 # Domain-wide bulk ("all lights off") detection keys
 CONF_HOMEKIT_BATCH_MODE = "homekit_batch_mode"  # off | observe | enforce
-CONF_BATCH_WINDOW_MS = "batch_window_ms"  # Grouping window for same-service HomeKit commands
-CONF_BATCH_RETAIN_SECONDS = "batch_retain_seconds"  # How long a context->batch mapping stays resolvable
+CONF_BATCH_WINDOW_MS = (
+    "batch_window_ms"  # Grouping window for same-service HomeKit commands
+)
+CONF_BATCH_RETAIN_SECONDS = (
+    "batch_retain_seconds"  # How long a context->batch mapping stays resolvable
+)
 CONF_BATCH_MIN_DISTINCT_ENTITIES = "batch_min_distinct_entities"  # Distinct managed target entities required to call it a batch
 
 # Auto re-enable configuration keys
-CONF_AUTO_REENABLE_PRESENCE_SENSORS = "auto_reenable_presence_sensors"  # Presence sensors used for vacancy tracking
-CONF_AUTO_REENABLE_VACANCY_THRESHOLD = "auto_reenable_vacancy_threshold"  # Percentage threshold for vacancy (0-100)
-CONF_AUTO_REENABLE_START_TIME = "auto_reenable_start_time"  # Start of monitoring window (time string HH:MM:SS)
-CONF_AUTO_REENABLE_END_TIME = "auto_reenable_end_time"  # End of monitoring window (time string HH:MM:SS)
+CONF_AUTO_REENABLE_PRESENCE_SENSORS = (
+    "auto_reenable_presence_sensors"  # Presence sensors used for vacancy tracking
+)
+CONF_AUTO_REENABLE_VACANCY_THRESHOLD = (
+    "auto_reenable_vacancy_threshold"  # Percentage threshold for vacancy (0-100)
+)
+CONF_AUTO_REENABLE_START_TIME = (
+    "auto_reenable_start_time"  # Start of monitoring window (time string HH:MM:SS)
+)
+CONF_AUTO_REENABLE_END_TIME = (
+    "auto_reenable_end_time"  # End of monitoring window (time string HH:MM:SS)
+)
 
 # Automation mode values
 AUTOMATION_MODE_AUTOMATIC = "automatic"
@@ -107,11 +139,11 @@ AUTOMATION_CONTROL_STATE_PAUSED = "paused"
 AUTOMATION_CONTROL_STATE_QUIETED = "quieted"
 AUTOMATION_CONTROL_STATE_ACTIVE = "active"
 AUTOMATION_CONTROL_STATES = {
-	AUTOMATION_CONTROL_STATE_ON,
-	AUTOMATION_CONTROL_STATE_OFF,
-	AUTOMATION_CONTROL_STATE_PAUSED,
-	AUTOMATION_CONTROL_STATE_QUIETED,
-	AUTOMATION_CONTROL_STATE_ACTIVE,
+    AUTOMATION_CONTROL_STATE_ON,
+    AUTOMATION_CONTROL_STATE_OFF,
+    AUTOMATION_CONTROL_STATE_PAUSED,
+    AUTOMATION_CONTROL_STATE_QUIETED,
+    AUTOMATION_CONTROL_STATE_ACTIVE,
 }
 
 # HomeKit batch detection modes
@@ -119,11 +151,34 @@ BATCH_MODE_OFF = "off"
 BATCH_MODE_OBSERVE = "observe"
 BATCH_MODE_ENFORCE = "enforce"
 
+# Control lease modes use the same explicit rollout shape as bulk detection.
+CONTROL_LEASE_MODE_OFF = "off"
+CONTROL_LEASE_MODE_OBSERVE = "observe"
+CONTROL_LEASE_MODE_ENFORCE = "enforce"
+CONTROL_LEASE_MODES = {
+    CONTROL_LEASE_MODE_OFF,
+    CONTROL_LEASE_MODE_OBSERVE,
+    CONTROL_LEASE_MODE_ENFORCE,
+}
+
+CONTROL_LEASE_OWNER_WAKE_LIGHT = "wake_light"
+CONTROL_LEASE_ALLOWED_OWNERS = {CONTROL_LEASE_OWNER_WAKE_LIGHT}
+CONTROL_LEASE_RELEASE_CAUSE_EXTERNAL_OFF = "external_targets_off"
+CONTROL_LEASE_RELEASE_CAUSES = {
+    "hold_complete",
+    "occurrence_cancelled",
+    "owner_failed",
+    "owner_shutdown",
+    CONTROL_LEASE_RELEASE_CAUSE_EXTERNAL_OFF,
+}
+
 # Home Assistant event fired by the HomeKit bridge immediately before it issues
 # the service call, sharing the same context object as that call.
 EVENT_HOMEKIT_STATE_CHANGE = "homekit_state_change"
 # Diagnostic event emitted for every external command classification decision.
 EVENT_COMMAND_INTENT = "presence_based_lighting_command_intent"
+EVENT_CONTROL_TRANSITION = "presence_based_lighting_control_transition"
+EVENT_CONTROL_LEASE_REVOKED = "presence_based_lighting_control_lease_revoked"
 
 # Special value for no action
 NO_ACTION = "none"
@@ -158,6 +213,20 @@ DEFAULT_UNKNOWN_SOURCE_POLICY = EXTERNAL_POLICY_PAUSE
 DEFAULT_BULK_COMMAND_POLICY = EXTERNAL_POLICY_REARM_AFTER_CLEAR
 DEFAULT_QUIETED_MAX_AGE = 14400  # 4 hours before stale-hold diagnostics
 DEFAULT_QUIETED_MAX_AGE_ACTION = QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
+DEFAULT_CONTROL_LEASE_MODE = CONTROL_LEASE_MODE_OFF
+DEFAULT_CONTROL_LEASE_BLOCKERS: list[str] = []
+DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON = False
+
+CONTROL_LEASE_SCHEMA_VERSION = 1
+CONTROL_LEASE_STORE_KEY = f"{DOMAIN}.control_leases"
+CONTROL_LEASE_TERMINAL_LIMIT = 20
+CONTROL_LEASE_RECOVERY_GRACE_SECONDS = 120
+CONTROL_LEASE_CONTEXT_TTL_SECONDS = 30
+CONTROL_LEASE_CONFIRMATION_WINDOW_SECONDS = 10
+CONTROL_LEASE_MIN_TTL_SECONDS = 1
+CONTROL_LEASE_MAX_TTL_SECONDS = 7200
+CONTROL_LEASE_MAX_OCCURRENCE_IDS = 8
+CONTROL_LEASE_MAX_TARGET_ENTITY_IDS = 32
 
 # Bulk detection defaults. Observed native "all lights off" bursts carried 15
 # commands in 21.46 ms and 16 commands in 25.39 ms, while a single-room HomeKit

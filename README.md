@@ -145,6 +145,16 @@ Each Presence Allowed switch includes:
 - `quieted_max_age_action` / `quieted_max_age_reached_at`: Configured and applied stale-hold handling
 - `unknown_source_count`: How many external commands could not be attributed to a known source
 - `homekit_batch_mode`: The active bulk-detection kill-switch mode
+- `control_lease_mode` / `control_lease_state`: Default-off rollout mode and current lease lifecycle state
+- `control_lease_id` / `control_lease_controller_id`: Stable local short hashes for the lease and room controller
+- `control_lease_occurrence_ids` / `control_lease_request_id`: Bounded local short correlation hashes
+- `control_lease_target_entity_ids` / `control_lease_released_entity_ids`: Explicit current and removed leaf targets
+- `control_lease_acquired_at` / `control_lease_expires_at`: Server-stamped lease lifetime
+- `control_lease_generation`: Generation used to reject stale owner contexts
+- `control_lease_last_transition` / `control_lease_last_outcome` / `control_lease_last_context`: Latest bounded diagnostic decision
+- `control_lease_baseline_admitted` / `control_lease_baseline_outcome`: Qualified asleep-baseline admission and compare-clear/preservation result
+- `control_lease_watchdog_state` / `control_lease_watchdog_due_at`: Active expiry or restart-recovery watchdog
+- `control_lease_denial_count` / `control_lease_token_mismatch_count` / `control_lease_blocked_command_count` / `control_lease_target_unavailable_count`: Bounded runtime counters
 
 ## Whole-Home ("All Lights Off") Commands
 
@@ -247,6 +257,130 @@ Admin-created pauses remain in place until an explicit admin resume. Quieted
 - `paused`: apply an entity-scoped indefinite pause
 - `quieted`: apply an entity-scoped rearm-after-clear hold
 - `active`: force-clear local and entity-scoped suppression, then reconcile
+
+## Temporary Control Leases
+
+PBL 2.5 adds a default-off, token-guarded handoff for a Home Assistant-owned
+controller that temporarily needs exclusive authority over one controlled
+light root. The initial registered owner is `wake_light`.
+
+Each controlled light chooses a `control_lease_mode`:
+
+- `off` (default) preserves all existing behavior.
+- `observe` reports would-grant and would-break transitions without suppressing
+  PBL or authorizing light commands.
+- `enforce` grants a lease only when exact context enforcement, current group
+  membership, configured external blockers, target availability, and existing
+  PBL suppression state are all safe.
+
+Enforce mode may also admit the exact household asleep baseline: an entity
+paused by an unchanged, non-admin external manual-off override. The lease stores
+an immutable private fingerprint of that override and each matching local pause.
+Only `release_control` with `outcome: completed` and `cause: hold_complete`
+compare-clears that same fingerprint. A replaced record, admin/service pause,
+cancelled/failed release, or stale generation remains fail-dark.
+
+One caller-supplied lease ID represents the room coordinator. Duplicate acquire
+atomically replaces its bounded occurrence and target sets but never silently
+extends the original expiry. Release requires the latest returned generation as
+well as the lease/controller token, and never calls `resume_automation`, clears
+an external override, or restores a state snapshot.
+Manual group off, bulk off, PBL administrative changes, expiry, and target
+unavailability revoke the lease before existing PBL behavior runs.
+Transition and revoke telemetry retain the post-terminal `generation` for
+diagnostics and also publish `previous_generation`, which is the exact active
+generation the owner used before the terminal transition.
+
+OFF uses the same canonical selector extraction as brightness commands, then
+includes nested HA/Z2M group members. An OFF targeting all leased leaves
+revokes before dispatch even when an excluded member keeps the aggregate root
+on. If selector extraction fails, OFF still passes and only proven explicit
+scope is revoked; the failure is logged rather than guessing unrelated rooms.
+
+An owner observing all leased targets switched off without a service event can
+release with `outcome: cancelled` and `cause: external_targets_off`. Exact
+token/generation checks still precede mutation. PBL applies its normal
+unknown-source external policy before release persistence yields, preserving
+an already qualified asleep/manual baseline. With the normal pause policy this
+creates a qualified external override, not an administrative pause, so ordinary
+presence changes stay suppressed and a later independent wake remains eligible.
+Duplicate/stale releases cannot reapply that policy. The wake owner still owns
+connected-occurrence fencing and single-leaf exclusion.
+
+Revoke telemetry also includes `context_classification` and `authority_policy`.
+The user-ID/parent-ID classification is diagnostic, not proof of human intent:
+unknown/HomeKit/helper commands keep conservative external-control authority.
+Only exact registered owner contexts receive owner treatment.
+
+A foreign `light.turn_on` with explicit absolute/step brightness, a light
+profile, or an explicit white level revokes the whole room lease with
+`manual_brightness_control` before the command continues. A command aimed at
+either the controlled root/group or any current leased leaf has this room-level
+effect; PBL does not make unsafe unilateral leaf-generation changes. Exact
+lease-owner and PBL automatic contexts are exempt. Color-only commands coexist
+with the lease, and a plain turn-on is left unmodified while the lease owns
+brightness rather than being normalized into an implicit brightness command.
+PBL uses Home Assistant's 2026.8-compatible canonical
+`async_extract_entity_ids(ServiceCall)` target expansion for `entity_id`,
+`area_id`, `device_id`, `label_id`, `floor_id`, and mixed selectors. If
+expansion fails, the interceptor blocks the explicit-brightness command and
+leaves unrelated leases unchanged rather than guessing at targets.
+The service-call path applies the command's configured external
+HomeKit/unknown-source policy exactly once, then classifies later state feedback
+as owned coordination so it cannot duplicate that handling. An admitted
+asleep/manual-off baseline is claimed but left unchanged rather than replaced
+or compare-cleared.
+
+Lease commands must use the internal `async_call_with_control_lease` path or the
+response-enabled `presence_based_lighting.dispatch_control` backend service.
+Both require the exact root, owner, lease/controller, latest generation,
+command ID, explicit leaf targets, and bounded `light.turn_on` data with
+positive absolute `brightness` or `brightness_pct`. Bare `light.turn_on` is
+rejected because PBL and other Home Assistant normalization can otherwise jump
+directly to full brightness. Calls are filtered to the lease's explicit member
+targets; the root group is never assumed to contain only appropriate wake
+lights.
+
+In-flight owner contexts remain identifiable past the ordinary context-cache
+TTL until dispatch returns. The pending set is bounded at 256; capacity
+exhaustion rejects new commands instead of evicting a pending safety token.
+Lease expiry is checked again at the pre-dispatch guard. This protects queued
+software commands, not an already accepted physical device packet.
+
+The wake controller owns active leaf observation and replaces the lease target
+set when one leaf is released. PBL v2.5 does not persist leaf exclusions after
+the lease ends; durable post-occurrence leaf behavior remains an explicit future
+product decision. A full root/group off uses the existing manual-off pause
+handoff.
+
+The store restores an unexpired lease as command-blocked `recovering` state for
+at most 120 seconds and never extends the original expiry. Observe-only records
+also expire on their supplied deadline. A bounded terminal history and
+schema-versioned transition events support incident reconstruction. Public
+attributes, events, diagnostics, terminal summaries, and lifecycle logs expose
+only stable per-install 12-character SHA-256 correlation hashes for
+caller-controlled IDs; full IDs remain private to active CAS state and direct
+service responses.
+
+Acquisition also fails closed with the stable `actuation_in_flight` blocker
+while a PBL automatic ON or OFF has already been dispatched or is currently
+dispatching. The service call is not treated as canceled by clearing local
+bookkeeping. Once that actuation settles, the caller may safely retry the same
+unretired lease ID.
+
+Operational gates outside PBL still apply:
+
+- Adaptive Lighting or another controller can be configured as an external
+  blocker and must be off until ownership compatibility is proven.
+- A 100%/brightness-255 command may trigger unrelated Home Assistant
+  automations; the wake backend must validate those consumers.
+- A group may include adjacent-room members, so the wake backend must submit an
+  explicit validated target list.
+- PBL cannot recall a command already transmitted to Zigbee. It records a late
+  exact-context ON after revoke; the optional corrective OFF is disabled by
+  default and requires every documented safety gate.
+- Post-wake hold duration is owner policy. PBL enforces only the initial lease
+  expiry and performs no implicit per-step renewal.
 
 ### Escape hatch
 
