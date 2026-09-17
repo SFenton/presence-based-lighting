@@ -1840,7 +1840,7 @@ async def test_migration_v10_to_v13_backfills_new_settings():
     hass.config_entries.async_update_entry = track_update
 
     assert await async_migrate_entry(hass, entry) is True
-    assert entry.version == 13
+    assert entry.version == 14
 
     assert entry.data[CONF_HOMEKIT_BATCH_MODE] == DEFAULT_HOMEKIT_BATCH_MODE
     assert (
@@ -1883,9 +1883,9 @@ async def test_migration_is_idempotent_and_preserves_explicit_values():
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_HONOR_EXTERNAL_OVERRIDE] is False
     )
 
-    # Already at v13: a second pass is a no-op.
+    # Already at v14: a second pass is a no-op.
     assert await async_migrate_entry(hass, entry) is True
-    assert entry.version == 13
+    assert entry.version == 14
 
 
 @pytest.mark.asyncio

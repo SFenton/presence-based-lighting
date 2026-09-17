@@ -80,6 +80,7 @@ from .const import CONF_PRESENCE_DETECTED_SERVICE
 from .const import CONF_PRESENCE_DETECTED_STATE
 from .const import CONF_PRESENCE_DETECTED_TRANSITION
 from .const import CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED
 from .const import CONF_PRESENCE_SENSORS
 from .const import CONF_QUIETED_MAX_AGE
 from .const import CONF_QUIETED_MAX_AGE_ACTION
@@ -117,6 +118,7 @@ from .const import DEFAULT_PRESENCE_CLEARED_TRANSITION
 from .const import DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
 from .const import DEFAULT_PRESENCE_DETECTED_TRANSITION
 from .const import DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED
 from .const import DEFAULT_QUIETED_MAX_AGE
 from .const import DEFAULT_QUIETED_MAX_AGE_ACTION
 from .const import DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED
@@ -135,6 +137,13 @@ from .const import SOURCE_ADMIN
 from .const import SOURCE_HOMEKIT_BATCH
 from .const import SOURCE_HOMEKIT_SINGLE
 from .const import SOURCE_UNKNOWN
+from .const import SOURCE_MANUAL_APP
+from .const import SOURCE_MANUAL_CONTROL
+from .const import MANUAL_ON_INTENT
+from .const import MANUAL_ON_INTENT_VERSION
+from .const import MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY
+from .const import MANUAL_ON_BOUNDARY_AWAIT_CLEAR
+from .const import MANUAL_ON_BOUNDARY_CLEAR_PENDING
 from .const import STARTUP_MESSAGE
 from .control_lease import get_control_lease_manager
 from .entity_targeting import as_entity_list
@@ -257,6 +266,7 @@ _EXTERNAL_PAUSE_SOURCES = {
     "external_state",
     "external_service",
     "external_override",
+    "manual_on",
 }
 
 # Persistent debug log file (uncapped)
@@ -676,6 +686,19 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             config_entry.entry_id,
         )
 
+    if config_entry.version == 13:
+        # Version 13 -> 14: manual-on is an explicit opt-in. Do not write the
+        # new setting into existing entries so migration can never enable it.
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data={**config_entry.data},
+            version=14,
+        )
+        _LOGGER.info(
+            "Migration of entry %s from version 13 to 14 successful",
+            config_entry.entry_id,
+        )
+
     return True
 
 
@@ -980,6 +1003,7 @@ class PresenceBasedLightingCoordinator:
                     "contexts": deque(maxlen=20),
                     "context_targets": {},
                     "off_timer": None,
+                    "manual_on_timer": None,
                     "work_generation": 0,
                     "intent": self._new_entity_intent(),
                     "actuation": self._new_actuation_state(),
@@ -1006,6 +1030,10 @@ class PresenceBasedLightingCoordinator:
                     max_age_action=entity.get(
                         CONF_QUIETED_MAX_AGE_ACTION,
                         DEFAULT_QUIETED_MAX_AGE_ACTION,
+                    ),
+                    manual_on_enabled=entity.get(
+                        CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+                        DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
                     ),
                 )
                 self._control_lease_manager.register_entity(
@@ -1714,6 +1742,16 @@ class PresenceBasedLightingCoordinator:
             "suppression_kind": suppression_kind,
             "bulk_command_policy": self._override_manager.bulk_policy_for(entity_id),
             "external_override_policy": override.policy if override else None,
+            "manual_on": bool(override and override.is_manual_on),
+            "manual_on_owner_entry_id": (
+                override.owner_entry_id if override and override.is_manual_on else None
+            ),
+            "manual_on_boundary_phase": (
+                override.boundary_phase if override and override.is_manual_on else None
+            ),
+            "manual_on_created_at": (
+                override.created_at if override and override.is_manual_on else None
+            ),
             "external_override_source": override.source if override else None,
             "external_override_reason": override.reason if override else None,
             "external_override_at": override.created_at if override else None,
@@ -3007,6 +3045,10 @@ class PresenceBasedLightingCoordinator:
             "max_age_seconds": record.max_age_seconds,
             "max_age_action": record.max_age_action,
             "max_age_reached_at": record.max_age_reached_at,
+            "intent": record.intent,
+            "intent_version": record.intent_version,
+            "owner_entry_id": record.owner_entry_id,
+            "boundary_phase": record.boundary_phase,
         }
 
     def _schedule_paused_state_save(self) -> None:
@@ -3113,6 +3155,7 @@ class PresenceBasedLightingCoordinator:
                 if (
                     policy == EXTERNAL_POLICY_PAUSE
                     and source != SOURCE_ADMIN
+                    and meta.get("intent") != MANUAL_ON_INTENT
                     and entity_id not in explicit_paused_entities
                 ):
                     current_state = self._get_trusted_effective_controlled_state(
@@ -3142,6 +3185,10 @@ class PresenceBasedLightingCoordinator:
                     max_age_action=meta.get("max_age_action")
                     or self._quieted_max_age_action(entity_state),
                     max_age_reached_at=meta.get("max_age_reached_at"),
+                    intent=meta.get("intent"),
+                    intent_version=meta.get("intent_version"),
+                    owner_entry_id=meta.get("owner_entry_id"),
+                    boundary_phase=meta.get("boundary_phase"),
                     notify=False,
                 )
                 if record is None:
@@ -3265,6 +3312,33 @@ class PresenceBasedLightingCoordinator:
             for entity_id in expanded_entities:
                 entity_state = self._entity_states[entity_id]
                 config = entity_state["config"]
+                if self._command_context_registry.claim_manual_authority(
+                    self.entry.entry_id,
+                    entity_id,
+                    event.context,
+                ):
+                    continue
+                direct_manual_action = None
+                if (
+                    service in {"turn_on", "turn_off"}
+                    and self._manual_command_is_direct_user(
+                        entity_id,
+                        target,
+                        event.context,
+                    )
+                ):
+                    if service == "turn_off" or self._manual_on_request_is_positive(
+                        service_data
+                    ):
+                        direct_manual_action = service
+                if direct_manual_action and await self._accept_manual_control(
+                    entity_id,
+                    direct_manual_action,
+                    event.context,
+                    source=SOURCE_MANUAL_APP,
+                    light_data=service_data,
+                ):
+                    continue
                 manual_authority_action = (
                     self._control_lease_manager.claim_manual_authority_policy(
                         entity_id,
@@ -3680,6 +3754,9 @@ class PresenceBasedLightingCoordinator:
     ) -> None:
         """Apply manual-control pause/resume logic for an external state change."""
         cfg = entity_state["config"]
+        record = self._override_manager.get(entity_id)
+        if record is not None and record.is_manual_on:
+            return
 
         if await self._handle_external_change_matching_actuation_target(
             entity_id, entity_state, effective_new_state
@@ -4278,6 +4355,7 @@ class PresenceBasedLightingCoordinator:
             # --- Presence sensor turns ON ---
             if currently_on and entity_id in presence_sensors:
                 _LOGGER.debug("Presence detected via %s", entity_id)
+                self._manual_on_boundary_presence()
                 # A quieted hold is released only by a rising presence edge that
                 # follows real vacancy. Releasing here drops the entity back to
                 # IDLE so the normal transition below turns it on.
@@ -4372,6 +4450,19 @@ class PresenceBasedLightingCoordinator:
                     all_clear = self._can_clear_room()
                     if all_clear:
                         _LOGGER.debug("All clear conditions met")
+                        for eid, es in self._entity_states.items():
+                            record = self._override_manager.get(eid)
+                            if (
+                                record is not None
+                                and record.is_manual_on
+                                and record.owner_entry_id == self.entry.entry_id
+                                and record.boundary_phase
+                                in {
+                                    MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
+                                    MANUAL_ON_BOUNDARY_CLEAR_PENDING,
+                                }
+                            ):
+                                await self._schedule_manual_on_release(eid, es)
                         # Vacancy only *arms* a quieted hold. The entity stays
                         # dark until presence rises again.
                         self._arm_rearm_latches_for_vacancy()
@@ -4882,6 +4973,168 @@ class PresenceBasedLightingCoordinator:
         )
         return policy
 
+    def _manual_on_enabled(self, entity_state: dict) -> bool:
+        """Return whether this entity opted into the manual-on contract."""
+        config = entity_state["config"]
+        return bool(
+            config.get(
+                CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+                DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+            )
+            and (
+                self._presence_lock_enabled(entity_state)
+                or config.get(CONF_AUTOMATION_MODE) == AUTOMATION_MODE_PRESENCE_LOCK
+            )
+        )
+
+    def _manual_on_authority_allowed(self, entity_id: str) -> bool:
+        """Return whether this entry is the unique manual-on owner."""
+        owners = self._override_manager.manual_on_owners(entity_id)
+        if len(owners) != 1:
+            if owners:
+                _LOGGER.error(
+                    "Manual-on authority denied for %s: conflicting owners %s",
+                    entity_id,
+                    sorted(owners),
+                )
+            return False
+        return self.entry.entry_id in owners
+
+    def _manual_command_is_direct_user(
+        self, entity_id: str, target: Any, context: Context | None
+    ) -> bool:
+        """Require one exact root and an authenticated non-automation user."""
+        targets = as_entity_list(target)
+        return bool(
+            context is not None
+            and getattr(context, "user_id", None)
+            and not getattr(context, "parent_id", None)
+            and len(targets) == 1
+            and targets[0] == entity_id
+            and entity_id in self._entity_states
+        )
+
+    def _manual_on_request_is_positive(self, service_data: dict) -> bool:
+        """Accept bare or positive-brightness turn-on, not color-only changes."""
+        keys = set(service_data) - {"entity_id"}
+        if not keys:
+            return True
+        if any(
+            isinstance(service_data.get(key), (int, float))
+            and service_data[key] > 0
+            for key in ("brightness", "brightness_pct")
+        ):
+            return True
+        return False
+
+    async def _accept_manual_control(
+        self,
+        entity_id: str,
+        action: str,
+        context: Context | None,
+        *,
+        source: str,
+        light_data: dict | None = None,
+    ) -> bool:
+        """Persist an accepted manual command before its device dispatch."""
+        entity_state = self._entity_states.get(entity_id)
+        if entity_state is None or not self._manual_on_enabled(entity_state):
+            return False
+        if not self._manual_on_authority_allowed(entity_id):
+            return False
+        if not self._presence_switch_allows_entity(entity_state):
+            return False
+        pause = entity_state.get("pause") or {}
+        if (
+            entity_state["state"] == EntityAutomationState.PAUSED
+            and pause.get("source") in _EXPLICIT_PAUSE_SOURCES
+        ):
+            return False
+
+        current = self._override_manager.get(entity_id)
+        if action == "turn_on" and current and current.is_manual_on:
+            current_state = self._get_trusted_effective_controlled_state(entity_state)
+            if not self._manual_on_request_is_positive(light_data or {}):
+                return True
+            if current_state == entity_state["config"].get(
+                CONF_PRESENCE_DETECTED_STATE, DEFAULT_DETECTED_STATE
+            ):
+                return True
+
+        await self._control_lease_manager.async_break(
+            entity_id,
+            cause="manual_control",
+            direction="on" if action == "turn_on" else "off",
+            context_classification=source,
+        )
+        self._bump_entity_work_generation(entity_state, "manual control accepted")
+        self._cancel_entity_timer(entity_state)
+        self._cancel_entity_actuation(entity_state, "manual control accepted")
+
+        if action == "turn_on":
+            phase = (
+                MANUAL_ON_BOUNDARY_AWAIT_CLEAR
+                if self._is_any_occupied()
+                else MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY
+            )
+            self._override_manager.set_override(
+                entity_id,
+                EXTERNAL_POLICY_PAUSE,
+                source=source,
+                reason="accepted manual on",
+                intent=MANUAL_ON_INTENT,
+                intent_version=MANUAL_ON_INTENT_VERSION,
+                owner_entry_id=self.entry.entry_id,
+                boundary_phase=phase,
+                notify=False,
+            )
+            self._handle_external_override_changed(entity_id)
+        else:
+            rearm_latched = self._can_clear_room()
+            self._override_manager.set_override(
+                entity_id,
+                EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+                source=source,
+                reason="accepted manual off",
+                rearm_latched=rearm_latched,
+                rearm_latched_at=(
+                    dt_util.utcnow().isoformat() if rearm_latched else None
+                ),
+                rearm_armed_by="already clear at manual off" if rearm_latched else None,
+                notify=False,
+            )
+            self._handle_external_override_changed(entity_id)
+        self._schedule_paused_state_save()
+        return True
+
+    async def async_manual_control(
+        self,
+        entity_id: str,
+        action: str,
+        light_data: dict,
+        context: Context | None,
+    ) -> None:
+        """Handle the explicit wall-automation manual-control service."""
+        if entity_id not in self._entity_states:
+            raise ValueError("manual_control target is not a configured root")
+        if not await self._accept_manual_control(
+            entity_id,
+            action,
+            context,
+            source=SOURCE_MANUAL_CONTROL,
+            light_data=light_data,
+        ):
+            raise ValueError("manual_control was denied by ownership or precedence")
+        self._command_context_registry.register_manual_authority(
+            getattr(context, "id", None),
+            self.entry.entry_id,
+            entity_id,
+            action,
+        )
+        domain = entity_id.split(".", 1)[0]
+        data = {"entity_id": entity_id, **light_data}
+        await self.hass.services.async_call(domain, action, data, context=context)
+
     def _clear_external_override(self, entity_id: str, reason: str) -> None:
         """Clear the entity-scoped override shared by every controlling entry."""
         self._override_manager.clear(entity_id, reason)
@@ -4934,6 +5187,9 @@ class PresenceBasedLightingCoordinator:
             return
 
         record = self._override_manager.get(entity_id)
+        if record is not None and record.is_manual_on:
+            self._enter_manual_on(entity_id, entity_state, record)
+            return
         if (
             record is not None
             and entity_state["state"] == EntityAutomationState.PAUSED
@@ -4966,6 +5222,118 @@ class PresenceBasedLightingCoordinator:
                 reason=record.reason,
                 source="external_override",
             )
+
+    def _enter_manual_on(
+        self,
+        entity_id: str,
+        entity_state: dict,
+        record: Any,
+    ) -> None:
+        """Keep a durable manual-on hold dark-safe without aging it out."""
+        if entity_state["state"] != EntityAutomationState.PAUSED:
+            self._bump_entity_work_generation(entity_state, "manual-on hold")
+            self._cancel_entity_timer(entity_state)
+            self._cancel_entity_actuation(entity_state, "manual-on hold")
+            self._set_entity_intent(
+                entity_id,
+                entity_state,
+                DesiredState.NONE,
+                None,
+                None,
+                IntentReason.PAUSED,
+                False,
+            )
+            self._set_entity_state(
+                entity_id,
+                entity_state,
+                EntityAutomationState.PAUSED,
+                "manual-on hold",
+            )
+        entity_state["pause"] = self._build_pause_metadata(
+            entity_id,
+            entity_state,
+            record.reason,
+            "manual_on",
+        )
+        self._notify_switch(entity_id)
+        self._schedule_paused_state_save()
+
+    def _manual_on_boundary_presence(self) -> None:
+        """Record the required post-command occupied boundary for the owner."""
+        for entity_id, entity_state in self._entity_states.items():
+            record = self._override_manager.get(entity_id)
+            if (
+                record is None
+                or not record.is_manual_on
+                or record.owner_entry_id != self.entry.entry_id
+                or record.boundary_phase != MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY
+            ):
+                continue
+            self._override_manager.update_manual_on_phase(
+                entity_id,
+                MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
+                notify=False,
+            )
+            self._schedule_paused_state_save()
+
+    async def _schedule_manual_on_release(
+        self,
+        entity_id: str,
+        entity_state: dict,
+    ) -> None:
+        """Release MANUAL_ON once through the configured delay and recheck."""
+        old_task = entity_state.get("manual_on_timer")
+        if old_task is not None:
+            old_task.cancel()
+        record = self._override_manager.get(entity_id)
+        if (
+            record is None
+            or not record.is_manual_on
+            or record.owner_entry_id != self.entry.entry_id
+            or record.boundary_phase != MANUAL_ON_BOUNDARY_AWAIT_CLEAR
+        ):
+            return
+        if not self._can_clear_room():
+            return
+        self._override_manager.update_manual_on_phase(
+            entity_id,
+            MANUAL_ON_BOUNDARY_CLEAR_PENDING,
+            notify=False,
+        )
+        delay = entity_state["config"].get(CONF_ENTITY_OFF_DELAY)
+        if delay is None:
+            delay = self.entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY)
+        created_at = record.created_at
+
+        async def _release() -> None:
+            try:
+                await asyncio.sleep(float(delay))
+                current = self._override_manager.get(entity_id)
+                if (
+                    current is None
+                    or not current.is_manual_on
+                    or current.created_at != created_at
+                    or current.owner_entry_id != self.entry.entry_id
+                    or current.boundary_phase != MANUAL_ON_BOUNDARY_CLEAR_PENDING
+                    or not self._can_clear_room()
+                ):
+                    return
+                self._override_manager.clear(entity_id, "manual-on vacancy release")
+                if entity_state["state"] == EntityAutomationState.IDLE:
+                    return
+                await self._apply_service_intent(
+                    entity_id,
+                    entity_state,
+                    CONF_PRESENCE_CLEARED_SERVICE,
+                    IntentReason.CLEARING,
+                )
+            except asyncio.CancelledError:
+                raise
+            finally:
+                if entity_state.get("manual_on_timer") is asyncio.current_task():
+                    entity_state["manual_on_timer"] = None
+
+        entity_state["manual_on_timer"] = asyncio.create_task(_release())
 
     def _enter_quieted(
         self,
@@ -5522,6 +5890,10 @@ class PresenceBasedLightingCoordinator:
         if timer is not None:
             timer.cancel()
             entity_state["off_timer"] = None
+        manual_timer = entity_state.get("manual_on_timer")
+        if manual_timer is not None:
+            manual_timer.cancel()
+            entity_state["manual_on_timer"] = None
 
     def _entity_work_generation(self, entity_state: dict) -> int:
         """Return the current generation for delayed work tied to this entity."""

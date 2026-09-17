@@ -25,6 +25,7 @@ class CommandOrigin(Enum):
     SIBLING = "sibling"
     CONTROL_LEASE = "control_lease"
     EXTERNAL = "external"
+    MANUAL_AUTHORITY = "manual_authority"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class CommandContextRecord:
     registered_at: float
     lease_id: str | None = None
     lease_generation: int | None = None
+    manual_action: str | None = None
+    manual_entry_id: str | None = None
 
 
 class PresenceCommandContextRegistry:
@@ -107,6 +110,59 @@ class PresenceCommandContextRegistry:
         self._contexts[context_id] = records
         while len(self._contexts) > self._max_contexts:
             self._contexts.popitem(last=False)
+
+    def register_manual_authority(
+        self,
+        context_id: str | None,
+        entry_id: str,
+        entity_id: str,
+        action: str,
+    ) -> None:
+        """Register one command-bound wall-service authority."""
+        if not context_id:
+            return
+        self._purge_expired()
+        records = self._contexts.pop(context_id, None) or {}
+        records[entity_id] = CommandContextRecord(
+            entry_id=entry_id,
+            entity_id=entity_id,
+            target_state="on" if action == "turn_on" else "off",
+            registered_at=monotonic(),
+            manual_action=action,
+            manual_entry_id=entry_id,
+        )
+        self._contexts[context_id] = records
+        while len(self._contexts) > self._max_contexts:
+            self._contexts.popitem(last=False)
+
+    def claim_manual_authority(
+        self,
+        entry_id: str,
+        entity_id: str,
+        context: Context | None,
+    ) -> str | None:
+        """Consume a one-use authority bound to one service dispatch."""
+        if context is None:
+            return None
+        self._purge_expired()
+        for context_id in (
+            getattr(context, "id", None),
+            getattr(context, "parent_id", None),
+        ):
+            if not context_id:
+                continue
+            record = self._contexts.get(context_id, {}).get(entity_id)
+            if (
+                record is None
+                or record.manual_action is None
+                or record.manual_entry_id != entry_id
+            ):
+                continue
+            self._contexts[context_id].pop(entity_id, None)
+            if not self._contexts[context_id]:
+                self._contexts.pop(context_id, None)
+            return record.manual_action
+        return None
 
     def unregister_entry(self, entry_id: str) -> None:
         """Remove contexts owned by an unloaded config entry."""

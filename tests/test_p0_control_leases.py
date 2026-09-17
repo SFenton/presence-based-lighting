@@ -346,7 +346,7 @@ async def test_v12_migration_adds_default_off_safety_settings(
     assert await async_migrate_entry(mock_hass, mock_config_entry)
 
     config = mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0]
-    assert mock_config_entry.version == 13
+    assert mock_config_entry.version == 14
     assert config[CONF_CONTROL_LEASE_MODE] == "off"
     assert config[CONF_CONTROL_LEASE_BLOCKERS] == []
     assert config[CONF_CONTROL_LEASE_CORRECT_LATE_ON] is False

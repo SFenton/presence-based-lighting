@@ -62,6 +62,7 @@
           "use_interceptor": "Use Interceptor for Presence Lock",
           "normalize_external_plain_on": "Normalize External Plain Turn-On",
           "presence_lock_respects_manual_override": "Presence Lock Respects Manual Override",
+          "presence_lock_manual_on_override_enabled": "Enable Presence-Lock Manual On Hold",
           "manual_disable_states": "States That Pause Automation",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
           "rlc_tracking_entity": "Real Last Changed Sensor (optional)"
@@ -84,6 +85,7 @@
           "use_interceptor": "When enabled and hass-interceptor is installed, this entity proactively blocks conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
           "normalize_external_plain_on": "Add this light's configured brightness and transition to external turn_on calls that do not specify brightness or a profile.",
           "presence_lock_respects_manual_override": "When enabled, Presence Lock allows configured manual-off states and disabled presence switches to stand down instead of forcing the entity back on.",
+          "presence_lock_manual_on_override_enabled": "Opt in to durable manual On holds for exact root commands. Existing entries remain disabled unless explicitly enabled.",
           "manual_disable_states": "Manual changes to these states pause automation. In Presence Lock mode, these states are treated as manual overrides when 'Presence Lock Respects Manual Override' is enabled. Manual changes to any other state will resume automation. Leave empty to disable manual pause behavior.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "rlc_tracking_entity": "Select a Real Last Changed sensor that tracks this entity's state. This helps ignore spurious state changes from reboots or unavailability. Recommended sensors are marked with ⭐."
@@ -204,6 +206,7 @@
           "use_interceptor": "Use Interceptor for Presence Lock",
           "normalize_external_plain_on": "Normalize External Plain Turn-On",
           "presence_lock_respects_manual_override": "Presence Lock Respects Manual Override",
+          "presence_lock_manual_on_override_enabled": "Enable Presence-Lock Manual On Hold",
           "manual_disable_states": "States That Pause Automation",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
           "rlc_tracking_entity": "Real Last Changed Sensor (optional)"
@@ -226,6 +229,7 @@
           "use_interceptor": "When enabled and hass-interceptor is installed, this entity proactively blocks conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
           "normalize_external_plain_on": "Add this light's configured brightness and transition to external turn_on calls that do not specify brightness or a profile.",
           "presence_lock_respects_manual_override": "When enabled, Presence Lock allows configured manual-off states and disabled presence switches to stand down instead of forcing the entity back on.",
+          "presence_lock_manual_on_override_enabled": "Opt in to durable manual On holds for exact root commands. Existing entries remain disabled unless explicitly enabled.",
           "manual_disable_states": "Manual changes to these states pause automation. In Presence Lock mode, these states are treated as manual overrides when 'Presence Lock Respects Manual Override' is enabled. Manual changes to any other state will resume automation. Leave empty to disable manual pause behavior.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "rlc_tracking_entity": "Select a Real Last Changed sensor that tracks this entity's state. This helps ignore spurious state changes from reboots or unavailability. Recommended sensors are marked with ⭐."

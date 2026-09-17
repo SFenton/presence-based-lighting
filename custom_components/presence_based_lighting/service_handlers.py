@@ -32,6 +32,7 @@ SERVICE_SET_AUTOMATION_STATE = "set_automation_state"
 SERVICE_ACQUIRE_CONTROL = "acquire_control"
 SERVICE_DISPATCH_CONTROL = "dispatch_control"
 SERVICE_RELEASE_CONTROL = "release_control"
+SERVICE_MANUAL_CONTROL = "manual_control"
 
 SERVICE_SCHEMA = vol.Schema(
     {
@@ -121,6 +122,33 @@ DISPATCH_CONTROL_SCHEMA = SERVICE_SCHEMA.extend(
             vol.Length(min=1, max=CONTROL_LEASE_MAX_TARGET_ENTITY_IDS),
         ),
         vol.Required("service_data"): DISPATCH_SERVICE_DATA_SCHEMA,
+    }
+)
+MANUAL_CONTROL_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Optional("brightness"): vol.All(vol.Coerce(int), vol.Range(min=1, max=255)),
+        vol.Optional("brightness_pct"): vol.All(
+            vol.Coerce(float), vol.Range(min=1, max=100)
+        ),
+        vol.Optional("color_temp"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100000)),
+        vol.Optional("color_temp_kelvin"): vol.All(
+            vol.Coerce(int), vol.Range(min=1000, max=10000)
+        ),
+        vol.Optional("effect"): vol.All(str, vol.Length(min=1, max=64)),
+        vol.Optional("flash"): vol.In({"short", "long"}),
+        vol.Optional("hs_color"): vol.All([vol.Coerce(float)], vol.Length(min=2, max=2)),
+        vol.Optional("rgb_color"): vol.All([vol.Coerce(int)], vol.Length(min=3, max=3)),
+        vol.Optional("transition"): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
+        vol.Optional("xy_color"): vol.All([vol.Coerce(float)], vol.Length(min=2, max=2)),
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+MANUAL_CONTROL_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): _OPAQUE_ID,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("action"): vol.In({"turn_on", "turn_off"}),
+        vol.Optional("light_data", default={}): MANUAL_CONTROL_DATA_SCHEMA,
     }
 )
 
@@ -367,6 +395,24 @@ async def async_register_services(hass: HomeAssistant, coordinator_type: type) -
             service_data=call.data["service_data"],
         )
 
+    async def handle_manual_control(call: Any) -> None:
+        """Accept and dispatch one wall-automation manual command."""
+        entry_id = call.data["config_entry_id"]
+        entity_id = call.data["entity_id"]
+        coordinator = hass.data.get(DOMAIN, {}).get(entry_id)
+        if not isinstance(coordinator, coordinator_type):
+            raise ValueError("Unknown Presence Based Lighting config entry")
+        if entity_id not in coordinator._entity_states:
+            raise ValueError(
+                "manual_control requires exactly one configured controlled root"
+            )
+        await coordinator.async_manual_control(
+            entity_id,
+            call.data["action"],
+            call.data.get("light_data") or {},
+            call.context,
+        )
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_RESUME_AUTOMATION,
@@ -409,8 +455,14 @@ async def async_register_services(hass: HomeAssistant, coordinator_type: type) -
         schema=DISPATCH_CONTROL_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MANUAL_CONTROL,
+        handle_manual_control,
+        schema=MANUAL_CONTROL_SCHEMA,
+    )
     _LOGGER.debug(
-        "Registered %s, %s, %s, %s, %s, %s and %s services",
+        "Registered %s, %s, %s, %s, %s, %s, %s and %s services",
         SERVICE_RESUME_AUTOMATION,
         SERVICE_PAUSE_AUTOMATION,
         SERVICE_RESUME_ALL_AUTOMATION,
@@ -418,4 +470,5 @@ async def async_register_services(hass: HomeAssistant, coordinator_type: type) -
         SERVICE_ACQUIRE_CONTROL,
         SERVICE_RELEASE_CONTROL,
         SERVICE_DISPATCH_CONTROL,
+        SERVICE_MANUAL_CONTROL,
     )

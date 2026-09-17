@@ -3,7 +3,7 @@
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"
-VERSION = "2.5.1"
+VERSION = "2.6.0"
 
 ISSUE_URL = "https://github.com/sfenton/presence_based_lighting/issues"
 
@@ -68,6 +68,9 @@ CONF_QUIETED_MAX_AGE = (
     "quieted_max_age"  # Seconds before a quieted hold is considered stale
 )
 CONF_QUIETED_MAX_AGE_ACTION = "quieted_max_age_action"  # diagnostic | pause | arm
+CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED = (
+    "presence_lock_manual_on_override_enabled"
+)
 
 # Temporary external control leases.
 #
@@ -131,6 +134,8 @@ SOURCE_UNKNOWN = "unknown"
 SOURCE_HOMEKIT_SINGLE = "homekit_single"
 SOURCE_HOMEKIT_BATCH = "homekit_batch"
 SOURCE_ADMIN = "admin"
+SOURCE_MANUAL_CONTROL = "manual_control"
+SOURCE_MANUAL_APP = "manual_app"
 
 # Administrative state-control values
 AUTOMATION_CONTROL_STATE_ON = "on"
@@ -213,6 +218,27 @@ DEFAULT_UNKNOWN_SOURCE_POLICY = EXTERNAL_POLICY_PAUSE
 DEFAULT_BULK_COMMAND_POLICY = EXTERNAL_POLICY_REARM_AFTER_CLEAR
 DEFAULT_QUIETED_MAX_AGE = 14400  # 4 hours before stale-hold diagnostics
 DEFAULT_QUIETED_MAX_AGE_ACTION = QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
+DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED = False
+MANUAL_ON_INTENT = "manual_on"
+MANUAL_ON_INTENT_VERSION = 1
+MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY = "await_occupancy"
+MANUAL_ON_BOUNDARY_AWAIT_CLEAR = "await_clear"
+MANUAL_ON_BOUNDARY_CLEAR_PENDING = "clear_pending"
+MANUAL_ON_LIGHT_DATA_KEYS = {
+    "brightness",
+    "brightness_pct",
+    "color_temp",
+    "color_temp_kelvin",
+    "effect",
+    "flash",
+    "hs_color",
+    "rgb_color",
+    "rgbw_color",
+    "rgbww_color",
+    "transition",
+    "white",
+    "xy_color",
+}
 DEFAULT_CONTROL_LEASE_MODE = CONTROL_LEASE_MODE_OFF
 DEFAULT_CONTROL_LEASE_BLOCKERS: list[str] = []
 DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON = False

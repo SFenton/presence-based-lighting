@@ -64,6 +64,7 @@ from .const import (
     CONF_PRESENCE_DETECTED_TRANSITION,
     CONF_PRESENCE_DETECTED_STATE,
     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+    CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
     CONF_PRESENCE_SENSORS,
     CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
@@ -94,6 +95,7 @@ from .const import (
     DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
     DEFAULT_OFF_DELAY,
     DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+    DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
     DEFAULT_RESPECTS_PRESENCE_ALLOWED,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
@@ -238,6 +240,7 @@ _CARRY_FORWARD_ENTITY_SETTINGS = {
     CONF_CONTROL_LEASE_MODE: DEFAULT_CONTROL_LEASE_MODE,
     CONF_CONTROL_LEASE_BLOCKERS: list(DEFAULT_CONTROL_LEASE_BLOCKERS),
     CONF_CONTROL_LEASE_CORRECT_LATE_ON: DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON,
+    CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED: DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
 }
 
 
@@ -545,7 +548,7 @@ class PresenceBasedLightingFlowHandler(
 ):
     """Config flow for presence_based_lighting."""
 
-    VERSION = 13
+    VERSION = 14
 
     def __init__(self):
         """Initialize."""
@@ -750,6 +753,10 @@ class PresenceBasedLightingFlowHandler(
             DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
         )
         defaults.setdefault(
+            CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+            DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+        )
+        defaults.setdefault(
             CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES)
         )
         defaults.setdefault(CONF_RLC_TRACKING_ENTITY, None)
@@ -858,6 +865,10 @@ class PresenceBasedLightingFlowHandler(
                     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
                     DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
                 )
+                manual_on_enabled = user_input.get(
+                    CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+                    defaults[CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED],
+                )
 
                 # Get manual_disable_states - Automatic pauses on these states; Presence Lock yields to them.
                 manual_disable_states = user_input.get(
@@ -884,6 +895,7 @@ class PresenceBasedLightingFlowHandler(
                     CONF_AUTOMATION_MODE: automation_mode,
                     CONF_USE_INTERCEPTOR: use_interceptor,
                     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: presence_lock_respects_manual_override,
+                    CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED: manual_on_enabled,
                     CONF_MANUAL_DISABLE_STATES: manual_disable_states,
                     CONF_BULK_COMMAND_POLICY: user_input.get(
                         CONF_BULK_COMMAND_POLICY,
@@ -1110,6 +1122,10 @@ class PresenceBasedLightingFlowHandler(
             vol.Optional(
                 CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
                 default=defaults[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE],
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+                default=defaults[CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED],
             ): selector.BooleanSelector(),
             delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
         }
@@ -2031,6 +2047,10 @@ class PresenceBasedLightingOptionsFlowHandler(
                 CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
                 DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
             ),
+            CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED: self._current_entity_config.get(
+                CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+                DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+            ),
             CONF_MANUAL_DISABLE_STATES: self._current_entity_config.get(
                 CONF_MANUAL_DISABLE_STATES, list(DEFAULT_MANUAL_DISABLE_STATES)
             ),
@@ -2150,6 +2170,10 @@ class PresenceBasedLightingOptionsFlowHandler(
                     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
                     DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
                 )
+                manual_on_enabled = user_input.get(
+                    CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+                    defaults[CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED],
+                )
 
                 # Get manual_disable_states - Automatic pauses on these states; Presence Lock yields to them.
                 manual_disable_states = user_input.get(
@@ -2176,6 +2200,7 @@ class PresenceBasedLightingOptionsFlowHandler(
                     CONF_AUTOMATION_MODE: automation_mode,
                     CONF_USE_INTERCEPTOR: use_interceptor,
                     CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE: presence_lock_respects_manual_override,
+                    CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED: manual_on_enabled,
                     CONF_MANUAL_DISABLE_STATES: manual_disable_states,
                     CONF_BULK_COMMAND_POLICY: user_input.get(
                         CONF_BULK_COMMAND_POLICY,
@@ -2402,6 +2427,10 @@ class PresenceBasedLightingOptionsFlowHandler(
             vol.Optional(
                 CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
                 default=defaults[CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE],
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
+                default=defaults[CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED],
             ): selector.BooleanSelector(),
             delay_field: vol.All(vol.Coerce(int), vol.Range(min=0)),
         }

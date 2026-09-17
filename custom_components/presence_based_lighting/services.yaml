@@ -85,6 +85,41 @@ resume_all_automation:
     Presence Based Lighting config entries, then reconcile each controlled
     entity. Escape hatch for when many rooms are suppressed at once.
 
+manual_control:
+  name: Manual Control
+  description: >
+    Apply an explicitly attributed turn-on or turn-off to exactly one opted-in
+    Presence Based Lighting controlled root. Intended for wall-switch
+    automations; the integration binds the command context before dispatch.
+  fields:
+    config_entry_id:
+      name: Config Entry ID
+      description: Exact Presence Based Lighting config entry that owns the root.
+      required: true
+      selector:
+        text: {}
+    entity_id:
+      name: Controlled Root
+      description: Exactly one configured controlled root entity.
+      required: true
+      selector:
+        entity: {}
+    action:
+      name: Action
+      description: The light action to dispatch.
+      required: true
+      selector:
+        select:
+          options:
+            - turn_on
+            - turn_off
+    light_data:
+      name: Light Data
+      description: Bounded light service data for the turn-on or turn-off.
+      required: false
+      selector:
+        object: {}
+
 acquire_control:
   name: Acquire Control Lease
   description: >

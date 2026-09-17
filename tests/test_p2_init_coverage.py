@@ -196,7 +196,7 @@ class TestAsyncSetup:
         hass.services = MagicMock()
         result = await async_setup(hass, {})
         assert result is True
-        assert hass.services.async_register.call_count == 7
+        assert hass.services.async_register.call_count == 8
 
     @pytest.mark.asyncio
     async def test_resume_automation_service(self):
@@ -367,8 +367,8 @@ class TestMigrations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_migrate_v2_all_the_way_to_v13(self):
-        """Full chain migration from v2 through v13."""
+    async def test_migrate_v2_all_the_way_to_v14(self):
+        """Full chain migration from v2 through v14."""
         hass = MagicMock()
         entry = _make_entry(version=2)
         entry.data[CONF_CONTROLLED_ENTITIES][0][
@@ -392,7 +392,7 @@ class TestMigrations:
 
         result = await async_migrate_entry(hass, entry)
         assert result is True
-        assert versions == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        assert versions == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert CONF_VACANCY_AUTHORITY_SENSORS not in entry.data
         assert entry.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] is False
         assert (
@@ -428,7 +428,7 @@ class TestMigrations:
         result = await async_migrate_entry(hass, entry)
 
         assert result is True
-        assert entry.version == 13
+        assert entry.version == 14
         assert entry.data[CONF_CLEARING_SENSORS] == [
             "sensor.office_office_occupancy_status_last_changed"
         ]

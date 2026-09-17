@@ -145,6 +145,8 @@ Each Presence Allowed switch includes:
 - `quieted_max_age_action` / `quieted_max_age_reached_at`: Configured and applied stale-hold handling
 - `unknown_source_count`: How many external commands could not be attributed to a known source
 - `homekit_batch_mode`: The active bulk-detection kill-switch mode
+- `manual_on` / `manual_on_owner_entry_id` / `manual_on_boundary_phase`: Durable
+  opt-in Presence Lock manual-On state and its owner/boundary diagnostics
 - `control_lease_mode` / `control_lease_state`: Default-off rollout mode and current lease lifecycle state
 - `control_lease_id` / `control_lease_controller_id`: Stable local short hashes for the lease and room controller
 - `control_lease_occurrence_ids` / `control_lease_request_id`: Bounded local short correlation hashes
@@ -257,6 +259,24 @@ Admin-created pauses remain in place until an explicit admin resume. Quieted
 - `paused`: apply an entity-scoped indefinite pause
 - `quieted`: apply an entity-scoped rearm-after-clear hold
 - `active`: force-clear local and entity-scoped suppression, then reconcile
+
+### Presence Lock manual On holds
+
+Presence Lock entities may opt in to
+`presence_lock_manual_on_override_enabled`. It is disabled by default and is
+not enabled by config-entry migration. An exact root `turn_on` from an
+authenticated app user can then establish an entity-wide durable manual-On
+hold. The hold is represented as a compatible `pause` override with a versioned
+`intent=manual_on` record and releases only after a later occupied boundary,
+settled vacancy, and the configured off-delay. Unknown or unavailable sensors
+never prove vacancy. Sibling profiles suppress actuation but cannot advance or
+release the owner-bound hold.
+
+Wall automations should use the schema-validated
+`presence_based_lighting.manual_control` service with exactly one
+`config_entry_id`, configured root `entity_id`, `action` (`turn_on` or
+`turn_off`), and bounded `light_data`. The integration binds one-use provenance
+before dispatch; caller-supplied trust tokens are not accepted.
 
 ## Temporary Control Leases
 

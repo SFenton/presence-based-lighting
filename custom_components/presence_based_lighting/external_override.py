@@ -33,6 +33,7 @@ from .const import DOMAIN
 from .const import EXTERNAL_POLICY_IGNORE
 from .const import EXTERNAL_POLICY_PAUSE
 from .const import EXTERNAL_POLICY_REARM_AFTER_CLEAR
+from .const import MANUAL_ON_INTENT
 from .const import QUIETED_MAX_AGE_ACTION_ARM
 from .const import QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
 from .const import QUIETED_MAX_AGE_ACTION_PAUSE
@@ -77,6 +78,10 @@ class ExternalOverrideRecord:
     max_age_seconds: float | None = None
     max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION
     max_age_reached_at: str | None = None
+    intent: str | None = None
+    intent_version: int | None = None
+    owner_entry_id: str | None = None
+    boundary_phase: str | None = None
 
     @property
     def created_at(self) -> str:
@@ -92,6 +97,11 @@ class ExternalOverrideRecord:
     def is_paused(self) -> bool:
         """Return whether this override is an indefinite pause."""
         return self.policy == EXTERNAL_POLICY_PAUSE
+
+    @property
+    def is_manual_on(self) -> bool:
+        """Return whether this pause is the durable manual-on intent."""
+        return self.policy == EXTERNAL_POLICY_PAUSE and self.intent == MANUAL_ON_INTENT
 
     def expires_at(self) -> str | None:
         """Return the ISO timestamp at which this hold becomes stale."""
@@ -130,6 +140,7 @@ class ExternalOverrideManager:
         bulk_policy: str = DEFAULT_BULK_COMMAND_POLICY,
         max_age_seconds: float | None = DEFAULT_QUIETED_MAX_AGE,
         max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
+        manual_on_enabled: bool = False,
     ) -> None:
         """Register that a config entry controls this entity."""
         self._entities.setdefault(entity_id, set()).add(entry_id)
@@ -137,6 +148,7 @@ class ExternalOverrideManager:
             "bulk_policy": bulk_policy,
             "max_age_seconds": max_age_seconds,
             "max_age_action": max_age_action,
+            "manual_on_enabled": bool(manual_on_enabled),
         }
         if listener is not None:
             self._listeners.setdefault(entity_id, {})[entry_id] = listener
@@ -159,6 +171,21 @@ class ExternalOverrideManager:
     def entries_for(self, entity_id: str) -> set[str]:
         """Return every config entry controlling this entity."""
         return set(self._entities.get(entity_id, set()))
+
+    def manual_on_owners(self, entity_id: str) -> set[str]:
+        """Return opted-in entries controlling this entity."""
+        return {
+            entry_id
+            for entry_id, config in self._entity_configs.get(entity_id, {}).items()
+            if config.get("manual_on_enabled")
+        }
+
+    def manual_on_owner(self, entity_id: str, entry_id: str) -> str | None:
+        """Return the sole owner, or ``None`` when ownership is ambiguous."""
+        owners = self.manual_on_owners(entity_id)
+        if len(owners) != 1 or entry_id not in owners:
+            return None
+        return entry_id
 
     def bulk_policy_for(self, entity_id: str) -> str:
         """Return the strictest configured bulk-command policy for an entity."""
@@ -226,6 +253,10 @@ class ExternalOverrideManager:
         max_age_seconds: float | None = None,
         max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
         max_age_reached_at: str | None = None,
+        intent: str | None = None,
+        intent_version: int | None = None,
+        owner_entry_id: str | None = None,
+        boundary_phase: str | None = None,
         notify: bool = True,
     ) -> ExternalOverrideRecord | None:
         """Record an entity-scoped override and notify every controlling entry."""
@@ -254,6 +285,10 @@ class ExternalOverrideManager:
             max_age_seconds=max_age_seconds,
             max_age_action=max_age_action,
             max_age_reached_at=max_age_reached_at,
+            intent=intent,
+            intent_version=intent_version,
+            owner_entry_id=owner_entry_id,
+            boundary_phase=boundary_phase,
         )
         self._overrides[entity_id] = record
         self.note_source(entity_id, source)
@@ -297,6 +332,10 @@ class ExternalOverrideManager:
         max_age_seconds: float | None = None,
         max_age_action: str = DEFAULT_QUIETED_MAX_AGE_ACTION,
         max_age_reached_at: str | None = None,
+        intent: str | None = None,
+        intent_version: int | None = None,
+        owner_entry_id: str | None = None,
+        boundary_phase: str | None = None,
         notify: bool = True,
     ) -> ExternalOverrideRecord | None:
         """Re-adopt a persisted override without resetting its age.
@@ -344,6 +383,10 @@ class ExternalOverrideManager:
             max_age_seconds=max_age_seconds,
             max_age_action=max_age_action,
             max_age_reached_at=max_age_reached_at,
+            intent=intent,
+            intent_version=intent_version,
+            owner_entry_id=owner_entry_id,
+            boundary_phase=boundary_phase,
         )
         self._overrides[entity_id] = record
         _LOGGER.debug(
@@ -370,6 +413,22 @@ class ExternalOverrideManager:
         )
         _LOGGER.debug("Rearm latch armed for %s (%s)", entity_id, reason)
         self._notify(entity_id)
+        return True
+
+    def update_manual_on_phase(
+        self,
+        entity_id: str,
+        phase: str,
+        *,
+        notify: bool = True,
+    ) -> bool:
+        """Advance a manual-on boundary without restarting its epoch."""
+        record = self._overrides.get(entity_id)
+        if record is None or not record.is_manual_on:
+            return False
+        self._overrides[entity_id] = replace(record, boundary_phase=phase)
+        if notify:
+            self._notify(entity_id)
         return True
 
     def upsert_confirmed_batch(
