@@ -1352,6 +1352,7 @@ class PresenceBasedLightingCoordinator:
                 )
 
             await self._load_paused_state()
+            await self._restore_manual_on_release_timers()
 
             # Restore persisted suppression before an overdue reset evaluates it.
             await self._check_auto_reenable_startup()
@@ -3049,6 +3050,7 @@ class PresenceBasedLightingCoordinator:
             "intent_version": record.intent_version,
             "owner_entry_id": record.owner_entry_id,
             "boundary_phase": record.boundary_phase,
+            "boundary_started_at": record.boundary_started_at,
         }
 
     def _schedule_paused_state_save(self) -> None:
@@ -3189,6 +3191,7 @@ class PresenceBasedLightingCoordinator:
                     intent_version=meta.get("intent_version"),
                     owner_entry_id=meta.get("owner_entry_id"),
                     boundary_phase=meta.get("boundary_phase"),
+                    boundary_started_at=meta.get("boundary_started_at"),
                     notify=False,
                 )
                 if record is None:
@@ -3312,10 +3315,23 @@ class PresenceBasedLightingCoordinator:
             for entity_id in expanded_entities:
                 entity_state = self._entity_states[entity_id]
                 config = entity_state["config"]
-                if self._command_context_registry.claim_manual_authority(
-                    self.entry.entry_id,
-                    entity_id,
-                    event.context,
+                manual_authority_action = (
+                    self._command_context_registry.claim_manual_authority(
+                        self.entry.entry_id,
+                        entity_id,
+                        event.context,
+                        expected_action=service,
+                    )
+                )
+                if manual_authority_action:
+                    continue
+                if (
+                    self._command_context_registry.manual_authority_action(
+                        self.entry.entry_id,
+                        entity_id,
+                        event.context,
+                    )
+                    is not None
                 ):
                     continue
                 direct_manual_action = None
@@ -4356,6 +4372,21 @@ class PresenceBasedLightingCoordinator:
             if currently_on and entity_id in presence_sensors:
                 _LOGGER.debug("Presence detected via %s", entity_id)
                 self._manual_on_boundary_presence()
+                for eid, es in self._entity_states.items():
+                    record = self._override_manager.get(eid)
+                    if (
+                        record is not None
+                        and record.is_manual_on
+                        and record.owner_entry_id == self.entry.entry_id
+                        and record.boundary_phase == MANUAL_ON_BOUNDARY_CLEAR_PENDING
+                    ):
+                        self._cancel_entity_timer(es)
+                        self._override_manager.update_manual_on_phase(
+                            eid,
+                            MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
+                            notify=False,
+                        )
+                        self._schedule_paused_state_save()
                 # A quieted hold is released only by a rising presence edge that
                 # follows real vacancy. Releasing here drops the entity back to
                 # IDLE so the normal transition below turns it on.
@@ -4407,6 +4438,20 @@ class PresenceBasedLightingCoordinator:
             elif currently_on and entity_id in clearing_sensors:
                 _LOGGER.debug("Clearing sensor occupied via %s", entity_id)
                 for eid, es in self._entity_states.items():
+                    record = self._override_manager.get(eid)
+                    if (
+                        record is not None
+                        and record.is_manual_on
+                        and record.owner_entry_id == self.entry.entry_id
+                        and record.boundary_phase == MANUAL_ON_BOUNDARY_CLEAR_PENDING
+                    ):
+                        self._cancel_entity_timer(es)
+                        self._override_manager.update_manual_on_phase(
+                            eid,
+                            MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
+                            notify=False,
+                        )
+                        self._schedule_paused_state_save()
                     if not self._presence_switch_allows_entity(
                         es
                     ) or self._control_lease_active(eid):
@@ -5086,6 +5131,7 @@ class PresenceBasedLightingCoordinator:
                 intent_version=MANUAL_ON_INTENT_VERSION,
                 owner_entry_id=self.entry.entry_id,
                 boundary_phase=phase,
+                boundary_started_at=None,
                 notify=False,
             )
             self._handle_external_override_changed(entity_id)
@@ -5290,24 +5336,36 @@ class PresenceBasedLightingCoordinator:
             record is None
             or not record.is_manual_on
             or record.owner_entry_id != self.entry.entry_id
-            or record.boundary_phase != MANUAL_ON_BOUNDARY_AWAIT_CLEAR
+            or record.boundary_phase
+            not in {
+                MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
+                MANUAL_ON_BOUNDARY_CLEAR_PENDING,
+            }
         ):
             return
         if not self._can_clear_room():
             return
-        self._override_manager.update_manual_on_phase(
-            entity_id,
-            MANUAL_ON_BOUNDARY_CLEAR_PENDING,
-            notify=False,
-        )
+        if record.boundary_phase == MANUAL_ON_BOUNDARY_AWAIT_CLEAR:
+            self._override_manager.update_manual_on_phase(
+                entity_id,
+                MANUAL_ON_BOUNDARY_CLEAR_PENDING,
+                notify=False,
+            )
+            self._schedule_paused_state_save()
         delay = entity_state["config"].get(CONF_ENTITY_OFF_DELAY)
         if delay is None:
             delay = self.entry.data.get(CONF_OFF_DELAY, DEFAULT_OFF_DELAY)
         created_at = record.created_at
+        boundary_started_at = record.boundary_started_at
+        generation = self._entity_work_generation(entity_state)
+        remaining_delay = self._manual_on_release_delay(
+            boundary_started_at,
+            float(delay),
+        )
 
         async def _release() -> None:
             try:
-                await asyncio.sleep(float(delay))
+                await asyncio.sleep(remaining_delay)
                 current = self._override_manager.get(entity_id)
                 if (
                     current is None
@@ -5315,12 +5373,32 @@ class PresenceBasedLightingCoordinator:
                     or current.created_at != created_at
                     or current.owner_entry_id != self.entry.entry_id
                     or current.boundary_phase != MANUAL_ON_BOUNDARY_CLEAR_PENDING
+                    or not self._entity_work_generation_matches(
+                        entity_id,
+                        entity_state,
+                        generation,
+                        "manual-on release",
+                    )
                     or not self._can_clear_room()
                 ):
                     return
-                self._override_manager.clear(entity_id, "manual-on vacancy release")
-                if entity_state["state"] == EntityAutomationState.IDLE:
-                    return
+                self._override_manager.clear(
+                    entity_id,
+                    "manual-on vacancy release",
+                    notify=False,
+                )
+                self._cancel_entity_actuation(
+                    entity_state,
+                    "manual-on vacancy release",
+                )
+                entity_state["pause"] = None
+                self._set_entity_state(
+                    entity_id,
+                    entity_state,
+                    EntityAutomationState.IDLE,
+                    "manual-on vacancy release",
+                )
+                self._override_manager.notify(entity_id)
                 await self._apply_service_intent(
                     entity_id,
                     entity_state,
@@ -5334,6 +5412,53 @@ class PresenceBasedLightingCoordinator:
                     entity_state["manual_on_timer"] = None
 
         entity_state["manual_on_timer"] = asyncio.create_task(_release())
+
+    @staticmethod
+    def _manual_on_release_delay(
+        boundary_started_at: str | None,
+        configured_delay: float,
+    ) -> float:
+        """Return the remaining delay after restart, clamped to safe values."""
+        if not boundary_started_at:
+            return max(0.0, configured_delay)
+        try:
+            started = datetime.fromisoformat(boundary_started_at)
+        except (TypeError, ValueError):
+            started = None
+        if started is None:
+            return max(0.0, configured_delay)
+        elapsed = max(
+            0.0,
+            (dt_util.utcnow() - dt_util.as_utc(started)).total_seconds(),
+        )
+        return max(0.0, configured_delay - elapsed)
+
+    async def _restore_manual_on_release_timers(self) -> None:
+        """Resume only owner-held manual-on releases after persisted state loads."""
+        for entity_id, entity_state in self._entity_states.items():
+            record = self._override_manager.get(entity_id)
+            if (
+                record is None
+                or not record.is_manual_on
+                or record.owner_entry_id != self.entry.entry_id
+            ):
+                continue
+            if record.boundary_phase == MANUAL_ON_BOUNDARY_AWAIT_CLEAR:
+                if not self._can_clear_room():
+                    continue
+                self._override_manager.update_manual_on_phase(
+                    entity_id,
+                    MANUAL_ON_BOUNDARY_CLEAR_PENDING,
+                    notify=False,
+                )
+                record = self._override_manager.get(entity_id)
+            if (
+                record is not None
+                and record.is_manual_on
+                and record.boundary_phase == MANUAL_ON_BOUNDARY_CLEAR_PENDING
+            ):
+                await self._schedule_manual_on_release(entity_id, entity_state)
+                self._schedule_paused_state_save()
 
     def _enter_quieted(
         self,

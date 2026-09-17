@@ -140,8 +140,10 @@ class PresenceCommandContextRegistry:
         entry_id: str,
         entity_id: str,
         context: Context | None,
+        *,
+        expected_action: str,
     ) -> str | None:
-        """Consume a one-use authority bound to one service dispatch."""
+        """Consume a one-use authority bound to the matching service dispatch."""
         if context is None:
             return None
         self._purge_expired()
@@ -156,12 +158,38 @@ class PresenceCommandContextRegistry:
                 record is None
                 or record.manual_action is None
                 or record.manual_entry_id != entry_id
+                or record.manual_action != expected_action
             ):
                 continue
             self._contexts[context_id].pop(entity_id, None)
             if not self._contexts[context_id]:
                 self._contexts.pop(context_id, None)
             return record.manual_action
+        return None
+
+    def manual_authority_action(
+        self,
+        entry_id: str,
+        entity_id: str,
+        context: Context | None,
+    ) -> str | None:
+        """Inspect a bound manual action without consuming its one-use claim."""
+        if context is None:
+            return None
+        self._purge_expired()
+        for context_id in (
+            getattr(context, "id", None),
+            getattr(context, "parent_id", None),
+        ):
+            if not context_id:
+                continue
+            record = self._contexts.get(context_id, {}).get(entity_id)
+            if (
+                record is not None
+                and record.manual_action is not None
+                and record.manual_entry_id == entry_id
+            ):
+                return record.manual_action
         return None
 
     def unregister_entry(self, entry_id: str) -> None:

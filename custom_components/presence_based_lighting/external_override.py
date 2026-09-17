@@ -34,6 +34,7 @@ from .const import EXTERNAL_POLICY_IGNORE
 from .const import EXTERNAL_POLICY_PAUSE
 from .const import EXTERNAL_POLICY_REARM_AFTER_CLEAR
 from .const import MANUAL_ON_INTENT
+from .const import MANUAL_ON_BOUNDARY_CLEAR_PENDING
 from .const import QUIETED_MAX_AGE_ACTION_ARM
 from .const import QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
 from .const import QUIETED_MAX_AGE_ACTION_PAUSE
@@ -82,6 +83,7 @@ class ExternalOverrideRecord:
     intent_version: int | None = None
     owner_entry_id: str | None = None
     boundary_phase: str | None = None
+    boundary_started_at: str | None = None
 
     @property
     def created_at(self) -> str:
@@ -257,6 +259,7 @@ class ExternalOverrideManager:
         intent_version: int | None = None,
         owner_entry_id: str | None = None,
         boundary_phase: str | None = None,
+        boundary_started_at: str | None = None,
         notify: bool = True,
     ) -> ExternalOverrideRecord | None:
         """Record an entity-scoped override and notify every controlling entry."""
@@ -289,6 +292,7 @@ class ExternalOverrideManager:
             intent_version=intent_version,
             owner_entry_id=owner_entry_id,
             boundary_phase=boundary_phase,
+            boundary_started_at=boundary_started_at,
         )
         self._overrides[entity_id] = record
         self.note_source(entity_id, source)
@@ -316,6 +320,10 @@ class ExternalOverrideManager:
             self._notify(entity_id)
         return True
 
+    def notify(self, entity_id: str) -> None:
+        """Notify controlling entries after an externally ordered update."""
+        self._notify(entity_id)
+
     def restore_override(
         self,
         entity_id: str,
@@ -336,6 +344,7 @@ class ExternalOverrideManager:
         intent_version: int | None = None,
         owner_entry_id: str | None = None,
         boundary_phase: str | None = None,
+        boundary_started_at: str | None = None,
         notify: bool = True,
     ) -> ExternalOverrideRecord | None:
         """Re-adopt a persisted override without resetting its age.
@@ -387,6 +396,7 @@ class ExternalOverrideManager:
             intent_version=intent_version,
             owner_entry_id=owner_entry_id,
             boundary_phase=boundary_phase,
+            boundary_started_at=boundary_started_at,
         )
         self._overrides[entity_id] = record
         _LOGGER.debug(
@@ -426,7 +436,15 @@ class ExternalOverrideManager:
         record = self._overrides.get(entity_id)
         if record is None or not record.is_manual_on:
             return False
-        self._overrides[entity_id] = replace(record, boundary_phase=phase)
+        self._overrides[entity_id] = replace(
+            record,
+            boundary_phase=phase,
+            boundary_started_at=(
+                dt_util.utcnow().isoformat()
+                if phase == MANUAL_ON_BOUNDARY_CLEAR_PENDING
+                else record.boundary_started_at
+            ),
+        )
         if notify:
             self._notify(entity_id)
         return True
