@@ -1,13 +1,17 @@
 """Tests for real_last_changed.py uncovered helpers."""
-
-import pytest
 from unittest.mock import MagicMock
 
 from custom_components.presence_based_lighting.real_last_changed import (
     ATTR_PREVIOUS_VALID_STATE,
-    is_rlc_integration_available,
-    get_rlc_sensors_for_entity,
+)
+from custom_components.presence_based_lighting.real_last_changed import (
     get_all_rlc_sensors,
+)
+from custom_components.presence_based_lighting.real_last_changed import (
+    get_rlc_sensors_for_entity,
+)
+from custom_components.presence_based_lighting.real_last_changed import (
+    is_rlc_integration_available,
 )
 
 
@@ -37,7 +41,9 @@ class TestIsRlcIntegrationAvailable:
     def test_returns_false_when_non_sensor(self):
         hass = MagicMock()
         hass.states.async_all.return_value = [
-            _make_state("binary_sensor.motion", attrs={ATTR_PREVIOUS_VALID_STATE: "on"}),
+            _make_state(
+                "binary_sensor.motion", attrs={ATTR_PREVIOUS_VALID_STATE: "on"}
+            ),
         ]
         assert is_rlc_integration_available(hass) is False
 
@@ -46,10 +52,13 @@ class TestGetRlcSensorsForEntity:
     def test_match_by_entity_id_attribute(self):
         hass = MagicMock()
         hass.states.async_all.return_value = [
-            _make_state("sensor.lamp_rlc", attrs={
-                ATTR_PREVIOUS_VALID_STATE: "on",
-                "entity_id": "light.desk_lamp",
-            }),
+            _make_state(
+                "sensor.lamp_rlc",
+                attrs={
+                    ATTR_PREVIOUS_VALID_STATE: "on",
+                    "entity_id": "light.desk_lamp",
+                },
+            ),
         ]
         result = get_rlc_sensors_for_entity(hass, "light.desk_lamp")
         assert "sensor.lamp_rlc" in result
@@ -57,9 +66,12 @@ class TestGetRlcSensorsForEntity:
     def test_match_by_name_contains(self):
         hass = MagicMock()
         hass.states.async_all.return_value = [
-            _make_state("sensor.desk_lamp_real_last_changed", attrs={
-                ATTR_PREVIOUS_VALID_STATE: "off",
-            }),
+            _make_state(
+                "sensor.desk_lamp_real_last_changed",
+                attrs={
+                    ATTR_PREVIOUS_VALID_STATE: "off",
+                },
+            ),
         ]
         result = get_rlc_sensors_for_entity(hass, "light.desk_lamp")
         assert "sensor.desk_lamp_real_last_changed" in result
@@ -67,10 +79,13 @@ class TestGetRlcSensorsForEntity:
     def test_no_match(self):
         hass = MagicMock()
         hass.states.async_all.return_value = [
-            _make_state("sensor.other_rlc", attrs={
-                ATTR_PREVIOUS_VALID_STATE: "on",
-                "entity_id": "light.kitchen",
-            }),
+            _make_state(
+                "sensor.other_rlc",
+                attrs={
+                    ATTR_PREVIOUS_VALID_STATE: "on",
+                    "entity_id": "light.kitchen",
+                },
+            ),
         ]
         result = get_rlc_sensors_for_entity(hass, "light.desk_lamp")
         assert result == []
@@ -99,7 +114,9 @@ class TestGetAllRlcSensors:
             _make_state("sensor.rlc_1", attrs={ATTR_PREVIOUS_VALID_STATE: "on"}),
             _make_state("sensor.rlc_2", attrs={ATTR_PREVIOUS_VALID_STATE: "off"}),
             _make_state("sensor.temperature", attrs={"unit": "C"}),
-            _make_state("binary_sensor.motion", attrs={ATTR_PREVIOUS_VALID_STATE: "on"}),
+            _make_state(
+                "binary_sensor.motion", attrs={ATTR_PREVIOUS_VALID_STATE: "on"}
+            ),
         ]
         result = get_all_rlc_sensors(hass)
         assert result == ["sensor.rlc_1", "sensor.rlc_2"]

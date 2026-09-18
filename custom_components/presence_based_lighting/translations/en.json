@@ -56,9 +56,13 @@
           "presence_cleared_state_custom": "Custom Clear State",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
           "automation_mode": "Automation Mode",
+          "control_lease_mode": "External Control Lease Mode",
+          "control_lease_blockers": "Control Lease Blockers",
+          "control_lease_correct_late_on": "Correct Late Lease-Owned Turn-On",
           "use_interceptor": "Use Interceptor for Presence Lock",
           "normalize_external_plain_on": "Normalize External Plain Turn-On",
           "presence_lock_respects_manual_override": "Presence Lock Respects Manual Override",
+          "presence_lock_manual_on_override_enabled": "Enable Presence-Lock Manual On Hold",
           "manual_disable_states": "States That Pause Automation",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
           "rlc_tracking_entity": "Real Last Changed Sensor (optional)"
@@ -75,9 +79,13 @@
           "presence_cleared_state_custom": "Enter the exact state you expect once presence clears. Only used when 'Custom' is selected above.",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
+          "control_lease_mode": "Off preserves existing behavior. Observe records would-grant telemetry without suppressing PBL. Enforce allows token-guarded external ownership when every safety gate passes.",
+          "control_lease_blockers": "Optional entities that must all be off before an enforce-mode lease can be acquired, such as another lighting controller.",
+          "control_lease_correct_late_on": "Default-off safeguard that may issue one corrective off only for an exact recent PBL-owned command that converges after an off-direction lease revoke.",
           "use_interceptor": "When enabled and hass-interceptor is installed, this entity proactively blocks conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
           "normalize_external_plain_on": "Add this light's configured brightness and transition to external turn_on calls that do not specify brightness or a profile.",
           "presence_lock_respects_manual_override": "When enabled, Presence Lock allows configured manual-off states and disabled presence switches to stand down instead of forcing the entity back on.",
+          "presence_lock_manual_on_override_enabled": "Opt in to durable manual On holds for exact root commands. Existing entries remain disabled unless explicitly enabled.",
           "manual_disable_states": "Manual changes to these states pause automation. In Presence Lock mode, these states are treated as manual overrides when 'Presence Lock Respects Manual Override' is enabled. Manual changes to any other state will resume automation. Leave empty to disable manual pause behavior.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "rlc_tracking_entity": "Select a Real Last Changed sensor that tracks this entity's state. This helps ignore spurious state changes from reboots or unavailability. Recommended sensors are marked with ⭐."
@@ -192,9 +200,13 @@
           "presence_cleared_state_custom": "Custom Clear State",
           "respect_presence_allowed": "Enable Per-Entity Toggle Switch",
           "automation_mode": "Automation Mode",
+          "control_lease_mode": "External Control Lease Mode",
+          "control_lease_blockers": "Control Lease Blockers",
+          "control_lease_correct_late_on": "Correct Late Lease-Owned Turn-On",
           "use_interceptor": "Use Interceptor for Presence Lock",
           "normalize_external_plain_on": "Normalize External Plain Turn-On",
           "presence_lock_respects_manual_override": "Presence Lock Respects Manual Override",
+          "presence_lock_manual_on_override_enabled": "Enable Presence-Lock Manual On Hold",
           "manual_disable_states": "States That Pause Automation",
           "entity_off_delay": "Entity-Specific Turn Off Delay (seconds)",
           "rlc_tracking_entity": "Real Last Changed Sensor (optional)"
@@ -211,9 +223,13 @@
           "presence_cleared_state_custom": "Enter the exact state you expect once presence clears. Only used when 'Custom' is selected above.",
           "respect_presence_allowed": "Allow per-entity presence control via toggle switch. Disable this to make entity always follow presence, ignoring the toggle (useful for always-automated entities).",
           "automation_mode": "Choose how this entity handles manual control. 'Automatic' pauses presence automation when manually controlled and resumes when manually restored. 'Presence Lock' blocks external calls that conflict with presence state.",
+          "control_lease_mode": "Off preserves existing behavior. Observe records would-grant telemetry without suppressing PBL. Enforce allows token-guarded external ownership when every safety gate passes.",
+          "control_lease_blockers": "Optional entities that must all be off before an enforce-mode lease can be acquired, such as another lighting controller.",
+          "control_lease_correct_late_on": "Default-off safeguard that may issue one corrective off only for an exact recent PBL-owned command that converges after an off-direction lease revoke.",
           "use_interceptor": "When enabled and hass-interceptor is installed, this entity proactively blocks conflicting service calls instead of reactively reverting changes. Only applies to Presence Lock mode.",
           "normalize_external_plain_on": "Add this light's configured brightness and transition to external turn_on calls that do not specify brightness or a profile.",
           "presence_lock_respects_manual_override": "When enabled, Presence Lock allows configured manual-off states and disabled presence switches to stand down instead of forcing the entity back on.",
+          "presence_lock_manual_on_override_enabled": "Opt in to durable manual On holds for exact root commands. Existing entries remain disabled unless explicitly enabled.",
           "manual_disable_states": "Manual changes to these states pause automation. In Presence Lock mode, these states are treated as manual overrides when 'Presence Lock Respects Manual Override' is enabled. Manual changes to any other state will resume automation. Leave empty to disable manual pause behavior.",
           "entity_off_delay": "Override the global delay for this specific entity (leave empty to use global default)",
           "rlc_tracking_entity": "Select a Real Last Changed sensor that tracks this entity's state. This helps ignore spurious state changes from reboots or unavailability. Recommended sensors are marked with ⭐."
@@ -292,8 +308,79 @@
     "switch": {
       "state_attributes": {
         "respect_presence_allowed": {
-          "name": "Respects Presence Toggle",
-          "description": "Indicates if this entity honors the per-entity Presence Allowed switch"
+          "name": "Respects Presence Toggle"
+        },
+        "control_lease_mode": {
+          "name": "Control Lease Mode"
+        },
+        "control_lease_state": {
+          "name": "Control Lease State"
+        },
+        "control_lease_owner": {
+          "name": "Control Lease Owner"
+        },
+        "control_lease_id": {
+          "name": "Control Lease Correlation"
+        },
+        "control_lease_controller_id": {
+          "name": "Control Lease Controller Correlation"
+        },
+        "control_lease_occurrence_ids": {
+          "name": "Control Lease Occurrence Correlations"
+        },
+        "control_lease_request_id": {
+          "name": "Control Lease Request Correlation"
+        },
+        "control_lease_acquired_at": {
+          "name": "Control Lease Acquired"
+        },
+        "control_lease_expires_at": {
+          "name": "Control Lease Expires"
+        },
+        "control_lease_target_entity_ids": {
+          "name": "Control Lease Targets"
+        },
+        "control_lease_released_entity_ids": {
+          "name": "Control Lease Released Targets"
+        },
+        "control_lease_generation": {
+          "name": "Control Lease Generation"
+        },
+        "control_lease_last_transition": {
+          "name": "Control Lease Last Transition"
+        },
+        "control_lease_last_outcome": {
+          "name": "Control Lease Last Outcome"
+        },
+        "control_lease_last_context": {
+          "name": "Control Lease Last Context"
+        },
+        "control_lease_baseline_admitted": {
+          "name": "Control Lease Asleep Baseline Admitted"
+        },
+        "control_lease_baseline_outcome": {
+          "name": "Control Lease Asleep Baseline Outcome"
+        },
+        "control_lease_watchdog_state": {
+          "name": "Control Lease Watchdog"
+        },
+        "control_lease_watchdog_due_at": {
+          "name": "Control Lease Watchdog Due"
+        },
+        "control_lease_active_count": {
+          "name": "Control Lease Active Count"
+        },
+        "control_lease_denial_count": {
+          "name": "Control Lease Denials"
+        },
+        "control_lease_token_mismatch_count": {
+          "name": "Control Lease Token Mismatches"
+        },
+        "control_lease_blocked_command_count": {
+          "name": "Control Lease Blocked Commands"
+        },
+        "control_lease_target_unavailable_count": {
+          "name": "Control Lease Unavailable Targets"
         }
       }
     }

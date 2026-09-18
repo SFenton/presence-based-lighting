@@ -1,12 +1,13 @@
 """P1 High Priority Tests - Basic occupancy detection scenarios."""
-
 import asyncio
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
-from tests.conftest import assert_service_called, assert_service_not_called, setup_entity_states
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from tests.conftest import assert_service_called
+from tests.conftest import assert_service_not_called
+from tests.conftest import setup_entity_states
 
 
 def _presence_event(mock_hass, old_state, new_state):
@@ -17,8 +18,12 @@ def _presence_event(mock_hass, old_state, new_state):
         {
             "data": {
                 "entity_id": "binary_sensor.living_room_motion",
-                "old_state": type("State", (), {"state": old_state, "attributes": {}, "context": None})(),
-                "new_state": type("State", (), {"state": new_state, "attributes": {}, "context": None})(),
+                "old_state": type(
+                    "State", (), {"state": old_state, "attributes": {}, "context": None}
+                )(),
+                "new_state": type(
+                    "State", (), {"state": new_state, "attributes": {}, "context": None}
+                )(),
             }
         },
     )()
@@ -27,7 +32,9 @@ def _presence_event(mock_hass, old_state, new_state):
 class TestBasicOccupancyDetection:
     @pytest.mark.asyncio
     async def test_no_occupancy_lights_stay_off(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
@@ -74,7 +81,9 @@ class TestBasicOccupancyDetection:
 
     @pytest.mark.asyncio
     async def test_presence_disabled_blocks_actions(self, mock_hass, mock_config_entry):
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
 
@@ -86,7 +95,9 @@ class TestBasicOccupancyDetection:
         assert_service_not_called(mock_hass, "light", "turn_on")
 
     @pytest.mark.asyncio
-    async def test_presence_disabled_ignores_cleared_timer(self, mock_hass, mock_config_entry):
+    async def test_presence_disabled_ignores_cleared_timer(
+        self, mock_hass, mock_config_entry
+    ):
         setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()

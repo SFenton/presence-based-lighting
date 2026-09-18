@@ -10,6 +10,7 @@
 ## Test Categories
 
 ### P0 - Critical Must-Pass Scenarios (6 tests)
+
 ✅ All critical tests passing
 
 1. **test_1_1_1_occupancy_detected_lights_turn_on** - Occupancy detection turns on lights
@@ -20,9 +21,11 @@
 6. **test_3_2_3_enable_switch_empty_room_lights_on_timer_starts** - Re-enabling with lights on starts timer
 
 ### P1 - High Priority Tests (28 tests)
+
 ✅ All high-priority tests passing
 
 #### Basic Occupancy Detection (7 tests)
+
 - No occupancy keeps lights off
 - Continuous occupancy keeps lights on
 - Occupancy clearing starts timer
@@ -30,6 +33,7 @@
 - Disabled automation ignores occupancy changes
 
 #### Manual Light Control (8 tests)
+
 - Manual off disables automation (with/without timer active)
 - Manual on in occupied room (no timer)
 - Manual on in empty room starts timer
@@ -37,11 +41,13 @@
 - Manual changes while disabled
 
 #### Switch Toggle (8 tests)
+
 - Disabling switch preserves light state and cancels timer
 - Enabling switch responds to current room state
 - Timer behavior with switch toggling
 
 #### Multi-Entity Support (5 tests)
+
 - Any sensor triggers lights
 - One occupied sensor keeps lights on
 - All sensors clearing starts timer
@@ -52,9 +58,11 @@
 ## Issues Found and Fixed
 
 ### Issue 1: Timer Blocking Execution
+
 **Problem**: The `_start_off_timer()` method was blocking for the full delay period because it awaited the sleep task directly. This caused tests to fail and the automation to freeze during timer execution.
 
-**Root Cause**: 
+**Root Cause**:
+
 ```python
 # Old code - BLOCKS for 30 seconds!
 self._pending_off_task = asyncio.create_task(asyncio.sleep(off_delay))
@@ -62,6 +70,7 @@ await self._pending_off_task  # This awaits the sleep!
 ```
 
 **Solution**: Split the timer logic into two methods:
+
 1. `_start_off_timer()` - Creates the background task and returns immediately
 2. `_execute_off_timer()` - Executes the actual timer logic in the background
 
@@ -71,7 +80,7 @@ async def _start_off_timer(self) -> None:
     if self._pending_off_task:
         self._pending_off_task.cancel()
         self._pending_off_task = None
-    
+
     off_delay = self.entry.data[CONF_OFF_DELAY]
     self._pending_off_task = asyncio.create_task(
         self._execute_off_timer(off_delay)
@@ -88,6 +97,7 @@ async def _execute_off_timer(self, off_delay: int) -> None:
 ```
 
 **Tests that caught this**:
+
 - `test_1_3_1_occupancy_clears_timer_starts` - Failed because lights turned off immediately
 - `test_3_1_2_disable_switch_cancels_timer` - Failed due to timer cancellation race condition
 
@@ -123,18 +133,21 @@ pytest tests/test_p0_critical.py::TestP0Critical::test_1_1_1_occupancy_detected_
 The following test categories remain to be implemented (from TEST_PLAN.md):
 
 ### P2 - Medium Priority (~20 tests)
+
 - Timer edge cases (very short delays, zero delay, very long delays)
 - Rapid state changes and race conditions
 - Lifecycle tests (coordinator start/stop)
 - Complex sensor patterns
 
 ### P3 - Low Priority (~15 tests)
+
 - Error handling and edge cases
 - Multi-instance coordination
 - State attribute verification
 - Configuration validation
 
 ### P4 - Nice to Have (~29 tests)
+
 - Performance benchmarks
 - Memory leak detection
 - Stress testing

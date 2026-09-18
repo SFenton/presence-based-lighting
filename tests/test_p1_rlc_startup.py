@@ -6,38 +6,50 @@ This test suite verifies that:
    trigger manual control logic when RLC is configured
 3. The toggle state is preserved across reboots when RLC is configured
 """
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from homeassistant.const import STATE_OFF, STATE_ON
-
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
-from custom_components.presence_based_lighting.real_last_changed import ATTR_PREVIOUS_VALID_STATE
+from custom_components.presence_based_lighting.const import CONF_CLEARING_SENSORS
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
 from custom_components.presence_based_lighting.const import (
-    CONF_CONTROLLED_ENTITIES,
-    CONF_ENTITY_ID,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_SENSORS,
-    CONF_CLEARING_SENSORS,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_RLC_TRACKING_ENTITY,
-    CONF_ROOM_NAME,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_INITIAL_PRESENCE_ALLOWED,
 )
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_RLC_TRACKING_ENTITY
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from custom_components.presence_based_lighting.real_last_changed import (
+    ATTR_PREVIOUS_VALID_STATE,
+)
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
 
 
-def _entity_event(mock_hass, entity_id, old_state, new_state, old_attrs=None, new_attrs=None):
+def _entity_event(
+    mock_hass, entity_id, old_state, new_state, old_attrs=None, new_attrs=None
+):
     """Create a mock entity state change event."""
     mock_hass.states.set(entity_id, new_state)
     return type(
@@ -49,7 +61,11 @@ def _entity_event(mock_hass, entity_id, old_state, new_state, old_attrs=None, ne
                 "old_state": type(
                     "State",
                     (),
-                    {"state": old_state, "attributes": old_attrs or {}, "context": type("Ctx", (), {"id": "old", "parent_id": None})()},
+                    {
+                        "state": old_state,
+                        "attributes": old_attrs or {},
+                        "context": type("Ctx", (), {"id": "old", "parent_id": None})(),
+                    },
                 )(),
                 "new_state": type(
                     "State",
@@ -57,7 +73,9 @@ def _entity_event(mock_hass, entity_id, old_state, new_state, old_attrs=None, ne
                     {
                         "state": new_state,
                         "attributes": new_attrs or {},
-                        "context": type("Ctx", (), {"id": "manual", "parent_id": None})(),
+                        "context": type(
+                            "Ctx", (), {"id": "manual", "parent_id": None}
+                        )(),
                     },
                 )(),
             }
@@ -97,7 +115,9 @@ def _rlc_event(mock_hass, old_effective, new_effective):
                     {
                         "state": "2024-01-01T12:00:00+00:00",
                         "attributes": {ATTR_PREVIOUS_VALID_STATE: new_effective},
-                        "context": type("Ctx", (), {"id": "restore", "parent_id": None})(),
+                        "context": type(
+                            "Ctx", (), {"id": "restore", "parent_id": None}
+                        )(),
                     },
                 )(),
             }
@@ -109,6 +129,7 @@ def _rlc_event(mock_hass, old_effective, new_effective):
 def mock_hass_with_rlc():
     """Create a mock Home Assistant with RLC sensor support."""
     from tests.conftest import MockHass
+
     hass = MockHass()
     return hass
 
@@ -153,13 +174,18 @@ class TestRLCStateInitializationOnStartup:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:00:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF}
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF},
         )
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_OFF)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
             await coordinator.async_start()
 
         # Verify last_effective_state was initialized
@@ -174,13 +200,18 @@ class TestRLCStateInitializationOnStartup:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:00:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_ON}
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_ON},
         )
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_ON)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
             await coordinator.async_start()
 
         entity_state = coordinator._entity_states["light.master_bedroom"]
@@ -196,8 +227,13 @@ class TestRLCStateInitializationOnStartup:
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
         # Don't set sensor.master_bedroom_lights
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
             await coordinator.async_start()
 
         entity_state = coordinator._entity_states["light.master_bedroom"]
@@ -216,21 +252,26 @@ class TestNoFalseManualControlOnStartup:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:00:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF}
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF},
         )
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_OFF)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
-            
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
+
             # Register presence switch to set initial_state = True (simulating restored state)
             coordinator.register_presence_switch(
                 "light.master_bedroom",
                 True,  # Toggle was ON before reboot
-                lambda: None
+                lambda: None,
             )
-            
+
             await coordinator.async_start()
 
         # Verify presence_allowed is still True
@@ -259,25 +300,36 @@ class TestNoFalseManualControlOnStartup:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:00:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF}
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF},
         )
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_OFF)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
-            coordinator.register_presence_switch("light.master_bedroom", True, lambda: None)
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
+            coordinator.register_presence_switch(
+                "light.master_bedroom", True, lambda: None
+            )
             await coordinator.async_start()
 
         # First state change event after startup
         await coordinator._handle_controlled_entity_change(
-            _entity_event(mock_hass_with_rlc, "light.master_bedroom", "unavailable", STATE_OFF)
+            _entity_event(
+                mock_hass_with_rlc, "light.master_bedroom", "unavailable", STATE_OFF
+            )
         )
         assert coordinator.get_presence_allowed("light.master_bedroom") is True
 
         # Another event with same RLC state (different raw state transitions)
         await coordinator._handle_controlled_entity_change(
-            _entity_event(mock_hass_with_rlc, "light.master_bedroom", STATE_OFF, STATE_OFF)
+            _entity_event(
+                mock_hass_with_rlc, "light.master_bedroom", STATE_OFF, STATE_OFF
+            )
         )
         assert coordinator.get_presence_allowed("light.master_bedroom") is True
 
@@ -290,14 +342,21 @@ class TestNoFalseManualControlOnStartup:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:00:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_ON}
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_ON},
         )
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_ON)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
-            coordinator.register_presence_switch("light.master_bedroom", True, lambda: None)
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
+            coordinator.register_presence_switch(
+                "light.master_bedroom", True, lambda: None
+            )
             await coordinator.async_start()
 
         assert coordinator.get_presence_allowed("light.master_bedroom") is True
@@ -307,11 +366,13 @@ class TestNoFalseManualControlOnStartup:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:01:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF}
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF},
         )
 
         await coordinator._handle_controlled_entity_change(
-            _entity_event(mock_hass_with_rlc, "light.master_bedroom", STATE_ON, STATE_OFF)
+            _entity_event(
+                mock_hass_with_rlc, "light.master_bedroom", STATE_ON, STATE_OFF
+            )
         )
 
         # NOW automation should be paused - this was a real manual change
@@ -369,14 +430,19 @@ class TestMultipleEntitiesWithRLC:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:00:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF}
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF},
         )
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_OFF)
         mock_hass_with_rlc.states.set("cover.master_bedroom_vents", STATE_OFF)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_multi_rlc)
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_multi_rlc
+            )
             await coordinator.async_start()
 
         # Light has RLC - should be initialized
@@ -407,30 +473,42 @@ class TestTogglePreservationAcrossReboot:
         mock_hass_with_rlc.states.set(
             "sensor.master_bedroom_lights",
             "2024-01-01T12:00:00+00:00",
-            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_ON}  # RLC knows light was ON
+            attributes={ATTR_PREVIOUS_VALID_STATE: STATE_ON},  # RLC knows light was ON
         )
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_ON)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
-            
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
+
             # Simulate switch restoration: toggle was ON before reboot
-            coordinator.register_presence_switch("light.master_bedroom", True, lambda: None)
-            
+            coordinator.register_presence_switch(
+                "light.master_bedroom", True, lambda: None
+            )
+
             await coordinator.async_start()
 
         # Verify initial state
         assert coordinator.get_presence_allowed("light.master_bedroom") is True
-        assert coordinator._entity_states["light.master_bedroom"]["last_effective_state"] == STATE_ON
+        assert (
+            coordinator._entity_states["light.master_bedroom"]["last_effective_state"]
+            == STATE_ON
+        )
 
         # Simulate HASS receiving state updates after reboot
         # Light goes unavailable -> off (but RLC still says ON)
         # This should NOT disable the toggle
-        
+
         # RLC still reports ON (the light was actually on, just Zigbee reported wrong)
         await coordinator._handle_controlled_entity_change(
-            _entity_event(mock_hass_with_rlc, "light.master_bedroom", "unavailable", STATE_OFF)
+            _entity_event(
+                mock_hass_with_rlc, "light.master_bedroom", "unavailable", STATE_OFF
+            )
         )
 
         # Toggle should still be ON - RLC says effective state is still ON
@@ -444,9 +522,16 @@ class TestTogglePreservationAcrossReboot:
         mock_hass_with_rlc.states.set("light.master_bedroom", STATE_OFF)
         mock_hass_with_rlc.states.set("sensor.master_bedroom_presence_pir", STATE_OFF)
 
-        with patch("custom_components.presence_based_lighting.async_track_state_change_event", return_value=lambda: None):
-            coordinator = PresenceBasedLightingCoordinator(mock_hass_with_rlc, mock_entry_with_rlc_tracking)
-            coordinator.register_presence_switch("light.master_bedroom", True, lambda: None)
+        with patch(
+            "custom_components.presence_based_lighting.async_track_state_change_event",
+            return_value=lambda: None,
+        ):
+            coordinator = PresenceBasedLightingCoordinator(
+                mock_hass_with_rlc, mock_entry_with_rlc_tracking
+            )
+            coordinator.register_presence_switch(
+                "light.master_bedroom", True, lambda: None
+            )
             await coordinator.async_start()
 
         entity_state = coordinator._entity_states["light.master_bedroom"]

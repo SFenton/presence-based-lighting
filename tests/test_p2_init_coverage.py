@@ -1,70 +1,100 @@
 """Tests for __init__.py setup/teardown, migrations, services, and auto-reenable."""
+from datetime import datetime
+from datetime import time
+from datetime import timedelta
+from datetime import timezone
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
-import asyncio
-import json
 import pytest
-from datetime import datetime, time, timedelta, timezone
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock, call
-
-from homeassistant.const import STATE_ON, STATE_OFF
-
-from custom_components.presence_based_lighting import (
-    async_setup,
-    async_setup_entry,
-    async_unload_entry,
-    async_reload_entry,
-    async_migrate_entry,
-    PresenceBasedLightingCoordinator,
-    _force_component_logger_debug,
-    _emit_direct_to_file,
-    EntityAutomationState,
+from custom_components.presence_based_lighting import _emit_direct_to_file
+from custom_components.presence_based_lighting import _force_component_logger_debug
+from custom_components.presence_based_lighting import async_migrate_entry
+from custom_components.presence_based_lighting import async_reload_entry
+from custom_components.presence_based_lighting import async_setup
+from custom_components.presence_based_lighting import async_setup_entry
+from custom_components.presence_based_lighting import async_unload_entry
+from custom_components.presence_based_lighting import EntityAutomationState
+from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CONDITIONS
+from custom_components.presence_based_lighting.const import CONF_AUTO_REENABLE_END_TIME
+from custom_components.presence_based_lighting.const import (
+    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
 )
 from custom_components.presence_based_lighting.const import (
-    CONF_ACTIVATION_CONDITIONS,
-    CONF_AUTO_REENABLE_END_TIME,
-    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
     CONF_AUTO_REENABLE_START_TIME,
-    CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
-    CONF_CLEARING_SENSORS,
-    CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_PRESENCE_SENSORS,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
-    CONF_VACANCY_AUTHORITY_SENSORS,
-    DEFAULT_AUTO_REENABLE_END_TIME,
-    DEFAULT_AUTO_REENABLE_START_TIME,
-    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
-    DEFAULT_DISABLE_ON_EXTERNAL,
-    DEFAULT_INITIAL_PRESENCE_ALLOWED,
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
-    DOMAIN,
 )
-from tests.conftest import MockHass, setup_entity_states
-
+from custom_components.presence_based_lighting.const import (
+    CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
+)
+from custom_components.presence_based_lighting.const import CONF_CLEARING_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
+)
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import (
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import (
+    CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_VACANCY_AUTHORITY_SENSORS,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
+)
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import DOMAIN
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from tests.conftest import MockHass
+from tests.conftest import setup_entity_states
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_entry(version=7, room="Living Room", extra=None):
     """Build a mock config entry at the specified version."""
@@ -103,9 +133,11 @@ def _make_entry(version=7, room="Living Room", extra=None):
 # _force_component_logger_debug / _emit_direct_to_file
 # ---------------------------------------------------------------------------
 
+
 class TestLoggingHelpers:
     def test_force_debug_sets_level(self):
         import logging
+
         _force_component_logger_debug()
         logger = logging.getLogger("custom_components.presence_based_lighting")
         assert logger.level == logging.DEBUG
@@ -115,6 +147,7 @@ class TestLoggingHelpers:
     def test_emit_direct_to_file_no_handler(self):
         """Should not raise when handler is None."""
         import custom_components.presence_based_lighting as pbl
+
         orig = pbl._log_file_handler
         try:
             pbl._log_file_handler = None
@@ -125,6 +158,7 @@ class TestLoggingHelpers:
     def test_emit_direct_to_file_with_handler(self):
         import custom_components.presence_based_lighting as pbl
         import logging
+
         mock_handler = MagicMock(spec=logging.FileHandler)
         orig = pbl._log_file_handler
         try:
@@ -140,6 +174,7 @@ class TestLoggingHelpers:
 # async_setup – service registration
 # ---------------------------------------------------------------------------
 
+
 class TestAsyncSetup:
     @pytest.mark.asyncio
     async def test_registers_services(self):
@@ -147,7 +182,7 @@ class TestAsyncSetup:
         hass.services = MagicMock()
         result = await async_setup(hass, {})
         assert result is True
-        assert hass.services.async_register.call_count == 4
+        assert hass.services.async_register.call_count == 8
 
     @pytest.mark.asyncio
     async def test_resume_automation_service(self):
@@ -170,9 +205,7 @@ class TestAsyncSetup:
         coord._entity_states = {"light.living_room": {}}
         coord.set_automation_paused = MagicMock()
 
-        hass.data = {
-            DOMAIN: {"entry1": coord}
-        }
+        hass.data = {DOMAIN: {"entry1": coord}}
 
         # Build a service call targeting the switch
         call = MagicMock()
@@ -259,14 +292,19 @@ class TestAsyncSetup:
 # async_migrate_entry – config migrations
 # ---------------------------------------------------------------------------
 
+
 class TestMigrations:
     @pytest.mark.asyncio
     async def test_migrate_v2_to_v3_automatic(self):
         """v2→v3: entities without presence lock get AUTOMATIC mode."""
         hass = MagicMock()
         entry = _make_entry(version=2)
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = False
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = False
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_REQUIRE_OCCUPANCY_FOR_DETECTED
+        ] = False
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_REQUIRE_VACANCY_FOR_CLEARED
+        ] = False
 
         result = await async_migrate_entry(hass, entry)
         assert result is True
@@ -277,7 +315,9 @@ class TestMigrations:
         """v2→v3: entities with presence lock booleans get PRESENCE_LOCK mode."""
         hass = MagicMock()
         entry = _make_entry(version=2)
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = True
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_REQUIRE_OCCUPANCY_FOR_DETECTED
+        ] = True
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
 
         result = await async_migrate_entry(hass, entry)
@@ -313,12 +353,16 @@ class TestMigrations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_migrate_v2_all_the_way_to_v12(self):
-        """Full chain migration from v2 through v12."""
+    async def test_migrate_v2_all_the_way_to_v14(self):
+        """Full chain migration from v2 through v14."""
         hass = MagicMock()
         entry = _make_entry(version=2)
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = False
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = False
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_REQUIRE_OCCUPANCY_FOR_DETECTED
+        ] = False
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_REQUIRE_VACANCY_FOR_CLEARED
+        ] = False
 
         # Track version updates
         versions = []
@@ -329,15 +373,18 @@ class TestMigrations:
                 versions.append(version)
             if data:
                 e.data = data
+
         hass.config_entries.async_update_entry = track_update
 
         result = await async_migrate_entry(hass, entry)
         assert result is True
-        assert versions == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        assert versions == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         assert CONF_VACANCY_AUTHORITY_SENSORS not in entry.data
         assert entry.data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] is False
         assert (
-            entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE]
+            entry.data[CONF_CONTROLLED_ENTITIES][0][
+                CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+            ]
             is True
         )
 
@@ -361,12 +408,13 @@ class TestMigrations:
                 e.version = version
             if data:
                 e.data = data
+
         hass.config_entries.async_update_entry = track_update
 
         result = await async_migrate_entry(hass, entry)
 
         assert result is True
-        assert entry.version == 12
+        assert entry.version == 14
         assert entry.data[CONF_CLEARING_SENSORS] == [
             "sensor.office_office_occupancy_status_last_changed"
         ]
@@ -378,6 +426,7 @@ class TestMigrations:
 # ---------------------------------------------------------------------------
 # async_setup_entry / async_unload_entry / async_reload_entry
 # ---------------------------------------------------------------------------
+
 
 class TestEntryLifecycle:
     @pytest.mark.asyncio
@@ -397,7 +446,10 @@ class TestEntryLifecycle:
         entry = _make_entry()
         entry.data["file_logging_enabled"] = True
 
-        with patch("custom_components.presence_based_lighting._setup_file_logging", new_callable=AsyncMock) as mock_log:
+        with patch(
+            "custom_components.presence_based_lighting._setup_file_logging",
+            new_callable=AsyncMock,
+        ) as mock_log:
             result = await async_setup_entry(hass, entry)
             assert result is True
             mock_log.assert_awaited_once()
@@ -428,15 +480,18 @@ class TestEntryLifecycle:
 # Coordinator – _parse_time_string
 # ---------------------------------------------------------------------------
 
+
 class TestParseTimeString:
     @pytest.mark.asyncio
     async def test_hh_mm_ss(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:30:15",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:30:15",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         assert coord._auto_reenable_start_time == time(22, 30, 15)
         assert coord._auto_reenable_end_time == time(6, 0, 0)
@@ -445,10 +500,12 @@ class TestParseTimeString:
     async def test_hh_mm(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:30",
-            CONF_AUTO_REENABLE_END_TIME: "06:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:30",
+                CONF_AUTO_REENABLE_END_TIME: "06:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         assert coord._auto_reenable_start_time == time(22, 30, 0)
 
@@ -456,6 +513,7 @@ class TestParseTimeString:
 # ---------------------------------------------------------------------------
 # Coordinator – entity initialization edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestCoordinatorInit:
     def test_missing_entity_id(self):
@@ -483,6 +541,7 @@ class TestCoordinatorInit:
 # Coordinator – async_stop
 # ---------------------------------------------------------------------------
 
+
 class TestCoordinatorStop:
     @pytest.mark.asyncio
     async def test_stop_cancels_reconciliation(self):
@@ -501,6 +560,7 @@ class TestCoordinatorStop:
 # ---------------------------------------------------------------------------
 # Coordinator – set_automation_paused state transitions
 # ---------------------------------------------------------------------------
+
 
 class TestSetAutomationPausedTransitions:
     @pytest.mark.asyncio
@@ -528,12 +588,16 @@ class TestSetAutomationPausedTransitions:
 
         coord.set_automation_paused("light.living_room", True)
         coord.set_automation_paused("light.living_room", True)  # idempotent
-        assert coord._entity_states["light.living_room"]["state"] == EntityAutomationState.PAUSED
+        assert (
+            coord._entity_states["light.living_room"]["state"]
+            == EntityAutomationState.PAUSED
+        )
 
 
 # ---------------------------------------------------------------------------
 # Coordinator – _handle_service_call group expansion
 # ---------------------------------------------------------------------------
+
 
 class TestServiceCallGroupExpansion:
     @pytest.mark.asyncio
@@ -542,21 +606,27 @@ class TestServiceCallGroupExpansion:
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
         # Add a group entity
-        hass.states.set("light.all_lights", STATE_OFF, attributes={
-            "entity_id": ["light.living_room"]
-        })
+        hass.states.set(
+            "light.all_lights",
+            STATE_OFF,
+            attributes={"entity_id": ["light.living_room"]},
+        )
         entry = _make_entry()
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_DISABLE_ON_EXTERNAL_CONTROL] = True
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
-        service_event = type("Event", (), {
-            "data": {
-                "service_data": {"entity_id": "light.all_lights"},
-                "service": "turn_on",
+        service_event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "service_data": {"entity_id": "light.all_lights"},
+                    "service": "turn_on",
+                },
+                "context": type("Ctx", (), {"id": "ext", "parent_id": None})(),
             },
-            "context": type("Ctx", (), {"id": "ext", "parent_id": None})(),
-        })()
+        )()
 
         await coord._handle_service_call(service_event)
         # Should not crash – group expansion working
@@ -570,16 +640,21 @@ class TestServiceCallGroupExpansion:
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
-        service_event = type("Event", (), {
-            "data": {"service_data": {}, "service": "turn_on"},
-            "context": type("Ctx", (), {"id": "ext", "parent_id": None})(),
-        })()
+        service_event = type(
+            "Event",
+            (),
+            {
+                "data": {"service_data": {}, "service": "turn_on"},
+                "context": type("Ctx", (), {"id": "ext", "parent_id": None})(),
+            },
+        )()
         await coord._handle_service_call(service_event)
 
 
 # ---------------------------------------------------------------------------
 # Coordinator – presence lock fallback
 # ---------------------------------------------------------------------------
+
 
 class TestPresenceLockFallback:
     @pytest.mark.asyncio
@@ -588,19 +663,47 @@ class TestPresenceLockFallback:
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
         entry = _make_entry()
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_OCCUPANCY_FOR_DETECTED] = True
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_DISABLE_ON_EXTERNAL_CONTROL] = False
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_REQUIRE_OCCUPANCY_FOR_DETECTED
+        ] = True
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_DISABLE_ON_EXTERNAL_CONTROL
+        ] = False
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
         hass.services.clear()
 
-        event = type("Event", (), {
-            "data": {
-                "entity_id": "light.living_room",
-                "old_state": type("S", (), {"state": STATE_OFF, "attributes": {}, "context": type("C", (), {"id": "ext", "parent_id": None})()})(),
-                "new_state": type("S", (), {"state": STATE_ON, "attributes": {}, "context": type("C", (), {"id": "ext", "parent_id": None})()})(),
-            }
-        })()
+        event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "entity_id": "light.living_room",
+                    "old_state": type(
+                        "S",
+                        (),
+                        {
+                            "state": STATE_OFF,
+                            "attributes": {},
+                            "context": type(
+                                "C", (), {"id": "ext", "parent_id": None}
+                            )(),
+                        },
+                    )(),
+                    "new_state": type(
+                        "S",
+                        (),
+                        {
+                            "state": STATE_ON,
+                            "attributes": {},
+                            "context": type(
+                                "C", (), {"id": "ext", "parent_id": None}
+                            )(),
+                        },
+                    )(),
+                }
+            },
+        )()
         await coord._handle_controlled_entity_change(event)
         # Should have called turn_off to revert
         found = any(c["service"] == "turn_off" for c in hass.services.calls)
@@ -613,19 +716,47 @@ class TestPresenceLockFallback:
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
         entry = _make_entry()
         entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_REQUIRE_VACANCY_FOR_CLEARED] = True
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE] = False
-        entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_DISABLE_ON_EXTERNAL_CONTROL] = False
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+        ] = False
+        entry.data[CONF_CONTROLLED_ENTITIES][0][
+            CONF_DISABLE_ON_EXTERNAL_CONTROL
+        ] = False
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
         hass.services.clear()
 
-        event = type("Event", (), {
-            "data": {
-                "entity_id": "light.living_room",
-                "old_state": type("S", (), {"state": STATE_ON, "attributes": {}, "context": type("C", (), {"id": "ext", "parent_id": None})()})(),
-                "new_state": type("S", (), {"state": STATE_OFF, "attributes": {}, "context": type("C", (), {"id": "ext", "parent_id": None})()})(),
-            }
-        })()
+        event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "entity_id": "light.living_room",
+                    "old_state": type(
+                        "S",
+                        (),
+                        {
+                            "state": STATE_ON,
+                            "attributes": {},
+                            "context": type(
+                                "C", (), {"id": "ext", "parent_id": None}
+                            )(),
+                        },
+                    )(),
+                    "new_state": type(
+                        "S",
+                        (),
+                        {
+                            "state": STATE_OFF,
+                            "attributes": {},
+                            "context": type(
+                                "C", (), {"id": "ext", "parent_id": None}
+                            )(),
+                        },
+                    )(),
+                }
+            },
+        )()
         await coord._handle_controlled_entity_change(event)
         found = any(c["service"] == "turn_on" for c in hass.services.calls)
         assert found, "Expected turn_on to revert presence lock"
@@ -634,6 +765,7 @@ class TestPresenceLockFallback:
 # ---------------------------------------------------------------------------
 # Coordinator – _apply_action_to_entity NO_ACTION
 # ---------------------------------------------------------------------------
+
 
 class TestApplyActionNoAction:
     @pytest.mark.asyncio
@@ -655,15 +787,18 @@ class TestApplyActionNoAction:
 # Coordinator – periodic reconciliation
 # ---------------------------------------------------------------------------
 
+
 class TestPeriodicReconciliation:
     @pytest.mark.asyncio
     async def test_waiting_for_clear_safety_timeout(self):
         """Entity stuck in WAITING_FOR_CLEAR > 5min with room empty should be forced to IDLE."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
-        })
+        entry = _make_entry(
+            extra={
+                CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
+            }
+        )
         hass.states.set("binary_sensor.clearing_1", STATE_OFF)
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
@@ -671,7 +806,9 @@ class TestPeriodicReconciliation:
 
         es = coord._entity_states["light.living_room"]
         # Force into WAITING_FOR_CLEAR
-        coord._set_entity_state("light.living_room", es, EntityAutomationState.WAITING_FOR_CLEAR, "test")
+        coord._set_entity_state(
+            "light.living_room", es, EntityAutomationState.WAITING_FOR_CLEAR, "test"
+        )
         # Simulate long wait (> 300 seconds)
         es["state_entered_at"] = datetime.now(timezone.utc) - timedelta(seconds=400)
         # Presence sensor OFF + clearing sensor OFF → room empty
@@ -686,17 +823,23 @@ class TestPeriodicReconciliation:
         """Entity stuck in WAITING_FOR_CLEAR > 5min with room still occupied should go to OCCUPIED."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
-        entry = _make_entry(extra={
-            CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
-        })
-        hass.states.set("binary_sensor.clearing_1", STATE_ON)  # clearing sensor stuck on
+        entry = _make_entry(
+            extra={
+                CONF_CLEARING_SENSORS: ["binary_sensor.clearing_1"],
+            }
+        )
+        hass.states.set(
+            "binary_sensor.clearing_1", STATE_ON
+        )  # clearing sensor stuck on
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
         hass.services.clear()
 
         es = coord._entity_states["light.living_room"]
         # Force into WAITING_FOR_CLEAR
-        coord._set_entity_state("light.living_room", es, EntityAutomationState.WAITING_FOR_CLEAR, "test")
+        coord._set_entity_state(
+            "light.living_room", es, EntityAutomationState.WAITING_FOR_CLEAR, "test"
+        )
         # Simulate long wait (> 300 seconds)
         es["state_entered_at"] = datetime.now(timezone.utc) - timedelta(seconds=400)
         # Presence sensor ON → room occupied
@@ -716,12 +859,16 @@ class TestPeriodicReconciliation:
         await coord.async_start()
 
         es = coord._entity_states["light.living_room"]
-        coord._set_entity_state("light.living_room", es, EntityAutomationState.CLEARING, "test")
+        coord._set_entity_state(
+            "light.living_room", es, EntityAutomationState.CLEARING, "test"
+        )
         es["off_timer"] = None  # timer lost
 
         await coord._periodic_reconciliation(datetime.now(timezone.utc))
         # Timer should have been restarted
-        assert es["off_timer"] is not None or es["state"] != EntityAutomationState.CLEARING
+        assert (
+            es["off_timer"] is not None or es["state"] != EntityAutomationState.CLEARING
+        )
 
     @pytest.mark.asyncio
     async def test_occupied_but_room_empty_starts_timer(self):
@@ -733,11 +880,16 @@ class TestPeriodicReconciliation:
         await coord.async_start()
 
         es = coord._entity_states["light.living_room"]
-        coord._set_entity_state("light.living_room", es, EntityAutomationState.OCCUPIED, "test")
+        coord._set_entity_state(
+            "light.living_room", es, EntityAutomationState.OCCUPIED, "test"
+        )
 
         await coord._periodic_reconciliation(datetime.now(timezone.utc))
         # Should start off-timer or transition
-        assert es["state"] in (EntityAutomationState.CLEARING, EntityAutomationState.OCCUPIED)
+        assert es["state"] in (
+            EntityAutomationState.CLEARING,
+            EntityAutomationState.OCCUPIED,
+        )
 
     @pytest.mark.asyncio
     async def test_idle_but_room_occupied_reconciles(self):
@@ -749,7 +901,9 @@ class TestPeriodicReconciliation:
         await coord.async_start()
         # Startup reconciliation already moved to OCCUPIED, force back to IDLE
         es = coord._entity_states["light.living_room"]
-        coord._set_entity_state("light.living_room", es, EntityAutomationState.IDLE, "test")
+        coord._set_entity_state(
+            "light.living_room", es, EntityAutomationState.IDLE, "test"
+        )
 
         await coord._periodic_reconciliation(datetime.now(timezone.utc))
         # Should reconcile back to OCCUPIED
@@ -760,15 +914,18 @@ class TestPeriodicReconciliation:
 # Coordinator – Auto Re-Enable feature
 # ---------------------------------------------------------------------------
 
+
 class TestAutoReEnable:
     @pytest.mark.asyncio
     async def test_set_auto_reenable_enabled(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
@@ -782,28 +939,36 @@ class TestAutoReEnable:
     async def test_get_tracking_info_not_tracking(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         info = coord.get_auto_reenable_tracking_info()
         assert info["is_tracking"] is False
-        assert info["vacancy_threshold_percent"] == DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
+        assert (
+            info["vacancy_threshold_percent"] == DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
+        )
 
     @pytest.mark.asyncio
     async def test_get_tracking_info_while_tracking(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         now = datetime.now(timezone.utc)
         coord._auto_reenable_tracking["is_tracking"] = True
         coord._auto_reenable_tracking["window_start"] = now - timedelta(hours=1)
-        coord._auto_reenable_tracking["last_presence_change"] = now - timedelta(minutes=30)
+        coord._auto_reenable_tracking["last_presence_change"] = now - timedelta(
+            minutes=30
+        )
         coord._auto_reenable_tracking["was_occupied"] = True
         coord._auto_reenable_tracking["occupied_seconds"] = 1800.0  # 30 min
 
@@ -816,10 +981,12 @@ class TestAutoReEnable:
     async def test_start_time_handler(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
         coord._auto_reenable_enabled = True
@@ -849,10 +1016,12 @@ class TestAutoReEnable:
     async def test_end_time_handler(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
         coord._auto_reenable_enabled = True
@@ -865,11 +1034,13 @@ class TestAutoReEnable:
     async def test_evaluate_vacancy_above_threshold_reenables(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_VACANCY_THRESHOLD: 80,
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_VACANCY_THRESHOLD: 80,
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
@@ -891,11 +1062,13 @@ class TestAutoReEnable:
     async def test_evaluate_vacancy_below_threshold_does_not_reenable(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_VACANCY_THRESHOLD: 80,
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_VACANCY_THRESHOLD: 80,
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
@@ -936,7 +1109,9 @@ class TestAutoReEnable:
         # Disable presence and pause
         es = coord._entity_states["light.living_room"]
         es["presence_allowed"] = False
-        coord._set_entity_state("light.living_room", es, EntityAutomationState.PAUSED, "test")
+        coord._set_entity_state(
+            "light.living_room", es, EntityAutomationState.PAUSED, "test"
+        )
 
         await coord._reenable_presence_lighting()
 
@@ -972,11 +1147,15 @@ class TestAutoReEnable:
         """Presence changes during monitoring window update tracking state."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_PRESENCE_SENSORS: ["binary_sensor.living_room_motion"],
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_PRESENCE_SENSORS: [
+                    "binary_sensor.living_room_motion"
+                ],
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
@@ -984,20 +1163,26 @@ class TestAutoReEnable:
         now = datetime.now(timezone.utc)
         coord._auto_reenable_tracking["is_tracking"] = True
         coord._auto_reenable_tracking["window_start"] = now - timedelta(hours=1)
-        coord._auto_reenable_tracking["last_presence_change"] = now - timedelta(minutes=30)
+        coord._auto_reenable_tracking["last_presence_change"] = now - timedelta(
+            minutes=30
+        )
         coord._auto_reenable_tracking["was_occupied"] = False
         coord._auto_reenable_tracking["occupied_seconds"] = 0.0
         coord._save_tracking_state = AsyncMock()
 
         # Simulate motion on
         hass.states.set("binary_sensor.living_room_motion", STATE_ON)
-        event = type("Event", (), {
-            "data": {
-                "entity_id": "binary_sensor.living_room_motion",
-                "old_state": type("S", (), {"state": STATE_OFF})(),
-                "new_state": type("S", (), {"state": STATE_ON})(),
-            }
-        })()
+        event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "entity_id": "binary_sensor.living_room_motion",
+                    "old_state": type("S", (), {"state": STATE_OFF})(),
+                    "new_state": type("S", (), {"state": STATE_ON})(),
+                }
+            },
+        )()
         await coord._handle_auto_reenable_presence_change(event)
 
         assert coord._auto_reenable_tracking["was_occupied"] is True
@@ -1008,31 +1193,41 @@ class TestAutoReEnable:
         """Transitioning from occupied to vacant accumulates occupied time."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_PRESENCE_SENSORS: ["binary_sensor.living_room_motion"],
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_PRESENCE_SENSORS: [
+                    "binary_sensor.living_room_motion"
+                ],
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
         now = datetime.now(timezone.utc)
         coord._auto_reenable_tracking["is_tracking"] = True
         coord._auto_reenable_tracking["window_start"] = now - timedelta(hours=1)
-        coord._auto_reenable_tracking["last_presence_change"] = now - timedelta(minutes=10)
+        coord._auto_reenable_tracking["last_presence_change"] = now - timedelta(
+            minutes=10
+        )
         coord._auto_reenable_tracking["was_occupied"] = True
         coord._auto_reenable_tracking["occupied_seconds"] = 0.0
         coord._save_tracking_state = AsyncMock()
 
         # Motion goes off
         hass.states.set("binary_sensor.living_room_motion", STATE_OFF)
-        event = type("Event", (), {
-            "data": {
-                "entity_id": "binary_sensor.living_room_motion",
-                "old_state": type("S", (), {"state": STATE_ON})(),
-                "new_state": type("S", (), {"state": STATE_OFF})(),
-            }
-        })()
+        event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "entity_id": "binary_sensor.living_room_motion",
+                    "old_state": type("S", (), {"state": STATE_ON})(),
+                    "new_state": type("S", (), {"state": STATE_OFF})(),
+                }
+            },
+        )()
         await coord._handle_auto_reenable_presence_change(event)
 
         assert coord._auto_reenable_tracking["was_occupied"] is False
@@ -1048,13 +1243,17 @@ class TestAutoReEnable:
         await coord.async_start()
         coord._auto_reenable_tracking["is_tracking"] = False
 
-        event = type("Event", (), {
-            "data": {
-                "entity_id": "binary_sensor.living_room_motion",
-                "old_state": type("S", (), {"state": STATE_OFF})(),
-                "new_state": type("S", (), {"state": STATE_ON})(),
-            }
-        })()
+        event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "entity_id": "binary_sensor.living_room_motion",
+                    "old_state": type("S", (), {"state": STATE_OFF})(),
+                    "new_state": type("S", (), {"state": STATE_ON})(),
+                }
+            },
+        )()
         await coord._handle_auto_reenable_presence_change(event)
         # No crash, no state change
 
@@ -1070,7 +1269,9 @@ class TestAutoReEnable:
     @pytest.mark.asyncio
     async def test_save_and_load_tracking_state(self):
         """Round-trip persistence of tracking state."""
-        import tempfile, os
+        import os
+        import tempfile
+
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
         entry = _make_entry()
@@ -1085,6 +1286,7 @@ class TestAutoReEnable:
         # Make async_add_executor_job run the callable synchronously
         async def run_sync(fn, *args):
             return fn(*args)
+
         hass.async_add_executor_job = run_sync
 
         now = datetime.now(timezone.utc)
@@ -1112,12 +1314,15 @@ class TestAutoReEnable:
 
         # Cleanup tmpdir
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     @pytest.mark.asyncio
     async def test_load_tracking_state_no_file(self):
         """_load_tracking_state returns False when no file exists."""
-        import tempfile, os
+        import os
+        import tempfile
+
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
         entry = _make_entry()
@@ -1128,12 +1333,14 @@ class TestAutoReEnable:
 
         async def run_sync(fn, *args):
             return fn(*args)
+
         hass.async_add_executor_job = run_sync
 
         result = await coord._load_tracking_state()
         assert result is False
 
         import shutil
+
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     @pytest.mark.asyncio
@@ -1141,10 +1348,12 @@ class TestAutoReEnable:
         """Startup check with no saved state does nothing."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         coord._auto_reenable_enabled = True
         coord._load_tracking_state = AsyncMock(return_value=False)
@@ -1157,10 +1366,12 @@ class TestAutoReEnable:
         """Restart after window ended should evaluate immediately."""
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         coord._auto_reenable_enabled = True
 
@@ -1192,15 +1403,18 @@ class TestAutoReEnable:
 # Coordinator – activation condition handler
 # ---------------------------------------------------------------------------
 
+
 class TestActivationConditionHandler:
     @pytest.mark.asyncio
     async def test_condition_becoming_true_transitions_pending_to_occupied(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
         hass.states.set("binary_sensor.condition_1", STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_ACTIVATION_CONDITIONS: ["binary_sensor.condition_1"],
-        })
+        entry = _make_entry(
+            extra={
+                CONF_ACTIVATION_CONDITIONS: ["binary_sensor.condition_1"],
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
@@ -1211,18 +1425,25 @@ class TestActivationConditionHandler:
         hass.services.clear()
         # Now condition turns ON
         hass.states.set("binary_sensor.condition_1", STATE_ON)
-        event = type("Event", (), {
-            "data": {
-                "entity_id": "binary_sensor.condition_1",
-                "old_state": type("S", (), {"state": STATE_OFF})(),
-                "new_state": type("S", (), {"state": STATE_ON})(),
-            }
-        })()
+        event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "entity_id": "binary_sensor.condition_1",
+                    "old_state": type("S", (), {"state": STATE_OFF})(),
+                    "new_state": type("S", (), {"state": STATE_ON})(),
+                }
+            },
+        )()
         await coord._handle_activation_condition_change(event)
         # After activation conditions are met, coordinator transitions through
         # OCCUPIED (calling turn_on) then may immediately start clearing since
         # the clearing sensor is already not detecting.
-        assert es["state"] in (EntityAutomationState.OCCUPIED, EntityAutomationState.CLEARING)
+        assert es["state"] in (
+            EntityAutomationState.OCCUPIED,
+            EntityAutomationState.CLEARING,
+        )
         # Should have called turn_on
         found = any(c["service"] == "turn_on" for c in hass.services.calls)
         assert found
@@ -1233,9 +1454,11 @@ class TestActivationConditionHandler:
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
         hass.states.set("binary_sensor.condition_1", STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_ACTIVATION_CONDITIONS: ["binary_sensor.condition_1"],
-        })
+        entry = _make_entry(
+            extra={
+                CONF_ACTIVATION_CONDITIONS: ["binary_sensor.condition_1"],
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         await coord.async_start()
 
@@ -1243,13 +1466,17 @@ class TestActivationConditionHandler:
         assert es["state"] == EntityAutomationState.PENDING_ACTIVATION
 
         # Condition OFF→OFF (no change)
-        event = type("Event", (), {
-            "data": {
-                "entity_id": "binary_sensor.condition_1",
-                "old_state": type("S", (), {"state": STATE_OFF})(),
-                "new_state": type("S", (), {"state": STATE_OFF})(),
-            }
-        })()
+        event = type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "entity_id": "binary_sensor.condition_1",
+                    "old_state": type("S", (), {"state": STATE_OFF})(),
+                    "new_state": type("S", (), {"state": STATE_OFF})(),
+                }
+            },
+        )()
         await coord._handle_activation_condition_change(event)
         assert es["state"] == EntityAutomationState.PENDING_ACTIVATION  # unchanged
 
@@ -1258,15 +1485,18 @@ class TestActivationConditionHandler:
 # Coordinator – schedule/cancel auto-reenable times
 # ---------------------------------------------------------------------------
 
+
 class TestScheduleAutoReEnable:
     @pytest.mark.asyncio
     async def test_cancel_schedules(self):
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-        entry = _make_entry(extra={
-            CONF_AUTO_REENABLE_START_TIME: "22:00:00",
-            CONF_AUTO_REENABLE_END_TIME: "06:00:00",
-        })
+        entry = _make_entry(
+            extra={
+                CONF_AUTO_REENABLE_START_TIME: "22:00:00",
+                CONF_AUTO_REENABLE_END_TIME: "06:00:00",
+            }
+        )
         coord = PresenceBasedLightingCoordinator(hass, entry)
         unsub1 = MagicMock()
         unsub2 = MagicMock()

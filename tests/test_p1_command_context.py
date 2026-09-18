@@ -1,7 +1,6 @@
 """Tests for domain-wide PBL command context classification."""
-
+from custom_components.presence_based_lighting.command_context import CommandOrigin
 from custom_components.presence_based_lighting.command_context import (
-    CommandOrigin,
     PresenceCommandContextRegistry,
 )
 from tests.conftest import MockContext
@@ -12,18 +11,24 @@ def test_classifies_own_and_sibling_exact_contexts():
     registry.register("command", "entry_a", "light.shared", "on")
     context = MockContext("command")
 
-    assert registry.classify(
-        "entry_a",
-        "light.shared",
-        context,
-        include_parent=False,
-    ) == CommandOrigin.OWN
-    assert registry.classify(
-        "entry_b",
-        "light.shared",
-        context,
-        include_parent=False,
-    ) == CommandOrigin.SIBLING
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.shared",
+            context,
+            include_parent=False,
+        )
+        == CommandOrigin.OWN
+    )
+    assert (
+        registry.classify(
+            "entry_b",
+            "light.shared",
+            context,
+            include_parent=False,
+        )
+        == CommandOrigin.SIBLING
+    )
 
 
 def test_service_classification_follows_direct_parent_context():
@@ -31,12 +36,15 @@ def test_service_classification_follows_direct_parent_context():
     registry.register("command", "entry_a", "light.shared", "on")
     child = MockContext("child", parent_id="command")
 
-    assert registry.classify(
-        "entry_b",
-        "light.shared",
-        child,
-        include_parent=True,
-    ) == CommandOrigin.SIBLING
+    assert (
+        registry.classify(
+            "entry_b",
+            "light.shared",
+            child,
+            include_parent=True,
+        )
+        == CommandOrigin.SIBLING
+    )
 
 
 def test_state_classification_follows_direct_parent_context():
@@ -44,44 +52,98 @@ def test_state_classification_follows_direct_parent_context():
     registry.register("command", "entry_a", "light.shared", "on")
     child = MockContext("child", parent_id="command")
 
-    assert registry.classify(
-        "entry_b",
-        "light.shared",
-        child,
-        include_parent=True,
-    ) == CommandOrigin.SIBLING
+    assert (
+        registry.classify(
+            "entry_b",
+            "light.shared",
+            child,
+            include_parent=True,
+        )
+        == CommandOrigin.SIBLING
+    )
 
 
 def test_context_for_different_entity_is_external():
     registry = PresenceCommandContextRegistry()
     registry.register("command", "entry_a", "light.first", "on")
 
-    assert registry.classify(
-        "entry_b",
-        "light.second",
-        MockContext("command"),
-        include_parent=True,
-    ) == CommandOrigin.EXTERNAL
+    assert (
+        registry.classify(
+            "entry_b",
+            "light.second",
+            MockContext("command"),
+            include_parent=True,
+        )
+        == CommandOrigin.EXTERNAL
+    )
 
 
 def test_context_for_opposite_target_state_is_external():
     registry = PresenceCommandContextRegistry()
     registry.register("command", "entry_a", "light.shared", "on")
 
-    assert registry.classify(
-        "entry_a",
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.shared",
+            MockContext("command"),
+            include_parent=False,
+            expected_target_state="off",
+        )
+        == CommandOrigin.EXTERNAL
+    )
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.shared",
+            MockContext("command"),
+            include_parent=False,
+            expected_target_state="on",
+        )
+        == CommandOrigin.OWN
+    )
+
+
+def test_control_lease_context_is_exact_and_direction_bound():
+    registry = PresenceCommandContextRegistry()
+    registry.register_control_lease(
+        "lease-command",
+        "lease-1",
         "light.shared",
-        MockContext("command"),
-        include_parent=False,
-        expected_target_state="off",
-    ) == CommandOrigin.EXTERNAL
-    assert registry.classify(
-        "entry_a",
+        "on",
+        4,
+    )
+    context = MockContext("lease-command")
+
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.shared",
+            context,
+            include_parent=True,
+            expected_target_state="on",
+        )
+        == CommandOrigin.CONTROL_LEASE
+    )
+    record = registry.record_for(
         "light.shared",
-        MockContext("command"),
-        include_parent=False,
+        context,
+        include_parent=True,
         expected_target_state="on",
-    ) == CommandOrigin.OWN
+    )
+    assert record is not None
+    assert record.lease_id == "lease-1"
+    assert record.lease_generation == 4
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.shared",
+            context,
+            include_parent=True,
+            expected_target_state="off",
+        )
+        == CommandOrigin.EXTERNAL
+    )
 
 
 def test_registry_evicts_oldest_context_at_capacity():
@@ -90,15 +152,21 @@ def test_registry_evicts_oldest_context_at_capacity():
     registry.register("second", "entry_a", "light.shared", "on")
     registry.register("third", "entry_a", "light.shared", "on")
 
-    assert registry.classify(
-        "entry_a",
-        "light.shared",
-        MockContext("first"),
-        include_parent=False,
-    ) == CommandOrigin.EXTERNAL
-    assert registry.classify(
-        "entry_a",
-        "light.shared",
-        MockContext("third"),
-        include_parent=False,
-    ) == CommandOrigin.OWN
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.shared",
+            MockContext("first"),
+            include_parent=False,
+        )
+        == CommandOrigin.EXTERNAL
+    )
+    assert (
+        registry.classify(
+            "entry_a",
+            "light.shared",
+            MockContext("third"),
+            include_parent=False,
+        )
+        == CommandOrigin.OWN
+    )

@@ -5,7 +5,6 @@ integration UI/docs rather than the current implementation details. They are
 expected to fail until the coordinator/service architecture is brought into
 alignment with those contracts.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -13,41 +12,58 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-
-from custom_components.presence_based_lighting import (
-    EntityAutomationState,
-    PresenceBasedLightingCoordinator,
-    SERVICE_PAUSE_AUTOMATION,
-    async_setup,
+from custom_components.presence_based_lighting import async_setup
+from custom_components.presence_based_lighting import EntityAutomationState
+from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting import SERVICE_PAUSE_AUTOMATION
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import (
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 )
 from custom_components.presence_based_lighting.const import (
-    CONF_CONTROLLED_ENTITIES,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_PRESENCE_SENSORS,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_RLC_TRACKING_ENTITY,
-    CONF_ROOM_NAME,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
-    DEFAULT_MANUAL_DISABLE_STATES,
-    DOMAIN,
 )
-from custom_components.presence_based_lighting.real_last_changed import ATTR_PREVIOUS_VALID_STATE
-from tests.conftest import assert_service_called, setup_entity_states
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_RLC_TRACKING_ENTITY
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_MANUAL_DISABLE_STATES,
+)
+from custom_components.presence_based_lighting.const import DOMAIN
+from custom_components.presence_based_lighting.real_last_changed import (
+    ATTR_PREVIOUS_VALID_STATE,
+)
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from tests.conftest import assert_service_called
+from tests.conftest import setup_entity_states
 
 
 def _context(context_id: str = "manual"):
@@ -218,7 +234,9 @@ async def test_pause_service_targets_actual_per_entity_presence_switch(
     await async_setup(mock_hass, {})
 
     try:
-        actual_presence_switch = "switch.living_room_presence_living_room_presence_allowed"
+        actual_presence_switch = (
+            "switch.living_room_presence_living_room_presence_allowed"
+        )
         handler = mock_hass.services._registered[(DOMAIN, SERVICE_PAUSE_AUTOMATION)]
 
         await handler(_service_call(target_switches=actual_presence_switch))
@@ -373,7 +391,9 @@ async def test_raw_controlled_unavailable_to_off_does_not_pause(
 
     try:
         await coordinator._handle_controlled_entity_change(
-            _state_change_event(mock_hass, "light.living_room", "unavailable", STATE_OFF)
+            _state_change_event(
+                mock_hass, "light.living_room", "unavailable", STATE_OFF
+            )
         )
 
         assert coordinator.get_automation_paused("light.living_room") is False
@@ -402,7 +422,9 @@ async def test_raw_presence_unavailable_to_off_does_not_clear(
             )
         )
 
-        assert coordinator.get_entity_automation_state("light.living_room") == "occupied"
+        assert (
+            coordinator.get_entity_automation_state("light.living_room") == "occupied"
+        )
         assert not [
             call
             for call in mock_hass.services.calls
@@ -419,16 +441,20 @@ async def test_stale_external_pause_clears_on_startup_when_room_clear(
     """Startup should self-heal stale external pauses when the room is already clear."""
     storage_path = _configure_storage(mock_hass, tmp_path)
     paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
-    paused_path.write_text(json.dumps({
-        "paused_entities": ["light.living_room"],
-        "paused": {
-            "light.living_room": {
-                "source": "external_state",
-                "reason": "startup flake",
-                "controlled_state": STATE_OFF,
+    paused_path.write_text(
+        json.dumps(
+            {
+                "paused_entities": ["light.living_room"],
+                "paused": {
+                    "light.living_room": {
+                        "source": "external_state",
+                        "reason": "startup flake",
+                        "controlled_state": STATE_OFF,
+                    }
+                },
             }
-        },
-    }))
+        )
+    )
     setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
     coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
 
@@ -449,16 +475,20 @@ async def test_explicit_service_pause_survives_startup_when_room_clear(
     """Explicit pause service state should survive restart even if the room is clear."""
     storage_path = _configure_storage(mock_hass, tmp_path)
     paused_path = storage_path / f"pbl_paused_{mock_config_entry.entry_id}.json"
-    paused_path.write_text(json.dumps({
-        "paused_entities": ["light.living_room"],
-        "paused": {
-            "light.living_room": {
-                "source": "service",
-                "reason": "pause_automation service",
-                "controlled_state": STATE_OFF,
+    paused_path.write_text(
+        json.dumps(
+            {
+                "paused_entities": ["light.living_room"],
+                "paused": {
+                    "light.living_room": {
+                        "source": "service",
+                        "reason": "pause_automation service",
+                        "controlled_state": STATE_OFF,
+                    }
+                },
             }
-        },
-    }))
+        )
+    )
     setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
     coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
 
@@ -466,15 +496,16 @@ async def test_explicit_service_pause_survives_startup_when_room_clear(
 
     try:
         assert coordinator.get_automation_paused("light.living_room") is True
-        assert coordinator.get_entity_control_state("light.living_room")["pause_source"] == "service"
+        assert (
+            coordinator.get_entity_control_state("light.living_room")["pause_source"]
+            == "service"
+        )
     finally:
         coordinator.async_stop()
 
 
 @pytest.mark.asyncio
-async def test_invalid_controlled_rlc_effective_state_is_ignored(
-    mock_hass, tmp_path
-):
+async def test_invalid_controlled_rlc_effective_state_is_ignored(mock_hass, tmp_path):
     """Timestamp-valued RLC helpers must not be trusted as controlled on/off state."""
     _configure_storage(mock_hass, tmp_path)
     entry = _entry(
@@ -495,7 +526,9 @@ async def test_invalid_controlled_rlc_effective_state_is_ignored(
     await coordinator.async_start()
 
     try:
-        assert coordinator._entity_states["light.bathroom"]["last_effective_state"] is None
+        assert (
+            coordinator._entity_states["light.bathroom"]["last_effective_state"] is None
+        )
         await coordinator._handle_controlled_entity_change(
             _state_change_event(mock_hass, "light.bathroom", "unavailable", STATE_OFF)
         )
@@ -650,7 +683,9 @@ async def test_external_group_turn_on_in_empty_room_expires_even_before_state_up
     try:
         mock_hass.services.clear()
 
-        await coordinator._handle_service_call(_service_event("light.lights", "turn_on"))
+        await coordinator._handle_service_call(
+            _service_event("light.lights", "turn_on")
+        )
         mock_hass.states.set("light.living_room", STATE_ON)
         await asyncio.sleep(0.05)
 

@@ -6,47 +6,66 @@ ALL be on for lights to activate. This enables scenarios like:
 - Only turn on lights when home (presence state)
 - Only turn on lights during certain modes (input_boolean)
 """
-
 import asyncio
 from unittest.mock import MagicMock
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-
-from custom_components.presence_based_lighting import (
-    PresenceBasedLightingCoordinator,
-    EntityAutomationState,
-)
+from custom_components.presence_based_lighting import EntityAutomationState
+from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
 from custom_components.presence_based_lighting.const import (
     ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
-    ACTIVATION_CATCHUP_NONE,
-    CONF_ACTIVATION_CONDITIONS,
-    CONF_ACTIVATION_CATCHUP_MODE,
-    CONF_CLEARING_SENSORS,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_SENSORS,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
-    DEFAULT_INITIAL_PRESENCE_ALLOWED,
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
-    DOMAIN,
 )
-from tests.conftest import assert_service_called, assert_service_not_called, setup_entity_states
+from custom_components.presence_based_lighting.const import ACTIVATION_CATCHUP_NONE
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CATCHUP_MODE
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CONDITIONS
+from custom_components.presence_based_lighting.const import CONF_CLEARING_SENSORS
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import (
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
+)
+from custom_components.presence_based_lighting.const import (
+    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
+)
+from custom_components.presence_based_lighting.const import DOMAIN
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from tests.conftest import assert_service_called
+from tests.conftest import assert_service_not_called
+from tests.conftest import setup_entity_states
 
 
 def _state(state, attributes=None):
@@ -118,7 +137,10 @@ def mock_config_entry_with_multiple_activation_conditions():
     entry.data = {
         CONF_ROOM_NAME: "Living Room",
         CONF_PRESENCE_SENSORS: ["binary_sensor.motion"],
-        CONF_ACTIVATION_CONDITIONS: ["binary_sensor.lux_dark", "input_boolean.home_mode"],
+        CONF_ACTIVATION_CONDITIONS: [
+            "binary_sensor.lux_dark",
+            "input_boolean.home_mode",
+        ],
         CONF_OFF_DELAY: 1,
         CONF_CONTROLLED_ENTITIES: [
             {
@@ -208,7 +230,9 @@ class TestActivationConditionBecomesTrue:
         """When already occupied and condition becomes true, lights should turn on."""
         mock_hass.states.set("light.living_room", STATE_OFF)
         mock_hass.states.set("binary_sensor.motion", STATE_ON)  # Room is occupied
-        mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)  # Initially too bright
+        mock_hass.states.set(
+            "binary_sensor.lux_dark", STATE_OFF
+        )  # Initially too bright
 
         coordinator = PresenceBasedLightingCoordinator(
             mock_hass, mock_config_entry_with_activation_condition
@@ -319,7 +343,9 @@ class TestMultipleActivationConditions:
         mock_hass.states.set("light.living_room", STATE_OFF)
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("binary_sensor.lux_dark", STATE_ON)
-        mock_hass.states.set("input_boolean.home_mode", STATE_OFF)  # One condition not met
+        mock_hass.states.set(
+            "input_boolean.home_mode", STATE_OFF
+        )  # One condition not met
 
         coordinator = PresenceBasedLightingCoordinator(
             mock_hass, mock_config_entry_with_multiple_activation_conditions
@@ -369,7 +395,9 @@ class TestMultipleActivationConditions:
         mock_hass.states.set("light.living_room", STATE_OFF)
         mock_hass.states.set("binary_sensor.motion", STATE_ON)  # Room is occupied
         mock_hass.states.set("binary_sensor.lux_dark", STATE_ON)
-        mock_hass.states.set("input_boolean.home_mode", STATE_OFF)  # One condition not met
+        mock_hass.states.set(
+            "input_boolean.home_mode", STATE_OFF
+        )  # One condition not met
 
         coordinator = PresenceBasedLightingCoordinator(
             mock_hass, mock_config_entry_with_multiple_activation_conditions
@@ -393,7 +421,9 @@ class TestNoActivationConditions:
     @pytest.mark.asyncio
     async def test_no_conditions_behaves_as_before(self, mock_hass, mock_config_entry):
         """When no activation conditions configured, presence triggers lights immediately."""
-        setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
+        setup_entity_states(
+            mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF
+        )
 
         coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
         await coordinator.async_start()
@@ -467,7 +497,9 @@ class TestActivationConditionOffTimerGuard:
         """When condition becomes true and clearing sensor is ON, entity stays OCCUPIED."""
         mock_hass.states.set("light.living_room", STATE_OFF)
         mock_hass.states.set("binary_sensor.motion", STATE_ON)  # room occupied
-        mock_hass.states.set("binary_sensor.occupancy", STATE_ON)  # clearing sensor active
+        mock_hass.states.set(
+            "binary_sensor.occupancy", STATE_ON
+        )  # clearing sensor active
         mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)  # condition not met
 
         coordinator = PresenceBasedLightingCoordinator(
@@ -491,7 +523,9 @@ class TestActivationConditionOffTimerGuard:
 
         # Should stay OCCUPIED (NOT CLEARING) because clearing sensor is still active
         assert es["state"] == EntityAutomationState.OCCUPIED
-        assert es["off_timer"] is None, "Off-timer should not start while clearing sensors are active"
+        assert (
+            es["off_timer"] is None
+        ), "Off-timer should not start while clearing sensors are active"
 
     @pytest.mark.asyncio
     async def test_condition_met_starts_timer_when_clearing_clear(
@@ -500,7 +534,9 @@ class TestActivationConditionOffTimerGuard:
         """When condition becomes true and clearing sensor is OFF, timer should start (primer case)."""
         mock_hass.states.set("light.living_room", STATE_OFF)
         mock_hass.states.set("binary_sensor.motion", STATE_ON)  # room occupied
-        mock_hass.states.set("binary_sensor.occupancy", STATE_OFF)  # clearing sensor clear
+        mock_hass.states.set(
+            "binary_sensor.occupancy", STATE_OFF
+        )  # clearing sensor clear
         mock_hass.states.set("binary_sensor.lux_dark", STATE_OFF)  # condition not met
 
         coordinator = PresenceBasedLightingCoordinator(
@@ -522,7 +558,9 @@ class TestActivationConditionOffTimerGuard:
 
         es = coordinator._entity_states["light.living_room"]
         assert es["state"] == EntityAutomationState.CLEARING
-        assert es["off_timer"] is not None, "Off-timer should start when clearing sensors are clear"
+        assert (
+            es["off_timer"] is not None
+        ), "Off-timer should start when clearing sensors are clear"
 
     @pytest.mark.asyncio
     async def test_gate_open_does_not_catch_up_remote_trigger_when_local_clear(

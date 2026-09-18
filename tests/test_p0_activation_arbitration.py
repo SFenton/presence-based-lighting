@@ -1,44 +1,56 @@
 """Regression tests for activation-gated shared-entity arbitration."""
-
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from unittest.mock import MagicMock
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-
-from custom_components.presence_based_lighting import (
-    ActuationStatus,
-    EntityAutomationState,
-    IntentReason,
-    PresenceBasedLightingCoordinator,
+from custom_components.presence_based_lighting import ActuationStatus
+from custom_components.presence_based_lighting import EntityAutomationState
+from custom_components.presence_based_lighting import IntentReason
+from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CONDITIONS
+from custom_components.presence_based_lighting.const import CONF_CLEARING_SENSORS
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import (
+    CONF_DISABLE_ON_EXTERNAL_CONTROL,
+)
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
 )
 from custom_components.presence_based_lighting.const import (
-    CONF_ACTIVATION_CONDITIONS,
-    CONF_CLEARING_SENSORS,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_PRESENCE_SENSORS,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    DOMAIN,
-    NO_ACTION,
 )
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import DOMAIN
+from custom_components.presence_based_lighting.const import NO_ACTION
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
 from tests.conftest import MockContext
-
 
 LIGHT = "light.master_bathroom"
 LOCAL_SENSOR = "binary_sensor.master_bathroom_presence"
@@ -300,9 +312,7 @@ async def test_strict_presence_lock_correction_preserves_paused_state(mock_hass)
 
 
 @pytest.mark.asyncio
-async def test_strict_no_action_correction_preserves_paused_state(
-    mock_hass, tmp_path
-):
+async def test_strict_no_action_correction_preserves_paused_state(mock_hass, tmp_path):
     """A suppressed strict correction must not clear an explicit pause."""
     entry = _entry(
         entry_id="presence_lock",
@@ -311,9 +321,7 @@ async def test_strict_no_action_correction_preserves_paused_state(
         activation_condition=BEDROOM_ON,
         presence_lock=True,
     )
-    entry.data[CONF_CONTROLLED_ENTITIES][0][
-        CONF_PRESENCE_CLEARED_SERVICE
-    ] = NO_ACTION
+    entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_PRESENCE_CLEARED_SERVICE] = NO_ACTION
     mock_hass.states.set(LIGHT, STATE_OFF)
     mock_hass.states.set(LOCAL_SENSOR, STATE_OFF)
     mock_hass.states.set(BEDROOM_ON, STATE_ON)
@@ -343,9 +351,7 @@ async def test_strict_no_action_correction_preserves_paused_state(
 
 
 @pytest.mark.asyncio
-async def test_strict_ownership_suppression_preserves_paused_state(
-    mock_hass, tmp_path
-):
+async def test_strict_ownership_suppression_preserves_paused_state(mock_hass, tmp_path):
     """Sibling ownership suppression must not silently resume a paused entry."""
     sensor_a = "binary_sensor.entry_a"
     sensor_b = "binary_sensor.entry_b"
@@ -481,13 +487,12 @@ async def test_condition_off_releases_ownership_without_turning_light_off(mock_h
         )
 
         assert entity_state["state"] == EntityAutomationState.PENDING_ACTIVATION
-        assert coordinator._ownership_manager.other_entry_wants_on(
-            "other_entry", LIGHT
-        ) is False
+        assert (
+            coordinator._ownership_manager.other_entry_wants_on("other_entry", LIGHT)
+            is False
+        )
         assert [
-            call
-            for call in mock_hass.services.calls
-            if call["service"] == "turn_off"
+            call for call in mock_hass.services.calls if call["service"] == "turn_off"
         ] == []
     finally:
         coordinator.async_stop()
@@ -523,9 +528,10 @@ async def test_inactive_pending_entry_is_not_repromoted_by_reconciliation(mock_h
         await coordinator._reconcile_entity(LIGHT, entity_state)
 
         assert entity_state["state"] == EntityAutomationState.PENDING_ACTIVATION
-        assert coordinator._ownership_manager.other_entry_wants_on(
-            "other_entry", LIGHT
-        ) is False
+        assert (
+            coordinator._ownership_manager.other_entry_wants_on("other_entry", LIGHT)
+            is False
+        )
     finally:
         coordinator.async_stop()
 
@@ -563,9 +569,10 @@ async def test_condition_off_leaves_clearing_running_but_releases_ownership(
         )
 
         assert entity_state["state"] == EntityAutomationState.CLEARING
-        assert coordinator._ownership_manager.other_entry_wants_on(
-            "other_entry", LIGHT
-        ) is False
+        assert (
+            coordinator._ownership_manager.other_entry_wants_on("other_entry", LIGHT)
+            is False
+        )
     finally:
         coordinator.async_stop()
 
@@ -603,9 +610,10 @@ async def test_condition_off_preserves_waiting_for_clear_without_ownership(
         )
 
         assert entity_state["state"] == EntityAutomationState.WAITING_FOR_CLEAR
-        assert coordinator._ownership_manager.other_entry_wants_on(
-            "other_entry", LIGHT
-        ) is False
+        assert (
+            coordinator._ownership_manager.other_entry_wants_on("other_entry", LIGHT)
+            is False
+        )
     finally:
         coordinator.async_stop()
 
@@ -693,17 +701,18 @@ async def test_inactive_waiting_for_clear_safety_timeout_does_not_reacquire(
             EntityAutomationState.WAITING_FOR_CLEAR,
             "test inactive safety timeout",
         )
-        entity_state["state_entered_at"] = (
-            datetime.now(timezone.utc) - timedelta(minutes=6)
+        entity_state["state_entered_at"] = datetime.now(timezone.utc) - timedelta(
+            minutes=6
         )
         mock_hass.services.clear()
 
         await coordinator._periodic_reconciliation(None)
 
         assert entity_state["state"] == EntityAutomationState.WAITING_FOR_CLEAR
-        assert coordinator._ownership_manager.other_entry_wants_on(
-            "other_entry", LIGHT
-        ) is False
+        assert (
+            coordinator._ownership_manager.other_entry_wants_on("other_entry", LIGHT)
+            is False
+        )
         assert _turn_on_calls(mock_hass) == []
     finally:
         coordinator.async_stop()
@@ -785,9 +794,7 @@ async def test_gate_close_waits_for_separate_clearing_sensor_before_off(mock_has
         assert entity_state["state"] == EntityAutomationState.PENDING_ACTIVATION
         assert entity_state["actuation"]["status"].value != "pending"
         assert [
-            call
-            for call in mock_hass.services.calls
-            if call["service"] == "turn_off"
+            call for call in mock_hass.services.calls if call["service"] == "turn_off"
         ] == []
 
         mock_hass.states.set(clearing_sensor, STATE_OFF)
@@ -1025,9 +1032,9 @@ async def test_stale_pending_generation_does_not_dedupe_identical_off_intent(
             if call["service"] == "turn_off"
             and call["service_data"].get("entity_id") == LIGHT
         ]
-        assert entity_state["actuation"]["generation"] == entity_state[
-            "work_generation"
-        ]
+        assert (
+            entity_state["actuation"]["generation"] == entity_state["work_generation"]
+        )
     finally:
         coordinator.async_stop()
 
@@ -1418,9 +1425,12 @@ async def test_complementary_entries_honor_homekit_off_during_handoff(
             EntityAutomationState.PAUSED,
         }
         assert primary._entity_states[LIGHT]["intent"]["desired"].value != "detected"
-        assert primary._ownership_manager.other_entry_wants_on(
-            fallback_entry.entry_id, LIGHT
-        ) is False
+        assert (
+            primary._ownership_manager.other_entry_wants_on(
+                fallback_entry.entry_id, LIGHT
+            )
+            is False
+        )
         assert fallback.get_automation_paused(LIGHT) is True
     finally:
         primary.async_stop()
@@ -1516,9 +1526,7 @@ async def test_opposite_child_service_context_is_external(mock_hass):
     own_context.parent_id = None
     child_context = MockContext("child", parent_id=own_context.id)
 
-    await coordinator._handle_service_call(
-        _service_event("turn_off", child_context)
-    )
+    await coordinator._handle_service_call(_service_event("turn_off", child_context))
 
     assert coordinator.get_automation_paused(LIGHT) is True
 

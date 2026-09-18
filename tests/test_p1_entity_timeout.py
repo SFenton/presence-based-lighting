@@ -1,32 +1,39 @@
 """Tests for per-entity timeout functionality."""
-
 import asyncio
-import pytest
 from unittest.mock import MagicMock
 
-from homeassistant.const import STATE_OFF, STATE_ON
-
+import pytest
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
-from tests.conftest import assert_service_called, assert_service_not_called
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
 from custom_components.presence_based_lighting.const import (
-    CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_ENTITY_OFF_DELAY,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_SENSORS,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
 )
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import CONF_ENTITY_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from tests.conftest import assert_service_called
 
 
 @pytest.mark.asyncio
@@ -71,6 +78,7 @@ async def test_timer_restart_does_not_clear_new_timer_reference(mock_hass):
         entity_state["off_timer"].cancel()
         entity_state["off_timer"] = None
     from custom_components.presence_based_lighting import EntityAutomationState
+
     entity_state["state"] = EntityAutomationState.OCCUPIED
 
     # Start a timer, then immediately restart it.
@@ -166,9 +174,10 @@ async def test_entity_specific_timeout_overrides_global(mock_hass):
 
     # Slow entity should still be on (30s timeout) - check it wasn't turned off
     slow_off_calls = [
-        c for c in mock_hass.services.calls
-        if c["domain"] == "light" 
-        and c["service"] == "turn_off" 
+        c
+        for c in mock_hass.services.calls
+        if c["domain"] == "light"
+        and c["service"] == "turn_off"
         and c["service_data"].get("entity_id") == "light.slow"
     ]
     assert len(slow_off_calls) == 0
@@ -285,9 +294,10 @@ async def test_entity_timer_cancelled_on_reoccupancy(mock_hass):
 
     # Light should NOT have turned off
     test_off_calls = [
-        c for c in mock_hass.services.calls
-        if c["domain"] == "light" 
-        and c["service"] == "turn_off" 
+        c
+        for c in mock_hass.services.calls
+        if c["domain"] == "light"
+        and c["service"] == "turn_off"
         and c["service_data"].get("entity_id") == "light.test"
     ]
     assert len(test_off_calls) == 0

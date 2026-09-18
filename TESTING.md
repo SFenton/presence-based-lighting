@@ -7,21 +7,25 @@ This project uses a Python virtual environment to isolate test dependencies.
 ### Setup Steps
 
 1. **Create virtual environment** (one time):
+
    ```bash
    python3 -m venv venv
    ```
 
 2. **Activate the virtual environment**:
+
    ```bash
    source venv/bin/activate
    ```
 
 3. **Install test dependencies**:
+
    ```bash
    pip install -r requirements_test.txt
    ```
 
 4. **Run tests**:
+
    ```bash
    pytest tests/
    ```

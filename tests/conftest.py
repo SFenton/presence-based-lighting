@@ -1,9 +1,17 @@
 """Test configuration and fixtures for Presence Based Lighting."""
 import asyncio
 import sys
-from unittest.mock import MagicMock, patch
+import types
+import uuid
+from datetime import datetime
+from datetime import timezone
+from enum import Enum
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
 import pytest
 import pytest_asyncio
+import voluptuous as vol
 from aiohttp.resolver import ThreadedResolver
 from pytest_socket import enable_socket
 
@@ -13,9 +21,8 @@ if sys.platform.startswith("win"):
 
 # Stub homeassistant.runner before it can be imported to prevent it from
 # overriding our event loop policy with a proactor-based one
-import types
-runner_module = types.ModuleType('homeassistant.runner')
-sys.modules['homeassistant.runner'] = runner_module
+runner_module = types.ModuleType("homeassistant.runner")
+sys.modules["homeassistant.runner"] = runner_module
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -34,45 +41,47 @@ def event_loop():
     finally:
         loop.close()
 
-# Mock homeassistant before importing integration
-import sys
-import types
 
+# Mock homeassistant before importing integration
 # Create base homeassistant module as a real module, not a MagicMock
-homeassistant_module = types.ModuleType('homeassistant')
-sys.modules['homeassistant'] = homeassistant_module
+homeassistant_module = types.ModuleType("homeassistant")
+sys.modules["homeassistant"] = homeassistant_module
 
 # Create core and const modules
-core_module = types.ModuleType('homeassistant.core')
-sys.modules['homeassistant.core'] = core_module
+core_module = types.ModuleType("homeassistant.core")
+sys.modules["homeassistant.core"] = core_module
 homeassistant_module.core = core_module
 
-const_module = types.ModuleType('homeassistant.const')
-sys.modules['homeassistant.const'] = const_module
+const_module = types.ModuleType("homeassistant.const")
+sys.modules["homeassistant.const"] = const_module
 homeassistant_module.const = const_module
 
-components_module = types.ModuleType('homeassistant.components')
-sys.modules['homeassistant.components'] = components_module
+components_module = types.ModuleType("homeassistant.components")
+sys.modules["homeassistant.components"] = components_module
 homeassistant_module.components = components_module
 
-recorder_module = types.ModuleType('homeassistant.components.recorder')
-sys.modules['homeassistant.components.recorder'] = recorder_module
+recorder_module = types.ModuleType("homeassistant.components.recorder")
+sys.modules["homeassistant.components.recorder"] = recorder_module
 components_module.recorder = recorder_module
 
-recorder_history_module = types.ModuleType('homeassistant.components.recorder.history')
+recorder_history_module = types.ModuleType("homeassistant.components.recorder.history")
+
 
 def _recorder_get_significant_states(*_args, **_kwargs):
     return {}
 
+
 recorder_history_module.get_significant_states = _recorder_get_significant_states
-sys.modules['homeassistant.components.recorder.history'] = recorder_history_module
+sys.modules["homeassistant.components.recorder.history"] = recorder_history_module
 recorder_module.history = recorder_history_module
 
 # Create homeassistant.components.switch with SwitchEntity base class
-switch_component_module = types.ModuleType('homeassistant.components.switch')
+switch_component_module = types.ModuleType("homeassistant.components.switch")
+
 
 class _SwitchEntity:
     """Stub SwitchEntity base class for tests."""
+
     _attr_name = None
     _attr_unique_id = None
     _attr_icon = None
@@ -93,25 +102,26 @@ class _SwitchEntity:
 
     def async_write_ha_state(self):
         """Stub write state."""
-        pass
 
     async def async_added_to_hass(self):
         """Stub added_to_hass for MRO chain."""
-        pass
 
     async def async_get_last_state(self):
         """Stub restore state — overridden in tests."""
         return None
 
+
 switch_component_module.SwitchEntity = _SwitchEntity
-sys.modules['homeassistant.components.switch'] = switch_component_module
+sys.modules["homeassistant.components.switch"] = switch_component_module
 components_module.switch = switch_component_module
 
-config_entries_module = types.ModuleType('homeassistant.config_entries')
+config_entries_module = types.ModuleType("homeassistant.config_entries")
+
 
 # Create base flow classes with async methods
 class _BaseFlow:
     """Base flow class."""
+
     async def async_show_form(self, *args, **kwargs):
         """Mock show form."""
         return {"type": "form"}
@@ -120,8 +130,10 @@ class _BaseFlow:
         """Mock create entry - NOT async despite the name."""
         return {"type": "create_entry"}
 
+
 class ConfigFlow(_BaseFlow):
     """ConfigFlow that accepts domain parameter."""
+
     def __init_subclass__(cls, domain=None, **kwargs):
         """Handle domain parameter in subclass definition."""
         super().__init_subclass__(**kwargs)
@@ -140,8 +152,10 @@ class ConfigFlow(_BaseFlow):
         """Stub no-op for tests."""
         return None
 
+
 class OptionsFlow(_BaseFlow):
     """OptionsFlow base class."""
+
     def __init__(self, config_entry):
         """Initialize options flow."""
         self._config_entry = config_entry
@@ -151,14 +165,16 @@ class OptionsFlow(_BaseFlow):
         """Return the config entry."""
         return self._config_entry
 
+
 config_entries_module.ConfigFlow = ConfigFlow
 config_entries_module.OptionsFlow = OptionsFlow
 config_entries_module.ConfigEntry = type("ConfigEntry", (), {})
-sys.modules['homeassistant.config_entries'] = config_entries_module
-sys.modules['homeassistant.helpers.event'] = MagicMock()
+sys.modules["homeassistant.config_entries"] = config_entries_module
+sys.modules["homeassistant.helpers.event"] = MagicMock()
 
 # Entity registry stub – provides async_get returning a MagicMock registry
-entity_registry_module = types.ModuleType('homeassistant.helpers.entity_registry')
+entity_registry_module = types.ModuleType("homeassistant.helpers.entity_registry")
+
 
 class _MockRegistryEntry:
     def __init__(self, entity_id=None, name=None, original_name=None):
@@ -166,50 +182,61 @@ class _MockRegistryEntry:
         self.name = name
         self.original_name = original_name
 
+
 class _MockEntityRegistry:
     def __init__(self):
         self._entries = {}
+
     def async_get(self, entity_id):
         return self._entries.get(entity_id)
+
     def async_update_entity(self, entity_id, **kwargs):
         pass
 
+
 def _er_async_get(hass):
-    if not hasattr(hass, '_entity_registry'):
+    if not hasattr(hass, "_entity_registry"):
         hass._entity_registry = _MockEntityRegistry()
     return hass._entity_registry
 
+
 entity_registry_module.async_get = _er_async_get
 entity_registry_module.RegistryEntry = _MockRegistryEntry
-sys.modules['homeassistant.helpers.entity_registry'] = entity_registry_module
+sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_module
 
 # Restore state stub – provides RestoreEntity base class
-restore_state_module = types.ModuleType('homeassistant.helpers.restore_state')
+restore_state_module = types.ModuleType("homeassistant.helpers.restore_state")
+
 
 class _RestoreEntity:
     """Stub RestoreEntity that provides async_get_last_state."""
+
     async def async_added_to_hass(self):
         pass
+
     async def async_get_last_state(self):
         return None
 
+
 restore_state_module.RestoreEntity = _RestoreEntity
-sys.modules['homeassistant.helpers.restore_state'] = restore_state_module
+sys.modules["homeassistant.helpers.restore_state"] = restore_state_module
 
 # Provide a concrete homeassistant.util module with logging helpers
-util_module = types.ModuleType('homeassistant.util')
+util_module = types.ModuleType("homeassistant.util")
 homeassistant_module.util = util_module
-sys.modules['homeassistant.util'] = util_module
+sys.modules["homeassistant.util"] = util_module
 
-logging_module = types.ModuleType('homeassistant.util.logging')
+logging_module = types.ModuleType("homeassistant.util.logging")
+
 
 def _log_exception(*args, **kwargs):
     """Stub log_exception used by HA test fixtures."""
     return None
 
+
 logging_module.log_exception = _log_exception
 util_module.logging = logging_module
-sys.modules['homeassistant.util.logging'] = logging_module
+sys.modules["homeassistant.util.logging"] = logging_module
 
 
 def _slugify(value: str) -> str:
@@ -229,12 +256,12 @@ def _slugify(value: str) -> str:
 
 util_module.slugify = _slugify
 
-dt_module = types.ModuleType('homeassistant.util.dt')
+dt_module = types.ModuleType("homeassistant.util.dt")
 
-from datetime import datetime, timezone
 
 def _utcnow():
     return datetime.now(timezone.utc)
+
 
 def _as_utc(dt_obj):
     """Convert a datetime to UTC."""
@@ -242,22 +269,22 @@ def _as_utc(dt_obj):
         return dt_obj.replace(tzinfo=timezone.utc)
     return dt_obj.astimezone(timezone.utc)
 
+
 dt_module.utcnow = _utcnow
 dt_module.as_utc = _as_utc
-sys.modules['homeassistant.util.dt'] = dt_module
+sys.modules["homeassistant.util.dt"] = dt_module
 util_module.dt = dt_module
 
 
 # Set up config_validation as a real module with entity_id function
-import voluptuous as vol
-
 # Create helpers as a real module so submodules work properly
-helpers_module = types.ModuleType('homeassistant.helpers')
-sys.modules['homeassistant.helpers'] = helpers_module
+helpers_module = types.ModuleType("homeassistant.helpers")
+sys.modules["homeassistant.helpers"] = helpers_module
 homeassistant_module.helpers = helpers_module  # Set as attribute on parent module
 
 # Create selector module with lightweight placeholder classes used in config flow
-selector_module = types.ModuleType('homeassistant.helpers.selector')
+selector_module = types.ModuleType("homeassistant.helpers.selector")
+
 
 class _SelectorConfig(dict):
     def __init__(self, **kwargs):
@@ -273,6 +300,7 @@ def _make_selector(selector_key: str):
         else:
             payload = {}
         return {selector_key: payload}
+
     return _factory
 
 
@@ -302,27 +330,105 @@ selector_module.TextSelector = _make_selector("text")
 selector_module.TextSelectorConfig = _SelectorConfig
 selector_module.TextSelectorType = _TextSelectorType
 selector_module.TimeSelector = _make_selector("time")
-sys.modules['homeassistant.helpers.selector'] = selector_module
+sys.modules["homeassistant.helpers.selector"] = selector_module
 helpers_module.selector = selector_module
 
-cv_module = types.ModuleType('homeassistant.helpers.config_validation')
+service_helper_module = types.ModuleType("homeassistant.helpers.service")
+
+
+def _service_target_id_set(value):
+    if not value:
+        return set()
+    if isinstance(value, str):
+        return {value}
+    return {item for item in value if isinstance(item, str)}
+
+
+def _async_extract_entity_ids(service_call, expand_group=True):
+    """Model Home Assistant 2026.8 async service target expansion."""
+
+    async def _resolve():
+        hass = service_call.hass
+        hass._target_expansion_calls.append(service_call)
+        error = getattr(hass, "_target_expansion_error", None)
+        if error is not None:
+            raise error
+
+        service_data = service_call.data
+        selected = _service_target_id_set(service_data.get("entity_id"))
+        mappings = getattr(hass, "_service_target_entities", {})
+        for selector, ids in (
+            ("device_id", _service_target_id_set(service_data.get("device_id"))),
+            ("area_id", _service_target_id_set(service_data.get("area_id"))),
+            ("floor_id", _service_target_id_set(service_data.get("floor_id"))),
+            ("label_id", _service_target_id_set(service_data.get("label_id"))),
+        ):
+            selector_mappings = mappings.get(selector, {})
+            for selector_id in ids:
+                selected.update(selector_mappings.get(selector_id, set()))
+        return selected
+
+    return _resolve()
+
+
+service_helper_module.async_extract_entity_ids = _async_extract_entity_ids
+sys.modules["homeassistant.helpers.service"] = service_helper_module
+helpers_module.service = service_helper_module
+
+cv_module = types.ModuleType("homeassistant.helpers.config_validation")
+
+
 def _validate_entity_id(value: str) -> str:
     """Validate entity ID format."""
     if not isinstance(value, str) or "." not in value:
         raise vol.Invalid("invalid_entity")
     return value
+
+
 cv_module.entity_id = _validate_entity_id
-sys.modules['homeassistant.helpers.config_validation'] = cv_module
+sys.modules["homeassistant.helpers.config_validation"] = cv_module
 helpers_module.config_validation = cv_module
 
+storage_module = types.ModuleType("homeassistant.helpers.storage")
+
+
+class MockStore:
+    """In-memory Home Assistant Store replacement."""
+
+    def __init__(self, hass, version, key):
+        self.hass = hass
+        self.version = version
+        self.key = key
+        self.fail_load = False
+        self.fail_save = False
+
+    async def async_load(self):
+        if self.fail_load:
+            raise OSError("store load failed")
+        return getattr(self.hass, "_storage", {}).get(self.key)
+
+    async def async_save(self, data):
+        if self.fail_save:
+            raise OSError("store save failed")
+        if not hasattr(self.hass, "_storage"):
+            self.hass._storage = {}
+        self.hass._storage[self.key] = data
+
+
+storage_module.Store = MockStore
+sys.modules["homeassistant.helpers.storage"] = storage_module
+helpers_module.storage = storage_module
+
 # Provide aiohttp_client submodule stub for fixtures expecting resolver patching
-aiohttp_client_module = types.ModuleType('homeassistant.helpers.aiohttp_client')
+aiohttp_client_module = types.ModuleType("homeassistant.helpers.aiohttp_client")
+
 
 async def _async_make_resolver(*_args, **_kwargs):
     return ThreadedResolver()
 
+
 aiohttp_client_module._async_make_resolver = _async_make_resolver
-sys.modules['homeassistant.helpers.aiohttp_client'] = aiohttp_client_module
+sys.modules["homeassistant.helpers.aiohttp_client"] = aiohttp_client_module
 helpers_module.aiohttp_client = aiohttp_client_module
 
 
@@ -337,9 +443,20 @@ async def mock_zeroconf_resolver():
 
 
 # Add types to core module
-import uuid
 # core_module already created above
 core_module.HomeAssistant = type("HomeAssistant", (), {})
+
+
+class SupportsResponse(Enum):
+    """Minimal HA service response contract."""
+
+    NONE = "none"
+    OPTIONAL = "optional"
+    ONLY = "only"
+
+
+core_module.SupportsResponse = SupportsResponse
+
 
 # Context with id attribute
 class MockContext:
@@ -348,8 +465,30 @@ class MockContext:
         self.parent_id = parent_id
         self.user_id = user_id
 
+
+class MockServiceCall:
+    """Home Assistant 2026.8-compatible service call."""
+
+    def __init__(
+        self,
+        hass,
+        domain,
+        service,
+        data=None,
+        context=None,
+        return_response=False,
+    ):
+        self.hass = hass
+        self.domain = domain
+        self.service = service
+        self.data = data or {}
+        self.context = context or MockContext()
+        self.return_response = return_response
+
+
 core_module.Context = MockContext
 core_module.Event = type("Event", (), {})
+core_module.ServiceCall = MockServiceCall
 core_module.callback = lambda func: func  # Simple decorator that returns function as-is
 
 # Define constants we need
@@ -364,7 +503,7 @@ const_module.STATE_OFF = STATE_OFF
 const_module.EVENT_STATE_CHANGED = EVENT_STATE_CHANGED
 const_module.EVENT_CALL_SERVICE = EVENT_CALL_SERVICE
 
-from custom_components.presence_based_lighting.const import (
+from custom_components.presence_based_lighting.const import (  # noqa: E402
     CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -384,7 +523,6 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_CLEARED_STATE,
     DEFAULT_DETECTED_SERVICE,
     DEFAULT_DETECTED_STATE,
-    DEFAULT_DISABLE_ON_EXTERNAL,
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
@@ -566,6 +704,14 @@ class MockHass:
         self.bus = MockBus()
         self._state_listeners = []
         self._context_counter = 0
+        self._service_target_entities = {
+            "area_id": {},
+            "device_id": {},
+            "label_id": {},
+            "floor_id": {},
+        }
+        self._target_expansion_error = None
+        self._target_expansion_calls = []
 
     @property
     def context(self):
@@ -625,6 +771,7 @@ class MockServices:
         """Initialize mock services."""
         self.calls = []
         self._registered = {}  # (domain, service) -> handler
+        self._registered_metadata = {}
         self._descriptions = {
             "light": {
                 "turn_on": {
@@ -646,15 +793,19 @@ class MockServices:
             },
         }
 
-    async def async_call(self, domain, service, service_data=None, blocking=False, context=None):
+    async def async_call(
+        self, domain, service, service_data=None, blocking=False, context=None
+    ):
         """Call a service."""
-        self.calls.append({
-            "domain": domain,
-            "service": service,
-            "service_data": service_data or {},
-            "blocking": blocking,
-            "context": context,
-        })
+        self.calls.append(
+            {
+                "domain": domain,
+                "service": service,
+                "service_data": service_data or {},
+                "blocking": blocking,
+                "context": context,
+            }
+        )
 
     def clear(self):
         """Clear service calls."""
@@ -664,9 +815,20 @@ class MockServices:
         """Return mocked service descriptions."""
         return self._descriptions
 
-    def async_register(self, domain, service, handler, schema=None):
+    def async_register(
+        self,
+        domain,
+        service,
+        handler,
+        schema=None,
+        supports_response=SupportsResponse.NONE,
+    ):
         """Register a service handler for later invocation in tests."""
         self._registered[(domain, service)] = handler
+        self._registered_metadata[(domain, service)] = {
+            "schema": schema,
+            "supports_response": supports_response,
+        }
 
     def async_services(self):
         """Return registered services map."""
@@ -785,13 +947,17 @@ def assert_service_called(mock_hass, domain, service, entity_id=None):
                 target_entities = target
             if entity_id in target_entities:
                 return True
-    raise AssertionError(f"Service {domain}.{service} was not called" +
-                        (f" for {entity_id}" if entity_id else ""))
+    raise AssertionError(
+        f"Service {domain}.{service} was not called"
+        + (f" for {entity_id}" if entity_id else "")
+    )
 
 
 def assert_service_not_called(mock_hass, domain, service):
     """Assert a service was not called."""
     for call in mock_hass.services.calls:
         if call["domain"] == domain and call["service"] == service:
-            raise AssertionError(f"Service {domain}.{service} should not have been called")
+            raise AssertionError(
+                f"Service {domain}.{service} should not have been called"
+            )
     return True

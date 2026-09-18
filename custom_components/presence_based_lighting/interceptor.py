@@ -41,10 +41,13 @@ from .const import DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED
 from .const import DEFAULT_REQUIRE_VACANCY_FOR_CLEARED
 from .const import DEFAULT_USE_INTERCEPTOR
 from .const import DOMAIN
+from .entity_targeting import async_extract_service_target_entity_ids
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
     from homeassistant.config_entries import ConfigEntry
+
+    from .control_lease import ControlLeaseManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +57,8 @@ INTERCEPTOR_PRIORITY = 50
 NORMALIZER_INTERCEPTOR_PRIORITY = 200
 NORMALIZER_INTEGRATION = f"{DOMAIN}_plain_on_normalizer"
 NORMALIZER_MANAGER_KEY = "_light_turn_on_normalizer"
+CONTROL_LEASE_INTERCEPTOR_PRIORITY = 25
+CONTROL_LEASE_INTERCEPTOR_INTEGRATION = f"{DOMAIN}_control_lease"
 
 _ABSOLUTE_BRIGHTNESS_KEYS = {
     "brightness",
@@ -278,6 +283,13 @@ class LightTurnOnNormalizer:
         if len(target_entities) != 1:
             return InterceptResult.ALLOW
 
+        from .control_lease import get_control_lease_manager
+
+        if get_control_lease_manager(self.hass).has_brightness_authority(
+            target_entities[0]
+        ):
+            return InterceptResult.ALLOW
+
         params = data.get("params")
         if not isinstance(params, dict):
             params = data
@@ -328,6 +340,136 @@ def get_light_turn_on_normalizer(hass: HomeAssistant) -> LightTurnOnNormalizer:
     return normalizer
 
 
+class ControlLeaseInterceptor:
+    """Enforce exact lease contexts immediately before light dispatch."""
+
+    def __init__(self, hass: HomeAssistant, manager: ControlLeaseManager) -> None:
+        self.hass = hass
+        self._manager = manager
+        self._unregister: list[Callable[[], None]] = []
+
+    def setup(self) -> bool:
+        """Register one domain-wide ON guard and OFF break handler."""
+        if not HAS_INTERCEPTOR:
+            return False
+        try:
+            self._unregister.append(
+                register_interceptor(
+                    self.hass,
+                    domain="light",
+                    service="turn_on",
+                    handler=self._handle_turn_on,
+                    priority=CONTROL_LEASE_INTERCEPTOR_PRIORITY,
+                    integration=CONTROL_LEASE_INTERCEPTOR_INTEGRATION,
+                )
+            )
+            self._unregister.append(
+                register_interceptor(
+                    self.hass,
+                    domain="light",
+                    service="turn_off",
+                    handler=self._handle_turn_off,
+                    priority=CONTROL_LEASE_INTERCEPTOR_PRIORITY,
+                    integration=CONTROL_LEASE_INTERCEPTOR_INTEGRATION,
+                )
+            )
+        except RuntimeError as err:
+            _LOGGER.error("Failed to register control-lease interceptor: %s", err)
+            self.teardown()
+            return False
+        return True
+
+    async def _handle_turn_on(self, call: ServiceCall, data: dict):
+        targets = data.get("entity_id", [])
+        if isinstance(targets, str):
+            targets = [targets]
+        params = data.get("params")
+        service_data = params if isinstance(params, dict) else data
+        has_brightness_authority = self._manager.service_data_has_brightness_authority(
+            service_data
+        )
+        decision = (
+            self._manager.guard_control_lease_command(
+                getattr(call, "context", None),
+                service="turn_on",
+                target_entity_ids=targets,
+                service_data=service_data,
+            )
+            if targets
+            else None
+        )
+        if (
+            (decision is None or not decision.owned)
+            and has_brightness_authority
+            and self._manager.has_any_candidate()
+        ):
+            try:
+                targets = set(targets) | await async_extract_service_target_entity_ids(
+                    call
+                )
+            except Exception:
+                _LOGGER.exception("Failed to resolve explicit-brightness light targets")
+                if self._manager.has_any_enforced_candidate():
+                    return InterceptResult.BLOCK
+                return InterceptResult.ALLOW
+            decision = self._manager.guard_control_lease_command(
+                getattr(call, "context", None),
+                service="turn_on",
+                target_entity_ids=targets,
+                service_data=service_data,
+            )
+        if decision is None:
+            if not has_brightness_authority:
+                return InterceptResult.ALLOW
+            await self._manager.async_break_for_brightness_targets(
+                targets,
+                service_data=service_data,
+                context=getattr(call, "context", None),
+            )
+            return InterceptResult.ALLOW
+        if not decision.allowed:
+            _LOGGER.warning(
+                "Blocked stale or invalid control-lease light command (%s)",
+                decision.reason,
+            )
+            return InterceptResult.BLOCK
+        for selector in ("area_id", "device_id", "floor_id", "label_id"):
+            data.pop(selector, None)
+        data["entity_id"] = list(decision.target_entity_ids)
+        return InterceptResult.ALLOW
+
+    async def _handle_turn_off(self, call: ServiceCall, data: dict):
+        if not self._manager.has_any_candidate():
+            return InterceptResult.ALLOW
+        targets = data.get("entity_id", [])
+        if isinstance(targets, str):
+            targets = [targets]
+        try:
+            targets = set(targets) | await async_extract_service_target_entity_ids(call)
+        except Exception:
+            # OFF must still pass if HA cannot resolve a selector. Revoke only
+            # proven explicit scope rather than guessing unrelated room ownership.
+            _LOGGER.exception(
+                "Failed to resolve OFF targets; preserving explicit OFF scope"
+            )
+        await self._manager.async_break_for_off_targets(
+            targets,
+            context=getattr(call, "context", None),
+        )
+        return InterceptResult.ALLOW
+
+    def teardown(self) -> None:
+        for unregister in self._unregister:
+            try:
+                unregister()
+            except Exception as err:
+                _LOGGER.warning(
+                    "Error unregistering control-lease interceptor: %s",
+                    err,
+                )
+        self._unregister.clear()
+
+
 class PresenceLockInterceptor:
     """Manages plain-on normalization and Presence Lock interceptors.
 
@@ -346,12 +488,12 @@ class PresenceLockInterceptor:
         entity_may_enforce_func: Callable[[str], bool] | None = None,
         entry_is_active_func: Callable[[], bool] | None = None,
         is_clearing_authority_occupied_func: Callable[[], bool] | None = None,
-        classify_command_context_func: Callable[
-            [str, object | None, str | None], CommandOrigin
-        ]
-        | None = None,
-        handle_blocked_command_func: Callable[[str, str, object | None, dict], bool]
-        | None = None,
+        classify_command_context_func: (
+            Callable[[str, object | None, str | None], CommandOrigin] | None
+        ) = None,
+        handle_blocked_command_func: (
+            Callable[[str, str, object | None, dict], bool] | None
+        ) = None,
     ) -> None:
         """Initialize the interceptor manager.
 
@@ -515,8 +657,6 @@ class PresenceLockInterceptor:
             target_state: State expected after the service completes
             block_when_empty: If True, block when room is empty; if False, block when occupied
         """
-        service_key = (domain, service)
-
         # We may register multiple entities for the same service
         # The handler will check the entity_id in the service data
 

@@ -1,15 +1,12 @@
 """Multi-entity regression tests for Presence Based Lighting."""
-
 import asyncio
 
 import pytest
-from homeassistant.const import STATE_OFF, STATE_ON
-
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
-from tests.conftest import (
-    assert_service_called,
-    setup_multi_entity_states,
-)
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
+from tests.conftest import assert_service_called
+from tests.conftest import setup_multi_entity_states
 
 
 def _event(mock_hass, entity_id, old_state, new_state, context=None):
@@ -20,16 +17,24 @@ def _event(mock_hass, entity_id, old_state, new_state, context=None):
         {
             "data": {
                 "entity_id": entity_id,
-                "old_state": type(
-                    "State", (), {"state": old_state, "attributes": {}, "context": context}
-                )()
-                if old_state is not None
-                else None,
-                "new_state": type(
-                    "State", (), {"state": new_state, "attributes": {}, "context": context}
-                )()
-                if new_state is not None
-                else None,
+                "old_state": (
+                    type(
+                        "State",
+                        (),
+                        {"state": old_state, "attributes": {}, "context": context},
+                    )()
+                    if old_state is not None
+                    else None
+                ),
+                "new_state": (
+                    type(
+                        "State",
+                        (),
+                        {"state": new_state, "attributes": {}, "context": context},
+                    )()
+                    if new_state is not None
+                    else None
+                ),
             }
         },
     )()
@@ -37,13 +42,17 @@ def _event(mock_hass, entity_id, old_state, new_state, context=None):
 
 class TestMultiEntity:
     @pytest.mark.asyncio
-    async def test_all_entities_follow_presence(self, mock_hass, mock_config_entry_multi):
+    async def test_all_entities_follow_presence(
+        self, mock_hass, mock_config_entry_multi
+    ):
         setup_multi_entity_states(
             mock_hass,
             lights_states=[STATE_OFF, STATE_OFF],
             occupancy_states=[STATE_OFF, STATE_OFF],
         )
-        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_multi)
+        coordinator = PresenceBasedLightingCoordinator(
+            mock_hass, mock_config_entry_multi
+        )
         await coordinator.async_start()
 
         await coordinator._handle_presence_change(
@@ -64,18 +73,28 @@ class TestMultiEntity:
             assert_service_called(mock_hass, "light", "turn_off", entity["entity_id"])
 
     @pytest.mark.asyncio
-    async def test_manual_override_is_per_entity(self, mock_hass, mock_config_entry_multi):
+    async def test_manual_override_is_per_entity(
+        self, mock_hass, mock_config_entry_multi
+    ):
         setup_multi_entity_states(
             mock_hass,
             lights_states=[STATE_ON, STATE_ON],
             occupancy_states=[STATE_ON, STATE_ON],
         )
-        coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry_multi)
+        coordinator = PresenceBasedLightingCoordinator(
+            mock_hass, mock_config_entry_multi
+        )
         await coordinator.async_start()
 
         manual_context = type("Ctx", (), {"id": "manual", "parent_id": None})()
         await coordinator._handle_controlled_entity_change(
-            _event(mock_hass, "light.living_room_1", STATE_ON, STATE_OFF, context=manual_context)
+            _event(
+                mock_hass,
+                "light.living_room_1",
+                STATE_ON,
+                STATE_OFF,
+                context=manual_context,
+            )
         )
 
         mock_hass.services.clear()

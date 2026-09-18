@@ -41,8 +41,8 @@
         }
       },
       "choose_edit_entity": {
-    "title": "Rediger en enhet",
-    "description": "Velg en enhet du vil redigere.\n{entity_cards}",
+        "title": "Rediger en enhet",
+        "description": "Velg en enhet du vil redigere.\n{entity_cards}",
         "data": {
           "entity_to_edit": "Enhet å redigere"
         }

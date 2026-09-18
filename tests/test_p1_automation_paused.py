@@ -11,32 +11,39 @@ Key behaviors to test:
 4. automation_paused is NOT persisted (resets on restart)
 5. presence_allowed IS persisted (via RestoreEntity)
 """
-import asyncio
 from unittest.mock import MagicMock
 
 import pytest
-from homeassistant.const import STATE_ON, STATE_OFF
-
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
 from custom_components.presence_based_lighting.const import (
-    CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_SENSORS,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_ROOM_NAME,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_DETECTED_STATE,
 )
+from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
+from custom_components.presence_based_lighting.const import (
+    CONF_INITIAL_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
+from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_CLEARED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_CLEARED_STATE
+from custom_components.presence_based_lighting.const import (
+    CONF_PRESENCE_DETECTED_SERVICE,
+)
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECTED_STATE
+from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
+from custom_components.presence_based_lighting.const import (
+    CONF_RESPECTS_PRESENCE_ALLOWED,
+)
+from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
+from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
 
 
 def _make_entry(entity_configs):
@@ -94,9 +101,9 @@ class TestTwoBooleanInitialization:
         entry = _make_entry([_make_entity_config("light.test")])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
-        
+
         # presence_allowed should be True (from CONF_INITIAL_PRESENCE_ALLOWED)
         assert coordinator.get_presence_allowed("light.test") is True
         # automation_paused should be False (default)
@@ -110,9 +117,9 @@ class TestTwoBooleanInitialization:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
-        
+
         assert coordinator.get_presence_allowed("light.test") is False
         assert coordinator.get_automation_paused("light.test") is True
 
@@ -127,24 +134,24 @@ class TestManualControlSetsAutomationPaused:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_ON)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         # Initial state: both should allow automation
         assert coordinator.get_presence_allowed("light.test") is True
         assert coordinator.get_automation_paused("light.test") is False
-        
+
         # Simulate manual off
         event = MagicMock()
         event.data = _state_change_event(mock_hass, "light.test", STATE_ON, STATE_OFF)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # presence_allowed should STILL be True
         assert coordinator.get_presence_allowed("light.test") is True
         # automation_paused should now be True
         assert coordinator.get_automation_paused("light.test") is True
-        
+
         coordinator.async_stop()
 
     @pytest.mark.asyncio
@@ -154,24 +161,24 @@ class TestManualControlSetsAutomationPaused:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         # First pause automation
         coordinator.set_automation_paused("light.test", True)
         assert coordinator.get_automation_paused("light.test") is True
-        
+
         # Simulate manual on
         event = MagicMock()
         event.data = _state_change_event(mock_hass, "light.test", STATE_OFF, STATE_ON)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # presence_allowed should still be True
         assert coordinator.get_presence_allowed("light.test") is True
         # automation_paused should now be False
         assert coordinator.get_automation_paused("light.test") is False
-        
+
         coordinator.async_stop()
 
 
@@ -185,20 +192,20 @@ class TestPresenceAllowedOnlyChangedByUser:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         # User turns off presence_allowed
         await coordinator.async_set_presence_allowed("light.test", False)
         assert coordinator.get_presence_allowed("light.test") is False
         assert coordinator.get_automation_paused("light.test") is True
-        
+
         # User turns it back on
         await coordinator.async_set_presence_allowed("light.test", True)
         assert coordinator.get_presence_allowed("light.test") is True
         assert coordinator.get_automation_paused("light.test") is False
-        
+
         coordinator.async_stop()
 
     @pytest.mark.asyncio
@@ -208,24 +215,26 @@ class TestPresenceAllowedOnlyChangedByUser:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_ON)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         initial_presence_allowed = coordinator.get_presence_allowed("light.test")
-        
+
         # Manual off
         event = MagicMock()
         event.data = _state_change_event(mock_hass, "light.test", STATE_ON, STATE_OFF)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # Manual on
         event.data = _state_change_event(mock_hass, "light.test", STATE_OFF, STATE_ON)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # presence_allowed should be unchanged
-        assert coordinator.get_presence_allowed("light.test") == initial_presence_allowed
-        
+        assert (
+            coordinator.get_presence_allowed("light.test") == initial_presence_allowed
+        )
+
         coordinator.async_stop()
 
 
@@ -239,16 +248,16 @@ class TestBothMustBeFavorable:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_ON)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         # Disable via user toggle
         await coordinator.async_set_presence_allowed("light.test", False)
-        
+
         entity_state = coordinator._entity_states["light.test"]
         assert coordinator._should_follow_presence(entity_state) is False
-        
+
         coordinator.async_stop()
 
     @pytest.mark.asyncio
@@ -258,16 +267,16 @@ class TestBothMustBeFavorable:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_ON)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         # Pause via manual control
         coordinator.set_automation_paused("light.test", True)
-        
+
         entity_state = coordinator._entity_states["light.test"]
         assert coordinator._should_follow_presence(entity_state) is False
-        
+
         coordinator.async_stop()
 
     @pytest.mark.asyncio
@@ -277,13 +286,13 @@ class TestBothMustBeFavorable:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_ON)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         entity_state = coordinator._entity_states["light.test"]
         assert coordinator._should_follow_presence(entity_state) is True
-        
+
         coordinator.async_stop()
 
     @pytest.mark.asyncio
@@ -293,16 +302,16 @@ class TestBothMustBeFavorable:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_ON)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         await coordinator.async_set_presence_allowed("light.test", False)
         coordinator.set_automation_paused("light.test", True)
-        
+
         entity_state = coordinator._entity_states["light.test"]
         assert coordinator._should_follow_presence(entity_state) is False
-        
+
         coordinator.async_stop()
 
 
@@ -316,24 +325,24 @@ class TestAutomationPausedNotPersisted:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         # First coordinator instance
         coordinator1 = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator1.async_start()
-        
+
         # Pause automation
         coordinator1.set_automation_paused("light.test", True)
         assert coordinator1.get_automation_paused("light.test") is True
-        
+
         coordinator1.async_stop()
-        
+
         # New coordinator instance (simulating restart)
         coordinator2 = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator2.async_start()
-        
+
         # automation_paused should be reset to False
         assert coordinator2.get_automation_paused("light.test") is False
-        
+
         coordinator2.async_stop()
 
 
@@ -347,23 +356,23 @@ class TestSwitchReflectsPresenceAllowedNotPaused:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_ON)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         # presence_allowed should be True (this is what switch shows)
         assert coordinator.get_presence_allowed("light.test") is True
-        
+
         # Manual off pauses automation
         event = MagicMock()
         event.data = _state_change_event(mock_hass, "light.test", STATE_ON, STATE_OFF)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # Switch should still show ON (presence_allowed unchanged)
         assert coordinator.get_presence_allowed("light.test") is True
         # But automation is paused
         assert coordinator.get_automation_paused("light.test") is True
-        
+
         coordinator.async_stop()
 
 
@@ -381,22 +390,24 @@ class TestLegacyBehaviorUsesPaused:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_ON)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         initial_presence_allowed = coordinator.get_presence_allowed("light.test")
-        
+
         # Manual off (cleared state)
         event = MagicMock()
         event.data = _state_change_event(mock_hass, "light.test", STATE_ON, STATE_OFF)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # presence_allowed should be unchanged
-        assert coordinator.get_presence_allowed("light.test") == initial_presence_allowed
+        assert (
+            coordinator.get_presence_allowed("light.test") == initial_presence_allowed
+        )
         # automation_paused should be True
         assert coordinator.get_automation_paused("light.test") is True
-        
+
         coordinator.async_stop()
 
 
@@ -410,36 +421,36 @@ class TestCompleteScenario:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_ON)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         entity_state = coordinator._entity_states["light.test"]
-        
+
         # Initial: automation should work
         assert coordinator._should_follow_presence(entity_state) is True
         assert coordinator.get_presence_allowed("light.test") is True
         assert coordinator.get_automation_paused("light.test") is False
-        
+
         # Manual off
         event = MagicMock()
         event.data = _state_change_event(mock_hass, "light.test", STATE_ON, STATE_OFF)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # Automation paused, but user toggle unchanged
         assert coordinator._should_follow_presence(entity_state) is False
         assert coordinator.get_presence_allowed("light.test") is True
         assert coordinator.get_automation_paused("light.test") is True
-        
+
         # Manual on
         event.data = _state_change_event(mock_hass, "light.test", STATE_OFF, STATE_ON)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # Automation resumed, user toggle still unchanged
         assert coordinator._should_follow_presence(entity_state) is True
         assert coordinator.get_presence_allowed("light.test") is True
         assert coordinator.get_automation_paused("light.test") is False
-        
+
         coordinator.async_stop()
 
     @pytest.mark.asyncio
@@ -449,26 +460,28 @@ class TestCompleteScenario:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         coordinator = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator.async_start()
-        
+
         # User disables presence tracking
         await coordinator.async_set_presence_allowed("light.test", False)
-        
+
         entity_state = coordinator._entity_states["light.test"]
         assert coordinator._should_follow_presence(entity_state) is False
-        
+
         # Manual on (would normally resume automation_paused)
         event = MagicMock()
         event.data = _state_change_event(mock_hass, "light.test", STATE_OFF, STATE_ON)
         await coordinator._handle_controlled_entity_change(event)
-        
+
         # Automation should STILL be blocked because presence_allowed is False
         assert coordinator.get_presence_allowed("light.test") is False
         assert coordinator.get_automation_paused("light.test") is True
-        assert coordinator._should_follow_presence(entity_state) is False  # But still blocked
-        
+        assert (
+            coordinator._should_follow_presence(entity_state) is False
+        )  # But still blocked
+
         coordinator.async_stop()
 
     @pytest.mark.asyncio
@@ -478,33 +491,33 @@ class TestCompleteScenario:
         entry = _make_entry([config])
         mock_hass.states.set("binary_sensor.motion", STATE_OFF)
         mock_hass.states.set("light.test", STATE_OFF)
-        
+
         # First session: user enables, then automation gets paused
         coordinator1 = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator1.async_start()
-        
+
         await coordinator1.async_set_presence_allowed("light.test", True)
         coordinator1.set_automation_paused("light.test", True)
-        
+
         assert coordinator1.get_presence_allowed("light.test") is True
         assert coordinator1.get_automation_paused("light.test") is True
-        
+
         coordinator1.async_stop()
-        
+
         # Reboot: new coordinator, but switch restores presence_allowed
         coordinator2 = PresenceBasedLightingCoordinator(mock_hass, entry)
         await coordinator2.async_start()
-        
+
         # Simulate RestoreEntity restoring presence_allowed to True
         coordinator2.register_presence_switch("light.test", True, lambda: None)
-        
+
         # presence_allowed should be restored
         assert coordinator2.get_presence_allowed("light.test") is True
         # automation_paused should be reset (not persisted)
         assert coordinator2.get_automation_paused("light.test") is False
-        
+
         # Automation should work
         entity_state = coordinator2._entity_states["light.test"]
         assert coordinator2._should_follow_presence(entity_state) is True
-        
+
         coordinator2.async_stop()
