@@ -23,7 +23,6 @@ from custom_components.presence_based_lighting.const import (
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
 )
 from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
-from custom_components.presence_based_lighting.const import CONF_ENTITY_OFF_DELAY
 from custom_components.presence_based_lighting.const import (
     CONF_INITIAL_PRESENCE_ALLOWED,
 )
@@ -45,7 +44,6 @@ from custom_components.presence_based_lighting.const import NO_ACTION
 from homeassistant.const import STATE_OFF
 from homeassistant.const import STATE_ON
 from tests.conftest import assert_service_called
-from tests.conftest import assert_service_not_called
 
 
 def _create_living_room_entry():

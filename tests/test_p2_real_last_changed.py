@@ -1,7 +1,6 @@
 """Tests for real_last_changed.py uncovered helpers."""
 from unittest.mock import MagicMock
 
-import pytest
 from custom_components.presence_based_lighting.real_last_changed import (
     ATTR_PREVIOUS_VALID_STATE,
 )

@@ -1,5 +1,4 @@
 """Redacted diagnostics for Presence Based Lighting."""
-
 from __future__ import annotations
 
 from typing import Any

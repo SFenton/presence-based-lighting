@@ -24,9 +24,6 @@ from custom_components.presence_based_lighting.config_flow import (
 )
 from custom_components.presence_based_lighting.const import AUTOMATION_MODE_AUTOMATIC
 from custom_components.presence_based_lighting.const import CONF_AUTOMATION_MODE
-from custom_components.presence_based_lighting.const import (
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-)
 from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
 from custom_components.presence_based_lighting.const import (
     CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
@@ -51,12 +48,6 @@ from custom_components.presence_based_lighting.const import (
 )
 from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
 from custom_components.presence_based_lighting.const import (
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-)
-from custom_components.presence_based_lighting.const import (
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-)
-from custom_components.presence_based_lighting.const import (
     CONF_RESPECTS_PRESENCE_ALLOWED,
 )
 from custom_components.presence_based_lighting.const import DEFAULT_AUTOMATION_MODE
@@ -75,12 +66,6 @@ from custom_components.presence_based_lighting.const import (
 )
 from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_DETECTED_TRANSITION,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 )
 
 

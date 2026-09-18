@@ -1,13 +1,17 @@
 """Test configuration and fixtures for Presence Based Lighting."""
-
 import asyncio
 import sys
+import types
+import uuid
+from datetime import datetime
+from datetime import timezone
 from enum import Enum
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
+import voluptuous as vol
 from aiohttp.resolver import ThreadedResolver
 from pytest_socket import enable_socket
 
@@ -17,8 +21,6 @@ if sys.platform.startswith("win"):
 
 # Stub homeassistant.runner before it can be imported to prevent it from
 # overriding our event loop policy with a proactor-based one
-import types
-
 runner_module = types.ModuleType("homeassistant.runner")
 sys.modules["homeassistant.runner"] = runner_module
 
@@ -41,9 +43,6 @@ def event_loop():
 
 
 # Mock homeassistant before importing integration
-import sys
-import types
-
 # Create base homeassistant module as a real module, not a MagicMock
 homeassistant_module = types.ModuleType("homeassistant")
 sys.modules["homeassistant"] = homeassistant_module
@@ -103,11 +102,9 @@ class _SwitchEntity:
 
     def async_write_ha_state(self):
         """Stub write state."""
-        pass
 
     async def async_added_to_hass(self):
         """Stub added_to_hass for MRO chain."""
-        pass
 
     async def async_get_last_state(self):
         """Stub restore state — overridden in tests."""
@@ -261,8 +258,6 @@ util_module.slugify = _slugify
 
 dt_module = types.ModuleType("homeassistant.util.dt")
 
-from datetime import datetime, timezone
-
 
 def _utcnow():
     return datetime.now(timezone.utc)
@@ -282,8 +277,6 @@ util_module.dt = dt_module
 
 
 # Set up config_validation as a real module with entity_id function
-import voluptuous as vol
-
 # Create helpers as a real module so submodules work properly
 helpers_module = types.ModuleType("homeassistant.helpers")
 sys.modules["homeassistant.helpers"] = helpers_module
@@ -450,8 +443,6 @@ async def mock_zeroconf_resolver():
 
 
 # Add types to core module
-import uuid
-
 # core_module already created above
 core_module.HomeAssistant = type("HomeAssistant", (), {})
 
@@ -512,7 +503,7 @@ const_module.STATE_OFF = STATE_OFF
 const_module.EVENT_STATE_CHANGED = EVENT_STATE_CHANGED
 const_module.EVENT_CALL_SERVICE = EVENT_CALL_SERVICE
 
-from custom_components.presence_based_lighting.const import (
+from custom_components.presence_based_lighting.const import (  # noqa: E402
     CONF_CLEARING_SENSORS,
     CONF_CONTROLLED_ENTITIES,
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
@@ -532,7 +523,6 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_CLEARED_STATE,
     DEFAULT_DETECTED_SERVICE,
     DEFAULT_DETECTED_STATE,
-    DEFAULT_DISABLE_ON_EXTERNAL,
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
     DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,

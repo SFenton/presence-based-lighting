@@ -1,5 +1,4 @@
 """Tests for domain-wide PBL command context classification."""
-
 from custom_components.presence_based_lighting.command_context import CommandOrigin
 from custom_components.presence_based_lighting.command_context import (
     PresenceCommandContextRegistry,

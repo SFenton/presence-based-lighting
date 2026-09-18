@@ -2,7 +2,6 @@
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
-from unittest.mock import PropertyMock
 
 import pytest
 from custom_components.presence_based_lighting.const import (

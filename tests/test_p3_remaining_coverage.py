@@ -1,24 +1,16 @@
 """Tests targeting the remaining uncovered lines in __init__.py and config_flow.py to reach 95%."""
-import asyncio
 import json
 import logging
 from datetime import datetime
 from datetime import time
 from datetime import timedelta
 from datetime import timezone
-from pathlib import Path
 from unittest.mock import AsyncMock
-from unittest.mock import call
 from unittest.mock import MagicMock
 from unittest.mock import patch
-from unittest.mock import PropertyMock
 
 import pytest
-from custom_components.presence_based_lighting import _emit_direct_to_file
-from custom_components.presence_based_lighting import _force_component_logger_debug
-from custom_components.presence_based_lighting import _RECONCILIATION_INTERVAL
 from custom_components.presence_based_lighting import _setup_file_logging
-from custom_components.presence_based_lighting import _WAITING_FOR_CLEAR_MAX_SECONDS
 from custom_components.presence_based_lighting import ActuationStatus
 from custom_components.presence_based_lighting import async_reload_entry
 from custom_components.presence_based_lighting import async_setup
@@ -28,9 +20,6 @@ from custom_components.presence_based_lighting import EntityAutomationState
 from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
 from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CONDITIONS
 from custom_components.presence_based_lighting.const import CONF_AUTO_REENABLE_END_TIME
-from custom_components.presence_based_lighting.const import (
-    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
-)
 from custom_components.presence_based_lighting.const import (
     CONF_AUTO_REENABLE_START_TIME,
 )
@@ -69,24 +58,13 @@ from custom_components.presence_based_lighting.const import (
 )
 from custom_components.presence_based_lighting.const import CONF_RLC_TRACKING_ENTITY
 from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_END_TIME,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_START_TIME,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
-)
 from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
 from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
-from custom_components.presence_based_lighting.const import DEFAULT_DISABLE_ON_EXTERNAL
 from custom_components.presence_based_lighting.const import (
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
 )
-from custom_components.presence_based_lighting.const import DEFAULT_OFF_DELAY
 from custom_components.presence_based_lighting.const import (
     DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
 )
@@ -474,7 +452,6 @@ class TestServiceHandlerTargetRouting:
 
 
 class TestEntryLifecycleErrors:
-
     @pytest.mark.asyncio
     async def test_setup_entry_exception(self):
         """Lines 482-484: async_setup_entry raises → returns False."""
@@ -530,7 +507,6 @@ class TestEntryLifecycleErrors:
 
 
 class TestCoordinatorInitEdges:
-
     @pytest.mark.asyncio
     async def test_duplicate_entity_id_logged(self):
         """Line 594-596: Two entities with the same entity_id → second is ignored."""
@@ -577,7 +553,6 @@ class TestCoordinatorInitEdges:
 
 
 class TestCoordinatorStartInterceptorBranches:
-
     @pytest.mark.asyncio
     async def test_interceptor_active(self):
         """Line 623: interceptor setup returns True (proactive blocking)."""
@@ -618,7 +593,6 @@ class TestCoordinatorStartInterceptorBranches:
 
 
 class TestAsyncStopErrors:
-
     @pytest.mark.asyncio
     async def test_stop_listener_removal_error(self):
         """Lines 789-790: A listener callback raises on removal."""
@@ -661,7 +635,6 @@ class TestAsyncStopErrors:
 
 
 class TestRegisterPresenceSwitch:
-
     @pytest.mark.asyncio
     async def test_register_and_remove_callback(self):
         """Line 808: The _remove closure removes the callback."""
@@ -684,7 +657,6 @@ class TestRegisterPresenceSwitch:
 
 
 class TestGetEntityAutomationState:
-
     @pytest.mark.asyncio
     async def test_returns_state_value(self):
         """Line 817: get_entity_automation_state returns state string."""
@@ -703,7 +675,6 @@ class TestGetEntityAutomationState:
 
 
 class TestHandleServiceCallEdges:
-
     @pytest.mark.asyncio
     async def test_non_string_entity_id_skipped(self):
         """Lines 883-884: Non-string entity_id in target list is skipped."""
@@ -769,7 +740,6 @@ class TestHandleServiceCallEdges:
 
 
 class TestControlledEntityChangeRLC:
-
     @pytest.mark.asyncio
     async def test_rlc_first_event_initialization(self):
         """Lines 942-947: RLC first event – last_effective_state is None → just record."""
@@ -872,7 +842,6 @@ class TestControlledEntityChangeRLC:
 
 
 class TestPresenceLockEdges:
-
     @pytest.mark.asyncio
     async def test_presence_lock_with_interceptor_active_still_falls_back(self):
         """Interceptor misses still fall back when a conflicting state change arrives."""
@@ -942,7 +911,6 @@ class TestPresenceLockEdges:
 
 
 class TestPresenceChangeRLC:
-
     @pytest.mark.asyncio
     async def test_rlc_presence_sensor_on(self):
         """Lines 1095+: RLC sensor as presence sensor – previous_valid_state triggers presence."""
@@ -1007,7 +975,6 @@ class TestPresenceChangeRLC:
 
 
 class TestPresenceChangePendingEmpty:
-
     @pytest.mark.asyncio
     async def test_pending_activation_room_empties(self):
         """Lines 1176-1177: Room empties while entity is PENDING_ACTIVATION → IDLE."""
@@ -1052,7 +1019,6 @@ class TestPresenceChangePendingEmpty:
 
 
 class TestActivationConditionPartial:
-
     @pytest.mark.asyncio
     async def test_partial_conditions_not_all_met(self):
         """Lines 1205-1206: Only some conditions met → return without transitioning."""
@@ -1165,7 +1131,6 @@ class TestActivationConditionPartial:
 
 
 class TestApplyPresenceAction:
-
     @pytest.mark.asyncio
     async def test_apply_action_to_all_entities(self):
         """Lines 1232-1240: _apply_presence_action applies to all eligible entities."""
@@ -1192,7 +1157,6 @@ class TestApplyPresenceAction:
 
 
 class TestIsAnyOccupiedFallback:
-
     @pytest.mark.asyncio
     async def test_fallback_when_not_initialized(self):
         """Lines 1317-1318: _presence_sensors not set → falls back to entry data."""
@@ -1217,7 +1181,6 @@ class TestIsAnyOccupiedFallback:
 
 
 class TestClearingSensorsFallback:
-
     @pytest.mark.asyncio
     async def test_no_clearing_sensors_falls_back_to_presence(self):
         """Lines 1338+: No clearing sensors → use presence sensors as fallback."""
@@ -1256,7 +1219,6 @@ class TestClearingSensorsFallback:
 
 
 class TestReconcileEntityPaths:
-
     @pytest.mark.asyncio
     async def test_reconcile_occupied_conditions_met_turn_on(self):
         """Line 1512: occupied + conditions met + not already OCCUPIED → turn on."""
@@ -1387,7 +1349,6 @@ class TestReconcileEntityPaths:
 
 
 class TestPeriodicReconciliationPaths:
-
     @pytest.mark.asyncio
     async def test_reconciliation_waiting_for_clear_sensors_clear(self):
         """WAITING_FOR_CLEAR but sensors are clear starts cleared actuation."""
@@ -1570,7 +1531,6 @@ class TestPeriodicReconciliationPaths:
 
 
 class TestOffTimerException:
-
     @pytest.mark.asyncio
     async def test_off_timer_exception_caught(self):
         """Lines 1435-1436: Exception during off timer execution is caught."""
@@ -1598,11 +1558,11 @@ class TestOffTimerException:
 
 
 class TestAutoReEnableLifecycle:
-
     @pytest.mark.asyncio
     async def test_clear_tracking_state_deletes_file(self):
         """Lines 1675-1677: _clear_tracking_state removes the file."""
-        import tempfile, os
+        import os
+        import tempfile
 
         tmpdir = tempfile.mkdtemp()
         os.makedirs(os.path.join(tmpdir, ".storage"), exist_ok=True)
@@ -1739,11 +1699,12 @@ class TestAutoReEnableLifecycle:
 
 
 class TestAutoReEnableStartup:
-
     @pytest.mark.asyncio
     async def test_startup_mid_window_continues_tracking(self):
         """Lines 1973-1977: HA restarts during monitoring window → continue tracking."""
-        import tempfile, os, json
+        import json
+        import os
+        import tempfile
         import custom_components.presence_based_lighting as mod
 
         tmpdir = tempfile.mkdtemp()
@@ -1796,7 +1757,9 @@ class TestAutoReEnableStartup:
     @pytest.mark.asyncio
     async def test_startup_past_window_evaluates(self):
         """Lines 1966-1970: HA restarts after window ended → evaluate."""
-        import tempfile, os, json
+        import json
+        import os
+        import tempfile
         import custom_components.presence_based_lighting as mod
 
         tmpdir = tempfile.mkdtemp()
@@ -1848,7 +1811,9 @@ class TestAutoReEnableStartup:
     @pytest.mark.asyncio
     async def test_startup_stale_tracking_clears(self):
         """Lines 1978-1980: Stale tracking state from previous day → clear."""
-        import tempfile, os, json
+        import json
+        import os
+        import tempfile
         import custom_components.presence_based_lighting as mod
 
         tmpdir = tempfile.mkdtemp()
@@ -1920,7 +1885,9 @@ class TestAutoReEnableStartup:
     @pytest.mark.asyncio
     async def test_startup_midnight_crossing_window(self):
         """Line 1962: Window crosses midnight (start_time > end_time)."""
-        import tempfile, os, json
+        import json
+        import os
+        import tempfile
         import custom_components.presence_based_lighting as mod
 
         tmpdir = tempfile.mkdtemp()
@@ -1973,7 +1940,6 @@ class TestAutoReEnableStartup:
 
 
 class TestHandleExternalAction:
-
     @pytest.mark.asyncio
     async def test_external_action_cleared_service_pauses(self):
         """Line 1303: External action with cleared service → pause."""
@@ -1999,7 +1965,6 @@ class TestHandleExternalAction:
 
 
 class TestApplyActionEdges:
-
     @pytest.mark.asyncio
     async def test_apply_action_no_action_skipped(self):
         """Line 1249-1250: Service is NO_ACTION → skip."""
@@ -2065,7 +2030,6 @@ class TestApplyActionEdges:
 
 
 class TestPresenceChangeNullStates:
-
     @pytest.mark.asyncio
     async def test_null_new_state(self):
         """Guard: new_state is None → return."""
@@ -2092,7 +2056,6 @@ class TestPresenceChangeNullStates:
 
 
 class TestShouldExternalChangePause:
-
     @pytest.mark.asyncio
     async def test_legacy_cleared_state_pauses(self):
         """Legacy: cleared-state service pauses."""
@@ -2130,7 +2093,6 @@ class TestShouldExternalChangePause:
 
 
 class TestEntityOffDelay:
-
     @pytest.mark.asyncio
     async def test_entity_specific_off_delay(self):
         """Uses entity-specific off delay when configured."""

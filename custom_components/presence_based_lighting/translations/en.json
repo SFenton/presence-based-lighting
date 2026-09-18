@@ -308,104 +308,79 @@
     "switch": {
       "state_attributes": {
         "respect_presence_allowed": {
-          "name": "Respects Presence Toggle",
-          "description": "Indicates if this entity honors the per-entity Presence Allowed switch"
+          "name": "Respects Presence Toggle"
         },
         "control_lease_mode": {
-          "name": "Control Lease Mode",
-          "description": "Default-off rollout mode reduced across every PBL entry sharing the controlled root"
+          "name": "Control Lease Mode"
         },
         "control_lease_state": {
-          "name": "Control Lease State",
-          "description": "Current inactive, observing, active, or restart-recovery lease state"
+          "name": "Control Lease State"
         },
         "control_lease_owner": {
-          "name": "Control Lease Owner",
-          "description": "Registered external owner for the current or most recent lease"
+          "name": "Control Lease Owner"
         },
         "control_lease_id": {
-          "name": "Control Lease Correlation",
-          "description": "Stable local short hash for correlating the current or most recent lease"
+          "name": "Control Lease Correlation"
         },
         "control_lease_controller_id": {
-          "name": "Control Lease Controller Correlation",
-          "description": "Stable local short hash for the room-level controller represented by the lease"
+          "name": "Control Lease Controller Correlation"
         },
         "control_lease_occurrence_ids": {
-          "name": "Control Lease Occurrence Correlations",
-          "description": "Bounded local short hashes for occurrences represented by the room controller"
+          "name": "Control Lease Occurrence Correlations"
         },
         "control_lease_request_id": {
-          "name": "Control Lease Request Correlation",
-          "description": "Stable local short hash for the most recent idempotency request"
+          "name": "Control Lease Request Correlation"
         },
         "control_lease_acquired_at": {
-          "name": "Control Lease Acquired",
-          "description": "Server timestamp when the lease epoch began"
+          "name": "Control Lease Acquired"
         },
         "control_lease_expires_at": {
-          "name": "Control Lease Expires",
-          "description": "Absolute expiry fixed by the initial acquire"
+          "name": "Control Lease Expires"
         },
         "control_lease_target_entity_ids": {
-          "name": "Control Lease Targets",
-          "description": "Explicit current leaf targets validated against root membership"
+          "name": "Control Lease Targets"
         },
         "control_lease_released_entity_ids": {
-          "name": "Control Lease Released Targets",
-          "description": "Previously known targets removed by an atomic lease update"
+          "name": "Control Lease Released Targets"
         },
         "control_lease_generation": {
-          "name": "Control Lease Generation",
-          "description": "Compare-and-set generation used to reject stale release and command work"
+          "name": "Control Lease Generation"
         },
         "control_lease_last_transition": {
-          "name": "Control Lease Last Transition",
-          "description": "Most recent bounded lifecycle or command transition"
+          "name": "Control Lease Last Transition"
         },
         "control_lease_last_outcome": {
-          "name": "Control Lease Last Outcome",
-          "description": "Outcome of the most recent transition"
+          "name": "Control Lease Last Outcome"
         },
         "control_lease_last_context": {
-          "name": "Control Lease Last Context",
-          "description": "Redacted source classification for the most recent transition"
+          "name": "Control Lease Last Context"
         },
         "control_lease_baseline_admitted": {
-          "name": "Control Lease Asleep Baseline Admitted",
-          "description": "Whether acquisition admitted an exact qualified pre-existing manual-off suppression"
+          "name": "Control Lease Asleep Baseline Admitted"
         },
         "control_lease_baseline_outcome": {
-          "name": "Control Lease Asleep Baseline Outcome",
-          "description": "Whether clean completion compare-cleared or preserved the admitted baseline"
+          "name": "Control Lease Asleep Baseline Outcome"
         },
         "control_lease_watchdog_state": {
-          "name": "Control Lease Watchdog",
-          "description": "Inactive, armed expiry, or restart-recovery watchdog state"
+          "name": "Control Lease Watchdog"
         },
         "control_lease_watchdog_due_at": {
-          "name": "Control Lease Watchdog Due",
-          "description": "Absolute deadline enforced by the active watchdog"
+          "name": "Control Lease Watchdog Due"
         },
         "control_lease_active_count": {
-          "name": "Control Lease Active Count",
-          "description": "Root-scoped active lease count, limited to zero or one"
+          "name": "Control Lease Active Count"
         },
         "control_lease_denial_count": {
-          "name": "Control Lease Denials",
-          "description": "Bounded runtime count of denied acquire attempts"
+          "name": "Control Lease Denials"
         },
         "control_lease_token_mismatch_count": {
-          "name": "Control Lease Token Mismatches",
-          "description": "Bounded runtime count of stale lease or generation release attempts"
+          "name": "Control Lease Token Mismatches"
         },
         "control_lease_blocked_command_count": {
-          "name": "Control Lease Blocked Commands",
-          "description": "Bounded runtime count of invalid or stale owner commands"
+          "name": "Control Lease Blocked Commands"
         },
         "control_lease_target_unavailable_count": {
-          "name": "Control Lease Unavailable Targets",
-          "description": "Bounded runtime count of unavailable intended targets"
+          "name": "Control Lease Unavailable Targets"
         }
       }
     }

@@ -1,8 +1,6 @@
 """Tests for config_flow.py coverage – helper functions, manage/edit/delete flows, OptionsFlow."""
 from __future__ import annotations
 
-import copy
-from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -26,19 +24,12 @@ from custom_components.presence_based_lighting.config_flow import (
     _resolve_custom_state_selection,
 )
 from custom_components.presence_based_lighting.config_flow import _state_field_defaults
-from custom_components.presence_based_lighting.config_flow import ACTION_ADD_ENTITY
 from custom_components.presence_based_lighting.config_flow import ACTION_DELETE_ENTITIES
 from custom_components.presence_based_lighting.config_flow import ACTION_EDIT_ENTITY
 from custom_components.presence_based_lighting.config_flow import ACTION_NO_ACTION
 from custom_components.presence_based_lighting.config_flow import FIELD_DELETE_ENTITIES
 from custom_components.presence_based_lighting.config_flow import FIELD_EDIT_ENTITY
 from custom_components.presence_based_lighting.config_flow import FIELD_LANDING_ACTION
-from custom_components.presence_based_lighting.config_flow import (
-    FIELD_PRESENCE_CLEARED_STATE_CUSTOM,
-)
-from custom_components.presence_based_lighting.config_flow import (
-    FIELD_PRESENCE_DETECTED_STATE_CUSTOM,
-)
 from custom_components.presence_based_lighting.config_flow import NO_ACTION
 from custom_components.presence_based_lighting.config_flow import (
     PresenceBasedLightingFlowHandler,
@@ -50,7 +41,6 @@ from custom_components.presence_based_lighting.config_flow import (
     ServiceOptionsUnavailable,
 )
 from custom_components.presence_based_lighting.config_flow import STATE_OPTION_CUSTOM
-from custom_components.presence_based_lighting.config_flow import StateFieldDefaults
 from custom_components.presence_based_lighting.const import (
     ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
 )
@@ -59,26 +49,10 @@ from custom_components.presence_based_lighting.const import (
     AUTOMATION_MODE_PRESENCE_LOCK,
 )
 from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CATCHUP_MODE
-from custom_components.presence_based_lighting.const import CONF_ACTIVATION_CONDITIONS
-from custom_components.presence_based_lighting.const import CONF_AUTO_REENABLE_END_TIME
-from custom_components.presence_based_lighting.const import (
-    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
-)
-from custom_components.presence_based_lighting.const import (
-    CONF_AUTO_REENABLE_START_TIME,
-)
-from custom_components.presence_based_lighting.const import (
-    CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
-)
 from custom_components.presence_based_lighting.const import CONF_AUTOMATION_MODE
-from custom_components.presence_based_lighting.const import CONF_CLEARING_SENSORS
 from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
-from custom_components.presence_based_lighting.const import (
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-)
 from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
 from custom_components.presence_based_lighting.const import CONF_ENTITY_OFF_DELAY
-from custom_components.presence_based_lighting.const import CONF_FILE_LOGGING_ENABLED
 from custom_components.presence_based_lighting.const import (
     CONF_INITIAL_PRESENCE_ALLOWED,
 )
@@ -106,42 +80,24 @@ from custom_components.presence_based_lighting.const import (
 )
 from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
 from custom_components.presence_based_lighting.const import (
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-)
-from custom_components.presence_based_lighting.const import (
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-)
-from custom_components.presence_based_lighting.const import (
     CONF_RESPECTS_PRESENCE_ALLOWED,
 )
 from custom_components.presence_based_lighting.const import CONF_RLC_TRACKING_ENTITY
 from custom_components.presence_based_lighting.const import CONF_ROOM_NAME
-from custom_components.presence_based_lighting.const import CONF_USE_INTERCEPTOR
 from custom_components.presence_based_lighting.const import (
     DEFAULT_ACTIVATION_CATCHUP_MODE,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_END_TIME,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_START_TIME,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
 )
 from custom_components.presence_based_lighting.const import DEFAULT_AUTOMATION_MODE
 from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
 from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
-from custom_components.presence_based_lighting.const import DEFAULT_FILE_LOGGING_ENABLED
 from custom_components.presence_based_lighting.const import (
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
 )
 from custom_components.presence_based_lighting.const import (
     DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
 )
-from custom_components.presence_based_lighting.const import DEFAULT_OFF_DELAY
 from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_CLEARED_TRANSITION,
 )
@@ -152,16 +108,8 @@ from custom_components.presence_based_lighting.const import (
     DEFAULT_PRESENCE_DETECTED_TRANSITION,
 )
 from custom_components.presence_based_lighting.const import (
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
-)
-from custom_components.presence_based_lighting.const import (
     DEFAULT_RESPECTS_PRESENCE_ALLOWED,
 )
-from custom_components.presence_based_lighting.const import DEFAULT_USE_INTERCEPTOR
-from custom_components.presence_based_lighting.const import DOMAIN
 
 SERVICE_OPTION_FIXTURE = [
     {"value": NO_ACTION, "label": "No Action"},
@@ -512,7 +460,7 @@ class TestConfigFlowChooseEditEntity:
             CONF_OFF_DELAY: 5,
         }
         handler._controlled_entities = [_entity_fixture("light.x")]
-        result = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "99"})
+        _ = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "99"})
         assert handler._errors.get(FIELD_EDIT_ENTITY) == "invalid_entity"
 
     @pytest.mark.asyncio
@@ -527,7 +475,7 @@ class TestConfigFlowChooseEditEntity:
             CONF_OFF_DELAY: 5,
         }
         handler._controlled_entities = [_entity_fixture("light.x")]
-        result = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "abc"})
+        _ = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "abc"})
         assert handler._errors.get(FIELD_EDIT_ENTITY) == "invalid_entity"
 
 
@@ -562,9 +510,7 @@ class TestConfigFlowDeleteEntities:
             _entity_fixture("light.x"),
             _entity_fixture("light.y"),
         ]
-        result = await handler.async_step_delete_entities(
-            {FIELD_DELETE_ENTITIES: ["0"]}
-        )
+        _ = await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: ["0"]})
         # Should redirect back to manage with 1 entity remaining
         assert len(handler._controlled_entities) == 1
 
@@ -580,7 +526,7 @@ class TestConfigFlowDeleteEntities:
             CONF_OFF_DELAY: 5,
         }
         handler._controlled_entities = [_entity_fixture("light.x")]
-        result = await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: []})
+        _ = await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: []})
         assert handler._errors.get(FIELD_DELETE_ENTITIES) == "select_entities_to_delete"
 
     @pytest.mark.asyncio
@@ -595,9 +541,7 @@ class TestConfigFlowDeleteEntities:
             CONF_OFF_DELAY: 5,
         }
         handler._controlled_entities = [_entity_fixture("light.x")]
-        result = await handler.async_step_delete_entities(
-            {FIELD_DELETE_ENTITIES: ["abc"]}
-        )
+        _ = await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: ["abc"]})
         assert handler._errors.get(FIELD_DELETE_ENTITIES) == "select_entities_to_delete"
 
     @pytest.mark.asyncio
@@ -628,7 +572,7 @@ class TestConfigFlowSelectEntity:
         handler.hass = MagicMock()
         handler.async_show_form = MagicMock(return_value={"type": "form"})
         handler._controlled_entities = []
-        result = await handler.async_step_select_entity({CONF_ENTITY_ID: "nodot"})
+        _ = await handler.async_step_select_entity({CONF_ENTITY_ID: "nodot"})
         assert handler._errors.get(CONF_ENTITY_ID) == "invalid_entity"
 
     @pytest.mark.asyncio
@@ -715,7 +659,7 @@ class TestConfigFlowConfigureEntity:
             CONF_PRESENCE_DETECTED_TRANSITION: 2.5,
             CONF_PRESENCE_CLEARED_TRANSITION: 3.5,
         }
-        result = await handler.async_step_configure_entity(user_input)
+        await handler.async_step_configure_entity(user_input)
         # Should go to manage_entities
         assert len(handler._controlled_entities) == 1
         assert (
@@ -793,7 +737,7 @@ class TestConfigFlowConfigureEntity:
 
         user_input = _default_configure_input()
         # No CONF_ENTITY_OFF_DELAY → should remove it
-        result = await handler.async_step_configure_entity(user_input)
+        await handler.async_step_configure_entity(user_input)
         assert CONF_ENTITY_OFF_DELAY not in handler._controlled_entities[0]
 
     @pytest.mark.asyncio
@@ -819,7 +763,7 @@ class TestConfigFlowConfigureEntity:
         }
 
         user_input = _default_configure_input()
-        result = await handler.async_step_configure_entity(user_input)
+        await handler.async_step_configure_entity(user_input)
         assert len(handler._controlled_entities) == 1  # replaced, not appended
 
     @pytest.mark.asyncio
@@ -979,7 +923,7 @@ class TestOptionsFlowChooseEditEntity:
         handler.hass = MagicMock()
         handler.hass.states.get.return_value = None
         handler.async_show_form = MagicMock(return_value={"type": "form"})
-        result = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "abc"})
+        _ = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "abc"})
         assert handler._errors.get(FIELD_EDIT_ENTITY) == "invalid_entity"
 
     @pytest.mark.asyncio
@@ -989,7 +933,7 @@ class TestOptionsFlowChooseEditEntity:
         handler.hass = MagicMock()
         handler.hass.states.get.return_value = None
         handler.async_show_form = MagicMock(return_value={"type": "form"})
-        result = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "99"})
+        _ = await handler.async_step_choose_edit_entity({FIELD_EDIT_ENTITY: "99"})
         assert handler._errors.get(FIELD_EDIT_ENTITY) == "invalid_entity"
 
 
@@ -1013,7 +957,7 @@ class TestOptionsFlowDeleteEntities:
         handler.hass = MagicMock()
         handler.hass.states.get.return_value = None
         handler.async_show_form = MagicMock(return_value={"type": "form"})
-        result = await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: []})
+        _ = await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: []})
         assert handler._errors.get(FIELD_DELETE_ENTITIES) == "select_entities_to_delete"
 
     @pytest.mark.asyncio
@@ -1030,9 +974,7 @@ class TestOptionsFlowDeleteEntities:
         handler.hass.config_entries = MagicMock()
         handler.async_show_form = MagicMock(return_value={"type": "form"})
         handler.async_create_entry = MagicMock(return_value={"type": "create_entry"})
-        result = await handler.async_step_delete_entities(
-            {FIELD_DELETE_ENTITIES: ["0"]}
-        )
+        _ = await handler.async_step_delete_entities({FIELD_DELETE_ENTITIES: ["0"]})
         assert len(handler._controlled_entities) == 1
 
     @pytest.mark.asyncio
@@ -1042,7 +984,7 @@ class TestOptionsFlowDeleteEntities:
         handler.hass = MagicMock()
         handler.hass.states.get.return_value = None
         handler.async_show_form = MagicMock(return_value={"type": "form"})
-        result = await handler.async_step_delete_entities(
+        _ = await handler.async_step_delete_entities(
             {FIELD_DELETE_ENTITIES: ["abc", "xyz"]}
         )
         assert handler._errors.get(FIELD_DELETE_ENTITIES) == "select_entities_to_delete"
@@ -1154,7 +1096,7 @@ class TestOptionsFlowConfigureEntity:
             CONF_RLC_TRACKING_ENTITY: "sensor.rlc_x",
             CONF_ENTITY_OFF_DELAY: 25,
         }
-        result = await handler.async_step_configure_entity(user_input)
+        await handler.async_step_configure_entity(user_input)
         assert (
             handler._controlled_entities[-1].get(CONF_RLC_TRACKING_ENTITY)
             == "sensor.rlc_x"
@@ -1169,7 +1111,7 @@ class TestOptionsFlowSelectEntity:
         handler = PresenceBasedLightingOptionsFlowHandler(config_entry)
         handler.hass = MagicMock()
         handler.async_show_form = MagicMock(return_value={"type": "form"})
-        result = await handler.async_step_select_entity({CONF_ENTITY_ID: "nodot"})
+        _ = await handler.async_step_select_entity({CONF_ENTITY_ID: "nodot"})
         assert handler._errors.get(CONF_ENTITY_ID) == "invalid_entity"
 
 

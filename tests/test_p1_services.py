@@ -1,5 +1,4 @@
 """Tests for resume_automation and pause_automation services."""
-
 from unittest.mock import MagicMock
 
 import pytest

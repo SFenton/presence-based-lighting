@@ -1,5 +1,4 @@
 """Service registration and routing for Presence Based Lighting."""
-
 from __future__ import annotations
 
 import logging
@@ -130,16 +129,24 @@ MANUAL_CONTROL_DATA_SCHEMA = vol.Schema(
         vol.Optional("brightness_pct"): vol.All(
             vol.Coerce(float), vol.Range(min=1, max=100)
         ),
-        vol.Optional("color_temp"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100000)),
+        vol.Optional("color_temp"): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=100000)
+        ),
         vol.Optional("color_temp_kelvin"): vol.All(
             vol.Coerce(int), vol.Range(min=1000, max=10000)
         ),
         vol.Optional("effect"): vol.All(str, vol.Length(min=1, max=64)),
         vol.Optional("flash"): vol.In({"short", "long"}),
-        vol.Optional("hs_color"): vol.All([vol.Coerce(float)], vol.Length(min=2, max=2)),
+        vol.Optional("hs_color"): vol.All(
+            [vol.Coerce(float)], vol.Length(min=2, max=2)
+        ),
         vol.Optional("rgb_color"): vol.All([vol.Coerce(int)], vol.Length(min=3, max=3)),
-        vol.Optional("transition"): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
-        vol.Optional("xy_color"): vol.All([vol.Coerce(float)], vol.Length(min=2, max=2)),
+        vol.Optional("transition"): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=60)
+        ),
+        vol.Optional("xy_color"): vol.All(
+            [vol.Coerce(float)], vol.Length(min=2, max=2)
+        ),
     },
     extra=vol.PREVENT_EXTRA,
 )

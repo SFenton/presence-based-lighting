@@ -34,7 +34,6 @@ from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STA
 from homeassistant.const import STATE_OFF
 from homeassistant.const import STATE_ON
 from tests.conftest import assert_service_called
-from tests.conftest import assert_service_not_called
 
 
 @pytest.mark.asyncio

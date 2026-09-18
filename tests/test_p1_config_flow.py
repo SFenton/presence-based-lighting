@@ -1,5 +1,4 @@
 """Config flow regression tests for Presence Based Lighting."""
-
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
@@ -48,7 +47,6 @@ from custom_components.presence_based_lighting.const import CONF_CLEARING_SENSOR
 from custom_components.presence_based_lighting.const import (
     CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
 )
-from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
 from custom_components.presence_based_lighting.const import (
     CONF_CONTROL_LEASE_BLOCKERS,
 )
@@ -56,6 +54,7 @@ from custom_components.presence_based_lighting.const import (
     CONF_CONTROL_LEASE_CORRECT_LATE_ON,
 )
 from custom_components.presence_based_lighting.const import CONF_CONTROL_LEASE_MODE
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
 from custom_components.presence_based_lighting.const import (
     CONF_DISABLE_ON_EXTERNAL_CONTROL,
 )
@@ -76,12 +75,6 @@ from custom_components.presence_based_lighting.const import CONF_PRESENCE_DETECT
 from custom_components.presence_based_lighting.const import CONF_PRESENCE_SENSORS
 from custom_components.presence_based_lighting.const import CONF_QUIETED_MAX_AGE
 from custom_components.presence_based_lighting.const import CONF_QUIETED_MAX_AGE_ACTION
-from custom_components.presence_based_lighting.const import (
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-)
-from custom_components.presence_based_lighting.const import (
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-)
 from custom_components.presence_based_lighting.const import (
     CONF_RESPECTS_PRESENCE_ALLOWED,
 )
@@ -112,12 +105,6 @@ from custom_components.presence_based_lighting.const import DEFAULT_OFF_DELAY
 from custom_components.presence_based_lighting.const import DEFAULT_QUIETED_MAX_AGE
 from custom_components.presence_based_lighting.const import (
     DEFAULT_QUIETED_MAX_AGE_ACTION,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
 )
 from custom_components.presence_based_lighting.const import (
     DEFAULT_RESPECTS_PRESENCE_ALLOWED,

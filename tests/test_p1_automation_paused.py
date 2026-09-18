@@ -11,7 +11,6 @@ Key behaviors to test:
 4. automation_paused is NOT persisted (resets on restart)
 5. presence_allowed IS persisted (via RestoreEntity)
 """
-import asyncio
 from unittest.mock import MagicMock
 
 import pytest

@@ -569,9 +569,9 @@ class TestActivationConditionOffTimerGuard:
         mock_config_entry_condition_with_clearing,
     ):
         """Cross-room catch-up waits for local clearing authority occupancy."""
-        mock_config_entry_condition_with_clearing.data[CONF_ACTIVATION_CATCHUP_MODE] = (
-            ACTIVATION_CATCHUP_CLEARING_AUTHORITY
-        )
+        mock_config_entry_condition_with_clearing.data[
+            CONF_ACTIVATION_CATCHUP_MODE
+        ] = ACTIVATION_CATCHUP_CLEARING_AUTHORITY
         mock_hass.states.set("light.living_room", STATE_OFF)
         mock_hass.states.set("binary_sensor.motion", STATE_ON)
         mock_hass.states.set("binary_sensor.occupancy", STATE_OFF)
@@ -602,9 +602,9 @@ class TestActivationConditionOffTimerGuard:
         mock_config_entry_condition_with_clearing,
     ):
         """A fresh local occupancy edge still activates a pending entry."""
-        mock_config_entry_condition_with_clearing.data[CONF_ACTIVATION_CATCHUP_MODE] = (
-            ACTIVATION_CATCHUP_CLEARING_AUTHORITY
-        )
+        mock_config_entry_condition_with_clearing.data[
+            CONF_ACTIVATION_CATCHUP_MODE
+        ] = ACTIVATION_CATCHUP_CLEARING_AUTHORITY
         mock_hass.states.set("light.living_room", STATE_OFF)
         mock_hass.states.set("binary_sensor.motion", STATE_ON)
         mock_hass.states.set("binary_sensor.occupancy", STATE_OFF)

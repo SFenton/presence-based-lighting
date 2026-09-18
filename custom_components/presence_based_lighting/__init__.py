@@ -1,5 +1,4 @@
 """Presence Based Lighting integration entry point."""
-
 from __future__ import annotations
 
 import asyncio
@@ -34,7 +33,6 @@ from .batch_observer import BlockedCommand
 from .batch_observer import get_batch_observer
 from .command_context import CommandOrigin
 from .command_context import get_command_context_registry
-from .control_lease import BaselineSuppressionFingerprint
 from .const import ACTIVATION_CATCHUP_ANY_TRIGGER
 from .const import ACTIVATION_CATCHUP_CLEARING_AUTHORITY
 from .const import ACTIVATION_CATCHUP_NONE
@@ -46,7 +44,6 @@ from .const import AUTOMATION_CONTROL_STATE_QUIETED
 from .const import AUTOMATION_MODE_AUTOMATIC
 from .const import AUTOMATION_MODE_PRESENCE_LOCK
 from .const import BATCH_MODE_OFF
-from .const import CONTROL_LEASE_RELEASE_CAUSE_EXTERNAL_OFF
 from .const import CONF_ACTIVATION_CATCHUP_MODE
 from .const import CONF_ACTIVATION_CONDITIONS
 from .const import CONF_AUTO_REENABLE_END_TIME
@@ -79,8 +76,8 @@ from .const import CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
 from .const import CONF_PRESENCE_DETECTED_SERVICE
 from .const import CONF_PRESENCE_DETECTED_STATE
 from .const import CONF_PRESENCE_DETECTED_TRANSITION
-from .const import CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
 from .const import CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED
+from .const import CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
 from .const import CONF_PRESENCE_SENSORS
 from .const import CONF_QUIETED_MAX_AGE
 from .const import CONF_QUIETED_MAX_AGE_ACTION
@@ -92,11 +89,11 @@ from .const import CONF_ROOM_NAME
 from .const import CONF_UNKNOWN_SOURCE_POLICY
 from .const import CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED
 from .const import CONF_VACANCY_AUTHORITY_SENSORS
+from .const import CONTROL_LEASE_RELEASE_CAUSE_EXTERNAL_OFF
 from .const import DEFAULT_ACTIVATION_CATCHUP_MODE
 from .const import DEFAULT_AUTO_REENABLE_END_TIME
 from .const import DEFAULT_AUTO_REENABLE_START_TIME
 from .const import DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
-from .const import DEFAULT_AUTOMATION_MODE
 from .const import DEFAULT_BATCH_MIN_DISTINCT_ENTITIES
 from .const import DEFAULT_BATCH_RETAIN_SECONDS
 from .const import DEFAULT_BATCH_WINDOW_MS
@@ -108,7 +105,6 @@ from .const import DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON
 from .const import DEFAULT_CONTROL_LEASE_MODE
 from .const import DEFAULT_DETECTED_SERVICE
 from .const import DEFAULT_DETECTED_STATE
-from .const import DEFAULT_DISABLE_ON_EXTERNAL
 from .const import DEFAULT_HOMEKIT_BATCH_MODE
 from .const import DEFAULT_HONOR_EXTERNAL_OVERRIDE
 from .const import DEFAULT_INITIAL_PRESENCE_ALLOWED
@@ -117,8 +113,8 @@ from .const import DEFAULT_OFF_DELAY
 from .const import DEFAULT_PRESENCE_CLEARED_TRANSITION
 from .const import DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
 from .const import DEFAULT_PRESENCE_DETECTED_TRANSITION
-from .const import DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
 from .const import DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED
+from .const import DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
 from .const import DEFAULT_QUIETED_MAX_AGE
 from .const import DEFAULT_QUIETED_MAX_AGE_ACTION
 from .const import DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED
@@ -131,20 +127,21 @@ from .const import EVENT_COMMAND_INTENT
 from .const import EXTERNAL_POLICY_IGNORE
 from .const import EXTERNAL_POLICY_PAUSE
 from .const import EXTERNAL_POLICY_REARM_AFTER_CLEAR
+from .const import MANUAL_ON_BOUNDARY_AWAIT_CLEAR
+from .const import MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY
+from .const import MANUAL_ON_BOUNDARY_CLEAR_PENDING
+from .const import MANUAL_ON_INTENT
+from .const import MANUAL_ON_INTENT_VERSION
 from .const import NO_ACTION
 from .const import PLATFORMS
 from .const import SOURCE_ADMIN
 from .const import SOURCE_HOMEKIT_BATCH
 from .const import SOURCE_HOMEKIT_SINGLE
-from .const import SOURCE_UNKNOWN
 from .const import SOURCE_MANUAL_APP
 from .const import SOURCE_MANUAL_CONTROL
-from .const import MANUAL_ON_INTENT
-from .const import MANUAL_ON_INTENT_VERSION
-from .const import MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY
-from .const import MANUAL_ON_BOUNDARY_AWAIT_CLEAR
-from .const import MANUAL_ON_BOUNDARY_CLEAR_PENDING
+from .const import SOURCE_UNKNOWN
 from .const import STARTUP_MESSAGE
+from .control_lease import BaselineSuppressionFingerprint
 from .control_lease import get_control_lease_manager
 from .entity_targeting import as_entity_list
 from .entity_targeting import async_extract_service_target_entity_ids
@@ -162,12 +159,12 @@ from .real_last_changed import is_entity_on
 from .real_last_changed import is_real_last_changed_entity
 from .real_last_changed import replace_entities_with_matching_rlc_sensors
 from .service_handlers import async_register_services
-from .service_handlers import SERVICE_ACQUIRE_CONTROL
-from .service_handlers import SERVICE_DISPATCH_CONTROL
-from .service_handlers import SERVICE_PAUSE_AUTOMATION
-from .service_handlers import SERVICE_RELEASE_CONTROL
-from .service_handlers import SERVICE_RESUME_AUTOMATION
-from .service_handlers import SERVICE_SET_AUTOMATION_STATE
+from .service_handlers import SERVICE_ACQUIRE_CONTROL  # noqa: F401
+from .service_handlers import SERVICE_DISPATCH_CONTROL  # noqa: F401
+from .service_handlers import SERVICE_PAUSE_AUTOMATION  # noqa: F401
+from .service_handlers import SERVICE_RELEASE_CONTROL  # noqa: F401
+from .service_handlers import SERVICE_RESUME_AUTOMATION  # noqa: F401
+from .service_handlers import SERVICE_SET_AUTOMATION_STATE  # noqa: F401
 
 _LOGGER = logging.getLogger(__package__)
 
@@ -510,9 +507,9 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
         if CONF_AUTO_REENABLE_PRESENCE_SENSORS not in new_data:
             new_data[CONF_AUTO_REENABLE_PRESENCE_SENSORS] = []
         if CONF_AUTO_REENABLE_VACANCY_THRESHOLD not in new_data:
-            new_data[CONF_AUTO_REENABLE_VACANCY_THRESHOLD] = (
-                DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
-            )
+            new_data[
+                CONF_AUTO_REENABLE_VACANCY_THRESHOLD
+            ] = DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
         if CONF_AUTO_REENABLE_START_TIME not in new_data:
             new_data[CONF_AUTO_REENABLE_START_TIME] = DEFAULT_AUTO_REENABLE_START_TIME
         if CONF_AUTO_REENABLE_END_TIME not in new_data:
@@ -1721,7 +1718,9 @@ class PresenceBasedLightingCoordinator:
         suppression_kind = (
             "leased"
             if lease_suppressed
-            else entity_state["state"].value if base_suppressed else None
+            else entity_state["state"].value
+            if base_suppressed
+            else None
         )
         attributes = {
             "desired_state": intent["desired"].value,
@@ -3335,13 +3334,13 @@ class PresenceBasedLightingCoordinator:
                 if pending_manual_action is not None and service != "turn_off":
                     continue
                 direct_manual_action = None
-                if (
-                    service in {"turn_on", "turn_off"}
-                    and self._manual_command_is_direct_user(
-                        entity_id,
-                        target,
-                        event.context,
-                    )
+                if service in {
+                    "turn_on",
+                    "turn_off",
+                } and self._manual_command_is_direct_user(
+                    entity_id,
+                    target,
+                    event.context,
                 ):
                     if service == "turn_off" or self._manual_on_request_is_positive(
                         service_data
@@ -5065,8 +5064,7 @@ class PresenceBasedLightingCoordinator:
         if not keys:
             return True
         if any(
-            isinstance(service_data.get(key), (int, float))
-            and service_data[key] > 0
+            isinstance(service_data.get(key), (int, float)) and service_data[key] > 0
             for key in ("brightness", "brightness_pct")
         ):
             return True
@@ -6361,10 +6359,14 @@ class PresenceBasedLightingCoordinator:
                     )
                     await self._start_entity_off_timer(entity_id, es)
 
-                elif cur in (
-                    EntityAutomationState.SETTLING_OFF,
-                    EntityAutomationState.SETTLING_ON,
-                ) and not self._actuation_is_currently_pending(es):
+                elif (
+                    cur
+                    in (
+                        EntityAutomationState.SETTLING_OFF,
+                        EntityAutomationState.SETTLING_ON,
+                    )
+                    and not self._actuation_is_currently_pending(es)
+                ):
                     if es["actuation"]["status"] == ActuationStatus.FAILED and es[
                         "actuation"
                     ].get("service_key"):
@@ -6790,7 +6792,7 @@ class PresenceBasedLightingCoordinator:
         if not tracking["is_tracking"]:
             return
 
-        entity_id = event.data.get("entity_id")
+        event.data.get("entity_id")
         new_state = event.data.get("new_state")
         old_state = event.data.get("old_state")
 

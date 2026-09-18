@@ -1,5 +1,4 @@
 """Domain-wide command context tracking for shared controlled entities."""
-
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -60,9 +59,9 @@ class PresenceCommandContextRegistry:
     ) -> None:
         self._max_contexts = max_contexts
         self._ttl_seconds = ttl_seconds
-        self._contexts: OrderedDict[str, dict[str, CommandContextRecord]] = (
-            OrderedDict()
-        )
+        self._contexts: OrderedDict[
+            str, dict[str, CommandContextRecord]
+        ] = OrderedDict()
 
     def register(
         self,

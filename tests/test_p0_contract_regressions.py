@@ -252,9 +252,9 @@ async def test_manual_off_pauses_automation_by_default_contract(
 ):
     """The documented default contract is that manual off pauses automation."""
     assert DEFAULT_MANUAL_DISABLE_STATES == [STATE_OFF]
-    mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_MANUAL_DISABLE_STATES] = (
-        list(DEFAULT_MANUAL_DISABLE_STATES)
-    )
+    mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][
+        CONF_MANUAL_DISABLE_STATES
+    ] = list(DEFAULT_MANUAL_DISABLE_STATES)
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
     coordinator = PresenceBasedLightingCoordinator(mock_hass, mock_config_entry)
     await coordinator.async_start()

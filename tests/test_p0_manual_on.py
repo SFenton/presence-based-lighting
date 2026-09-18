@@ -1,39 +1,43 @@
 """Opt-in Presence Lock MANUAL_ON behavior."""
-
 # @covers custom_components/presence_based_lighting/__init__.py
 # @covers custom_components/presence_based_lighting/command_context.py
 # @covers custom_components/presence_based_lighting/external_override.py
-
 import asyncio
 import json
 from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
-
-from custom_components.presence_based_lighting import (
-    EntityAutomationState,
-    PresenceBasedLightingCoordinator,
-)
+from custom_components.presence_based_lighting import EntityAutomationState
+from custom_components.presence_based_lighting import PresenceBasedLightingCoordinator
 from custom_components.presence_based_lighting.command_context import (
     PresenceCommandContextRegistry,
 )
+from custom_components.presence_based_lighting.const import CONF_AUTOMATION_MODE
+from custom_components.presence_based_lighting.const import CONF_CONTROLLED_ENTITIES
+from custom_components.presence_based_lighting.const import CONF_ENTITY_OFF_DELAY
 from custom_components.presence_based_lighting.const import (
-    CONF_AUTOMATION_MODE,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_ENTITY_OFF_DELAY,
     CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
-    EXTERNAL_POLICY_PAUSE,
-    EXTERNAL_POLICY_REARM_AFTER_CLEAR,
-    MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
-    MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY,
-    MANUAL_ON_BOUNDARY_CLEAR_PENDING,
-    MANUAL_ON_INTENT,
 )
+from custom_components.presence_based_lighting.const import EXTERNAL_POLICY_PAUSE
+from custom_components.presence_based_lighting.const import (
+    EXTERNAL_POLICY_REARM_AFTER_CLEAR,
+)
+from custom_components.presence_based_lighting.const import (
+    MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
+)
+from custom_components.presence_based_lighting.const import (
+    MANUAL_ON_BOUNDARY_AWAIT_OCCUPANCY,
+)
+from custom_components.presence_based_lighting.const import (
+    MANUAL_ON_BOUNDARY_CLEAR_PENDING,
+)
+from custom_components.presence_based_lighting.const import MANUAL_ON_INTENT
 from custom_components.presence_based_lighting.external_override import (
     ExternalOverrideManager,
 )
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_ON
 from homeassistant.util import dt as dt_util
 from tests.conftest import setup_entity_states
 
@@ -115,7 +119,9 @@ async def test_manual_on_requires_post_command_occupancy_then_clear(
     mock_hass, mock_config_entry
 ):
     setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     entity_state = coordinator._entity_states["light.living_room"]
     assert await coordinator._accept_manual_control(
@@ -158,7 +164,9 @@ async def test_manual_on_release_dispatches_configured_clear_once(
 ):
     mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_ENTITY_OFF_DELAY] = 0
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
 
     assert await coordinator._accept_manual_control(
@@ -187,9 +195,7 @@ async def test_manual_on_release_dispatches_configured_clear_once(
     await coordinator._entity_states["light.living_room"]["manual_on_timer"]
 
     clear_calls = [
-        call
-        for call in mock_hass.services.calls
-        if call["service"] == "turn_off"
+        call for call in mock_hass.services.calls if call["service"] == "turn_off"
     ]
     assert len(clear_calls) == 1
     assert coordinator._override_manager.get("light.living_room") is None
@@ -200,7 +206,9 @@ async def test_manual_on_occupied_at_acceptance_awaits_clear(
     mock_hass, mock_config_entry
 ):
     setup_entity_states(mock_hass, lights_state=STATE_OFF, occupancy_state=STATE_ON)
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     assert await coordinator._accept_manual_control(
         "light.living_room",
@@ -265,14 +273,14 @@ async def test_manual_on_restart_restores_await_clear_when_room_is_clear(
         phase=MANUAL_ON_BOUNDARY_AWAIT_CLEAR,
     )
     mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_ENTITY_OFF_DELAY] = 0
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     await coordinator._entity_states["light.living_room"]["manual_on_timer"]
 
     assert coordinator._override_manager.get("light.living_room") is None
-    assert [
-        call for call in mock_hass.services.calls if call["service"] == "turn_off"
-    ]
+    assert [call for call in mock_hass.services.calls if call["service"] == "turn_off"]
 
 
 @pytest.mark.asyncio
@@ -289,7 +297,9 @@ async def test_manual_on_restart_clear_pending_accounts_for_elapsed_delay(
         boundary_started_at=started,
     )
     mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_ENTITY_OFF_DELAY] = 5
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     await coordinator._entity_states["light.living_room"]["manual_on_timer"]
 
@@ -309,7 +319,9 @@ async def test_manual_on_restart_clear_pending_waits_for_remaining_delay(
         boundary_started_at=dt_util.utcnow().isoformat(),
     )
     mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_ENTITY_OFF_DELAY] = 0.05
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     timer = coordinator._entity_states["light.living_room"]["manual_on_timer"]
     assert timer is not None
@@ -331,7 +343,9 @@ async def test_manual_on_restart_release_rechecks_invalidated_clear(
         boundary_started_at=dt_util.utcnow().isoformat(),
     )
     mock_config_entry.data[CONF_CONTROLLED_ENTITIES][0][CONF_ENTITY_OFF_DELAY] = 0.05
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
 
     await coordinator._handle_presence_change(
@@ -378,7 +392,9 @@ async def test_manual_authority_action_mismatch_preserves_quieted_hold(
     mock_hass, mock_config_entry
 ):
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     context = _context(user_id="user")
     await coordinator.async_manual_control(
@@ -417,7 +433,9 @@ async def test_turn_on_authority_mismatched_turn_off_enters_quieted(
     mock_hass, mock_config_entry
 ):
     setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_ON)
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     await coordinator.async_start()
     context = _context(user_id="user")
     await coordinator.async_manual_control(
@@ -450,8 +468,12 @@ async def test_turn_on_authority_mismatched_turn_off_enters_quieted(
     )
 
 
-def test_direct_user_provenance_excludes_automation_and_broad_targets(mock_hass, mock_config_entry):
-    coordinator = PresenceBasedLightingCoordinator(mock_hass, _opt_in(mock_config_entry))
+def test_direct_user_provenance_excludes_automation_and_broad_targets(
+    mock_hass, mock_config_entry
+):
+    coordinator = PresenceBasedLightingCoordinator(
+        mock_hass, _opt_in(mock_config_entry)
+    )
     assert coordinator._manual_command_is_direct_user(
         "light.living_room", "light.living_room", _context(user_id="user")
     )
@@ -506,8 +528,7 @@ def test_manual_authority_action_mismatch_does_not_consume_matching_claim():
         is None
     )
     assert (
-        registry.manual_authority_action("entry", "light.room", context)
-        == "turn_off"
+        registry.manual_authority_action("entry", "light.room", context) == "turn_off"
     )
     assert (
         registry.claim_manual_authority(

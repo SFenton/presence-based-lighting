@@ -5,7 +5,6 @@ lights" delivered 16 individually-contexted ``turn_off`` commands inside
 25.39 ms, and the Master Bathroom fallback profile treated its member command
 as manual control and paused indefinitely.
 """
-
 from __future__ import annotations
 
 import asyncio

@@ -3,7 +3,7 @@
   "name": "Presence Based Lighting",
   "documentation": "https://github.com/sfenton/presence_based_lighting",
   "issue_tracker": "https://github.com/sfenton/presence_based_lighting/issues",
-  "after_dependencies": ["hass_interceptor"],
+  "after_dependencies": ["hass_interceptor", "recorder"],
   "dependencies": [],
   "config_flow": true,
   "codeowners": ["@sfenton"],

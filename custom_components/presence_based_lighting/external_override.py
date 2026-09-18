@@ -33,8 +33,8 @@ from .const import DOMAIN
 from .const import EXTERNAL_POLICY_IGNORE
 from .const import EXTERNAL_POLICY_PAUSE
 from .const import EXTERNAL_POLICY_REARM_AFTER_CLEAR
-from .const import MANUAL_ON_INTENT
 from .const import MANUAL_ON_BOUNDARY_CLEAR_PENDING
+from .const import MANUAL_ON_INTENT
 from .const import QUIETED_MAX_AGE_ACTION_ARM
 from .const import QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
 from .const import QUIETED_MAX_AGE_ACTION_PAUSE

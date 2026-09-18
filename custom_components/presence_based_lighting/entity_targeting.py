@@ -1,5 +1,4 @@
 """Helpers for normalizing and matching entity targets."""
-
 from __future__ import annotations
 
 import inspect

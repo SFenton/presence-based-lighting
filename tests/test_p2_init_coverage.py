@@ -1,17 +1,11 @@
 """Tests for __init__.py setup/teardown, migrations, services, and auto-reenable."""
-
-import asyncio
-import json
 from datetime import datetime
 from datetime import time
 from datetime import timedelta
 from datetime import timezone
-from pathlib import Path
 from unittest.mock import AsyncMock
-from unittest.mock import call
 from unittest.mock import MagicMock
 from unittest.mock import patch
-from unittest.mock import PropertyMock
 
 import pytest
 from custom_components.presence_based_lighting import _emit_direct_to_file
@@ -46,7 +40,6 @@ from custom_components.presence_based_lighting.const import CONF_ENTITY_ID
 from custom_components.presence_based_lighting.const import (
     CONF_INITIAL_PRESENCE_ALLOWED,
 )
-from custom_components.presence_based_lighting.const import CONF_MANUAL_DISABLE_STATES
 from custom_components.presence_based_lighting.const import CONF_OFF_DELAY
 from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_CLEARED_SERVICE,
@@ -77,19 +70,12 @@ from custom_components.presence_based_lighting.const import (
     CONF_VACANCY_AUTHORITY_SENSORS,
 )
 from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_END_TIME,
-)
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_AUTO_REENABLE_START_TIME,
-)
-from custom_components.presence_based_lighting.const import (
     DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
 )
 from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERVICE
 from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
-from custom_components.presence_based_lighting.const import DEFAULT_DISABLE_ON_EXTERNAL
 from custom_components.presence_based_lighting.const import (
     DEFAULT_INITIAL_PRESENCE_ALLOWED,
 )
@@ -1283,7 +1269,8 @@ class TestAutoReEnable:
     @pytest.mark.asyncio
     async def test_save_and_load_tracking_state(self):
         """Round-trip persistence of tracking state."""
-        import tempfile, os
+        import os
+        import tempfile
 
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)
@@ -1333,7 +1320,8 @@ class TestAutoReEnable:
     @pytest.mark.asyncio
     async def test_load_tracking_state_no_file(self):
         """_load_tracking_state returns False when no file exists."""
-        import tempfile, os
+        import os
+        import tempfile
 
         hass = MockHass()
         setup_entity_states(hass, lights_state=STATE_OFF, occupancy_state=STATE_OFF)

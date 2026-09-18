@@ -6,7 +6,6 @@ This test suite verifies that:
    trigger manual control logic when RLC is configured
 3. The toggle state is preserved across reboots when RLC is configured
 """
-from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -41,9 +40,6 @@ from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_SERV
 from custom_components.presence_based_lighting.const import DEFAULT_CLEARED_STATE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_SERVICE
 from custom_components.presence_based_lighting.const import DEFAULT_DETECTED_STATE
-from custom_components.presence_based_lighting.const import (
-    DEFAULT_INITIAL_PRESENCE_ALLOWED,
-)
 from custom_components.presence_based_lighting.real_last_changed import (
     ATTR_PREVIOUS_VALID_STATE,
 )

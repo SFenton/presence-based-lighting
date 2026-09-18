@@ -1,5 +1,4 @@
 """Constants for Presence Based Lighting."""
-
 # Base component constants
 NAME = "Presence Based Lighting"
 DOMAIN = "presence_based_lighting"

@@ -52,8 +52,6 @@ from custom_components.presence_based_lighting.real_last_changed import (
 from custom_components.presence_based_lighting.real_last_changed import (
     replace_entities_with_matching_rlc_sensors,
 )
-from homeassistant.const import STATE_OFF
-from homeassistant.const import STATE_ON
 
 
 class TestIsRealLastChangedEntity:
@@ -947,9 +945,6 @@ class TestRLCTrackingEntityForManualControl:
         self, mock_hass, mock_entry_with_rlc_tracking
     ):
         """When RLC tracking entity is configured, manual control detection uses RLC state."""
-        from custom_components.presence_based_lighting.const import (
-            CONF_RLC_TRACKING_ENTITY,
-        )
 
         # Set up states: light is "on", RLC sensor shows "on" as effective state
         mock_hass._states_data["binary_sensor.motion"] = {

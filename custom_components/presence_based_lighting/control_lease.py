@@ -1,5 +1,4 @@
 """Token-guarded temporary control leases for PBL-managed entities."""
-
 from __future__ import annotations
 
 import asyncio
@@ -25,7 +24,6 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .command_context import get_command_context_registry
-from .entity_targeting import expand_structural_targets
 from .const import CONTROL_LEASE_ALLOWED_OWNERS
 from .const import CONTROL_LEASE_CONFIRMATION_WINDOW_SECONDS
 from .const import CONTROL_LEASE_CONTEXT_TTL_SECONDS
@@ -47,6 +45,7 @@ from .const import DEFAULT_CONTROL_LEASE_MODE
 from .const import DOMAIN
 from .const import EVENT_CONTROL_LEASE_REVOKED
 from .const import EVENT_CONTROL_TRANSITION
+from .entity_targeting import expand_structural_targets
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -226,9 +225,9 @@ class ControlLeaseManager:
         )
         self._leases: dict[str, ControlLeaseRecord] = {}
         self._observed: dict[str, ControlLeaseRecord] = {}
-        self._registrations: dict[str, dict[str, EntityLeaseRegistration]] = (
-            defaultdict(dict)
-        )
+        self._registrations: dict[
+            str, dict[str, EntityLeaseRegistration]
+        ] = defaultdict(dict)
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._generations: dict[str, int] = defaultdict(int)
         self._terminal: deque[dict[str, Any]] = deque(
@@ -649,12 +648,16 @@ class ControlLeaseManager:
                     last_transition=(
                         "recovered"
                         if existing.status == "recovering"
-                        else "updated" if changed else "duplicate"
+                        else "updated"
+                        if changed
+                        else "duplicate"
                     ),
                     last_outcome=(
                         "recovered"
                         if existing.status == "recovering"
-                        else "updated" if changed else "duplicate"
+                        else "updated"
+                        if changed
+                        else "duplicate"
                     ),
                     last_context_classification="owner_service",
                 )
@@ -1203,7 +1206,8 @@ class ControlLeaseManager:
                     "blockers": ["inactive_or_mismatched_lease"],
                 }
             runtime_cause = (
-                "expiry" if self._monotonic() >= record.expires_monotonic
+                "expiry"
+                if self._monotonic() >= record.expires_monotonic
                 else self._runtime_break_cause(record)
             )
             if runtime_cause is not None:
@@ -1229,7 +1233,10 @@ class ControlLeaseManager:
                         "blockers": ["no_authorized_targets"],
                     }
                 if len(self._in_flight_context_ids) >= 256:
-                    return {"outcome": "blocked", "blockers": ["command_capacity_exceeded"]}
+                    return {
+                        "outcome": "blocked",
+                        "blockers": ["command_capacity_exceeded"],
+                    }
                 context = Context()
                 command_record = LeaseCommandRecord(
                     context_id=context.id,
@@ -1297,7 +1304,9 @@ class ControlLeaseManager:
         record = self._leases.get(command.root_entity_id)
         if record is not None and self._monotonic() >= record.expires_monotonic:
             self.break_nowait(
-                command.root_entity_id, cause="expiry", direction="none",
+                command.root_entity_id,
+                cause="expiry",
+                direction="none",
                 context_classification="watchdog",
             )
             record = None
@@ -1355,9 +1364,11 @@ class ControlLeaseManager:
                 additional_entity_ids=record.target_entity_ids,
             ):
                 continue
-            if "all" not in targets and root_entity_id not in targets and not set(
-                record.target_entity_ids
-            ).issubset(targets):
+            if (
+                "all" not in targets
+                and root_entity_id not in targets
+                and not set(record.target_entity_ids).issubset(targets)
+            ):
                 continue
             classification = self.classify_external_context(context)
             if await self.async_break(
@@ -1389,8 +1400,10 @@ class ControlLeaseManager:
         broken: list[str] = []
         candidates = {**self._observed, **self._leases}
         for root_entity_id, record in list(candidates.items()):
-            if "all" not in targets and root_entity_id not in targets and not targets.intersection(
-                record.target_entity_ids
+            if (
+                "all" not in targets
+                and root_entity_id not in targets
+                and not targets.intersection(record.target_entity_ids)
             ):
                 continue
             if self._context_is_pbl_owned(
@@ -1599,12 +1612,16 @@ class ControlLeaseManager:
             "control_lease_watchdog_state": (
                 "recovery_grace"
                 if record and record.status == "recovering"
-                else "armed" if record and record.status == "active" else "inactive"
+                else "armed"
+                if record and record.status == "active"
+                else "inactive"
             ),
             "control_lease_watchdog_due_at": (
                 record.recovery_deadline_at
                 if record and record.status == "recovering"
-                else record.expires_at if record and record.status == "active" else None
+                else record.expires_at
+                if record and record.status == "active"
+                else None
             ),
             "control_lease_active_count": (
                 1 if record and record.status in {"active", "recovering"} else 0
@@ -1892,7 +1909,11 @@ class ControlLeaseManager:
         self._contexts[record.context_id] = record
         while len(self._contexts) > 256:
             disposable = next(
-                (key for key in self._contexts if key not in self._in_flight_context_ids),
+                (
+                    key
+                    for key in self._contexts
+                    if key not in self._in_flight_context_ids
+                ),
                 None,
             )
             if disposable is None:
@@ -2291,9 +2312,12 @@ class ControlLeaseManager:
                     "context_classification": transition["context_classification"],
                     "authority_policy": (
                         "conservative_external_control"
-                        if transition["cause"] in {
-                            "manual_group_off", "manual_brightness_control",
-                            "bulk_off", "controlled_entity_off",
+                        if transition["cause"]
+                        in {
+                            "manual_group_off",
+                            "manual_brightness_control",
+                            "bulk_off",
+                            "controlled_entity_off",
                         }
                         else "owner_safety"
                     ),

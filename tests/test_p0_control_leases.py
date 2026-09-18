@@ -1,12 +1,11 @@
 """Critical owner-safe control lease tests."""
-
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-import inspect
 from unittest.mock import MagicMock
 
 import pytest
@@ -45,11 +44,11 @@ from custom_components.presence_based_lighting.const import (
     CONTROL_LEASE_MODE_OBSERVE,
 )
 from custom_components.presence_based_lighting.const import DOMAIN
+from custom_components.presence_based_lighting.const import EVENT_COMMAND_INTENT
 from custom_components.presence_based_lighting.const import (
     EVENT_CONTROL_LEASE_REVOKED,
 )
 from custom_components.presence_based_lighting.const import EVENT_CONTROL_TRANSITION
-from custom_components.presence_based_lighting.const import EVENT_COMMAND_INTENT
 from custom_components.presence_based_lighting.const import EXTERNAL_POLICY_PAUSE
 from custom_components.presence_based_lighting.const import SOURCE_ADMIN
 from custom_components.presence_based_lighting.const import SOURCE_HOMEKIT_BATCH
@@ -1483,9 +1482,7 @@ async def test_owner_and_pbl_brightness_contexts_do_not_revoke(
         {"entity_id": owner_call["service_data"]["entity_id"]},
         owner_authority_data,
     )
-    mock_hass._target_expansion_error = RuntimeError(
-        "target registry unavailable"
-    )
+    mock_hass._target_expansion_error = RuntimeError("target registry unavailable")
     await coordinator._handle_service_call(
         _turn_on_service_event(
             owner_call["context"],

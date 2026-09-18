@@ -1,5 +1,4 @@
 """Adds config flow for Presence Based Lighting."""
-
 from __future__ import annotations
 
 import copy
@@ -18,108 +17,99 @@ from homeassistant.helpers import selector
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
-_LOGGER = logging.getLogger(__name__)
+from .const import ACTIVATION_CATCHUP_ANY_TRIGGER
+from .const import ACTIVATION_CATCHUP_CLEARING_AUTHORITY
+from .const import ACTIVATION_CATCHUP_NONE
+from .const import AUTOMATION_MODE_AUTOMATIC
+from .const import AUTOMATION_MODE_PRESENCE_LOCK
+from .const import CONF_ACTIVATION_CATCHUP_MODE
+from .const import CONF_ACTIVATION_CONDITIONS
+from .const import CONF_AUTO_REENABLE_END_TIME
+from .const import CONF_AUTO_REENABLE_PRESENCE_SENSORS
+from .const import CONF_AUTO_REENABLE_START_TIME
+from .const import CONF_AUTO_REENABLE_VACANCY_THRESHOLD
+from .const import CONF_AUTOMATION_MODE
+from .const import CONF_BULK_COMMAND_POLICY
+from .const import CONF_CLEARING_SENSORS
+from .const import CONF_CLEARING_SENSORS_AUTO_DISCOVERED
+from .const import CONF_CONTROL_LEASE_BLOCKERS
+from .const import CONF_CONTROL_LEASE_CORRECT_LATE_ON
+from .const import CONF_CONTROL_LEASE_MODE
+from .const import CONF_CONTROLLED_ENTITIES
+from .const import CONF_DISABLE_ON_EXTERNAL_CONTROL
+from .const import CONF_ENTITY_ID
+from .const import CONF_ENTITY_OFF_DELAY
+from .const import CONF_FILE_LOGGING_ENABLED
+from .const import CONF_HONOR_EXTERNAL_OVERRIDE
+from .const import CONF_INITIAL_PRESENCE_ALLOWED
+from .const import CONF_MANUAL_DISABLE_STATES
+from .const import CONF_NORMALIZE_EXTERNAL_PLAIN_ON
+from .const import CONF_OFF_DELAY
+from .const import CONF_PRESENCE_CLEARED_SERVICE
+from .const import CONF_PRESENCE_CLEARED_STATE
+from .const import CONF_PRESENCE_CLEARED_TRANSITION
+from .const import CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+from .const import CONF_PRESENCE_DETECTED_SERVICE
+from .const import CONF_PRESENCE_DETECTED_STATE
+from .const import CONF_PRESENCE_DETECTED_TRANSITION
+from .const import CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED
+from .const import CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import CONF_PRESENCE_SENSORS
+from .const import CONF_QUIETED_MAX_AGE
+from .const import CONF_QUIETED_MAX_AGE_ACTION
+from .const import CONF_REQUIRE_OCCUPANCY_FOR_DETECTED
+from .const import CONF_REQUIRE_VACANCY_FOR_CLEARED
+from .const import CONF_RESPECTS_PRESENCE_ALLOWED
+from .const import CONF_RLC_TRACKING_ENTITY
+from .const import CONF_ROOM_NAME
+from .const import CONF_UNKNOWN_SOURCE_POLICY
+from .const import CONF_USE_INTERCEPTOR
+from .const import CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED
+from .const import CONF_VACANCY_AUTHORITY_SENSORS
+from .const import CONTROL_LEASE_MODE_ENFORCE
+from .const import CONTROL_LEASE_MODE_OBSERVE
+from .const import CONTROL_LEASE_MODE_OFF
+from .const import DEFAULT_ACTIVATION_CATCHUP_MODE
+from .const import DEFAULT_AUTO_REENABLE_END_TIME
+from .const import DEFAULT_AUTO_REENABLE_START_TIME
+from .const import DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD
+from .const import DEFAULT_AUTOMATION_MODE
+from .const import DEFAULT_BULK_COMMAND_POLICY
+from .const import DEFAULT_CLEARED_SERVICE
+from .const import DEFAULT_CLEARED_STATE
+from .const import DEFAULT_CONTROL_LEASE_BLOCKERS
+from .const import DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON
+from .const import DEFAULT_CONTROL_LEASE_MODE
+from .const import DEFAULT_DETECTED_SERVICE
+from .const import DEFAULT_DETECTED_STATE
+from .const import DEFAULT_FILE_LOGGING_ENABLED
+from .const import DEFAULT_HONOR_EXTERNAL_OVERRIDE
+from .const import DEFAULT_INITIAL_PRESENCE_ALLOWED
+from .const import DEFAULT_MANUAL_DISABLE_STATES
+from .const import DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON
+from .const import DEFAULT_OFF_DELAY
+from .const import DEFAULT_PRESENCE_CLEARED_TRANSITION
+from .const import DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT
+from .const import DEFAULT_PRESENCE_DETECTED_TRANSITION
+from .const import DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED
+from .const import DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE
+from .const import DEFAULT_QUIETED_MAX_AGE
+from .const import DEFAULT_QUIETED_MAX_AGE_ACTION
+from .const import DEFAULT_RESPECTS_PRESENCE_ALLOWED
+from .const import DEFAULT_UNKNOWN_SOURCE_POLICY
+from .const import DEFAULT_USE_INTERCEPTOR
+from .const import DOMAIN
+from .const import EXTERNAL_POLICY_PAUSE
+from .const import EXTERNAL_POLICY_REARM_AFTER_CLEAR
+from .const import NO_ACTION
+from .const import QUIETED_MAX_AGE_ACTION_ARM
+from .const import QUIETED_MAX_AGE_ACTION_DIAGNOSTIC
+from .const import QUIETED_MAX_AGE_ACTION_PAUSE
+from .real_last_changed import get_all_rlc_sensors
+from .real_last_changed import get_rlc_sensors_for_entity
+from .real_last_changed import is_rlc_integration_available
 
-from .const import (
-    AUTOMATION_MODE_AUTOMATIC,
-    AUTOMATION_MODE_PRESENCE_LOCK,
-    ACTIVATION_CATCHUP_ANY_TRIGGER,
-    ACTIVATION_CATCHUP_CLEARING_AUTHORITY,
-    ACTIVATION_CATCHUP_NONE,
-    CONF_ACTIVATION_CONDITIONS,
-    CONF_ACTIVATION_CATCHUP_MODE,
-    CONF_AUTOMATION_MODE,
-    CONF_BULK_COMMAND_POLICY,
-    CONF_HONOR_EXTERNAL_OVERRIDE,
-    CONF_QUIETED_MAX_AGE,
-    CONF_QUIETED_MAX_AGE_ACTION,
-    CONF_UNKNOWN_SOURCE_POLICY,
-    DEFAULT_BULK_COMMAND_POLICY,
-    DEFAULT_HONOR_EXTERNAL_OVERRIDE,
-    DEFAULT_QUIETED_MAX_AGE,
-    DEFAULT_QUIETED_MAX_AGE_ACTION,
-    DEFAULT_UNKNOWN_SOURCE_POLICY,
-    CONF_AUTO_REENABLE_END_TIME,
-    CONF_AUTO_REENABLE_PRESENCE_SENSORS,
-    CONF_AUTO_REENABLE_START_TIME,
-    CONF_AUTO_REENABLE_VACANCY_THRESHOLD,
-    CONF_CLEARING_SENSORS_AUTO_DISCOVERED,
-    CONF_CONTROLLED_ENTITIES,
-    CONF_CONTROL_LEASE_BLOCKERS,
-    CONF_CONTROL_LEASE_CORRECT_LATE_ON,
-    CONF_CONTROL_LEASE_MODE,
-    CONF_DISABLE_ON_EXTERNAL_CONTROL,
-    CONF_ENTITY_ID,
-    CONF_ENTITY_OFF_DELAY,
-    CONF_INITIAL_PRESENCE_ALLOWED,
-    CONF_CLEARING_SENSORS,
-    CONF_MANUAL_DISABLE_STATES,
-    CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
-    CONF_OFF_DELAY,
-    CONF_PRESENCE_CLEARED_SERVICE,
-    CONF_PRESENCE_CLEARED_STATE,
-    CONF_PRESENCE_CLEARED_TRANSITION,
-    CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-    CONF_PRESENCE_DETECTED_SERVICE,
-    CONF_PRESENCE_DETECTED_TRANSITION,
-    CONF_PRESENCE_DETECTED_STATE,
-    CONF_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    CONF_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
-    CONF_PRESENCE_SENSORS,
-    CONF_RESPECTS_PRESENCE_ALLOWED,
-    CONF_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    CONF_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_RLC_TRACKING_ENTITY,
-    CONF_ROOM_NAME,
-    CONF_USE_INTERCEPTOR,
-    CONF_VACANCY_AUTHORITY_AUTO_DISCOVERED,
-    CONF_VACANCY_AUTHORITY_SENSORS,
-    DEFAULT_AUTOMATION_MODE,
-    DEFAULT_ACTIVATION_CATCHUP_MODE,
-    DEFAULT_AUTO_REENABLE_END_TIME,
-    DEFAULT_AUTO_REENABLE_START_TIME,
-    DEFAULT_AUTO_REENABLE_VACANCY_THRESHOLD,
-    DEFAULT_CLEARED_SERVICE,
-    DEFAULT_CLEARED_STATE,
-    DEFAULT_CONTROL_LEASE_BLOCKERS,
-    DEFAULT_CONTROL_LEASE_CORRECT_LATE_ON,
-    DEFAULT_CONTROL_LEASE_MODE,
-    DEFAULT_PRESENCE_CLEARED_TRANSITION,
-    DEFAULT_DETECTED_SERVICE,
-    DEFAULT_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-    DEFAULT_PRESENCE_DETECTED_TRANSITION,
-    DEFAULT_DETECTED_STATE,
-    DEFAULT_DISABLE_ON_EXTERNAL,
-    DEFAULT_INITIAL_PRESENCE_ALLOWED,
-    DEFAULT_MANUAL_DISABLE_STATES,
-    DEFAULT_NORMALIZE_EXTERNAL_PLAIN_ON,
-    DEFAULT_OFF_DELAY,
-    DEFAULT_PRESENCE_LOCK_RESPECTS_MANUAL_OVERRIDE,
-    DEFAULT_PRESENCE_LOCK_MANUAL_ON_OVERRIDE_ENABLED,
-    DEFAULT_RESPECTS_PRESENCE_ALLOWED,
-    DEFAULT_REQUIRE_OCCUPANCY_FOR_DETECTED,
-    DEFAULT_REQUIRE_VACANCY_FOR_CLEARED,
-    CONF_FILE_LOGGING_ENABLED,
-    DEFAULT_FILE_LOGGING_ENABLED,
-    DEFAULT_USE_INTERCEPTOR,
-    DOMAIN,
-    CONTROL_LEASE_MODE_ENFORCE,
-    CONTROL_LEASE_MODE_OBSERVE,
-    CONTROL_LEASE_MODE_OFF,
-    EXTERNAL_POLICY_PAUSE,
-    EXTERNAL_POLICY_REARM_AFTER_CLEAR,
-    NO_ACTION,
-    QUIETED_MAX_AGE_ACTION_ARM,
-    QUIETED_MAX_AGE_ACTION_DIAGNOSTIC,
-    QUIETED_MAX_AGE_ACTION_PAUSE,
-)
-from .interceptor import is_interceptor_available
-from .real_last_changed import (
-    is_real_last_changed_entity,
-    is_rlc_integration_available,
-    get_rlc_sensors_for_entity,
-    get_all_rlc_sensors,
-)
+_LOGGER = logging.getLogger(__name__)
 
 STEP_USER = "user"
 STEP_SELECT_ENTITY = "select_entity"
@@ -822,30 +812,32 @@ class PresenceBasedLightingFlowHandler(
             ).strip()
 
             if use_dropdown:
-                resolved_detected_state, detected_missing = (
-                    _resolve_custom_state_selection(
-                        resolved_detected_state,
-                        user_input.get(FIELD_PRESENCE_DETECTED_STATE_CUSTOM),
-                        ui_state=self._custom_state_ui,
-                        ui_key=UI_CUSTOM_DETECTED_KEY,
-                    )
+                (
+                    resolved_detected_state,
+                    detected_missing,
+                ) = _resolve_custom_state_selection(
+                    resolved_detected_state,
+                    user_input.get(FIELD_PRESENCE_DETECTED_STATE_CUSTOM),
+                    ui_state=self._custom_state_ui,
+                    ui_key=UI_CUSTOM_DETECTED_KEY,
                 )
-                resolved_cleared_state, cleared_missing = (
-                    _resolve_custom_state_selection(
-                        resolved_cleared_state,
-                        user_input.get(FIELD_PRESENCE_CLEARED_STATE_CUSTOM),
-                        ui_state=self._custom_state_ui,
-                        ui_key=UI_CUSTOM_CLEARED_KEY,
-                    )
+                (
+                    resolved_cleared_state,
+                    cleared_missing,
+                ) = _resolve_custom_state_selection(
+                    resolved_cleared_state,
+                    user_input.get(FIELD_PRESENCE_CLEARED_STATE_CUSTOM),
+                    ui_state=self._custom_state_ui,
+                    ui_key=UI_CUSTOM_CLEARED_KEY,
                 )
                 if detected_missing:
-                    self._errors[FIELD_PRESENCE_DETECTED_STATE_CUSTOM] = (
-                        "custom_state_required"
-                    )
+                    self._errors[
+                        FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+                    ] = "custom_state_required"
                 if cleared_missing:
-                    self._errors[FIELD_PRESENCE_CLEARED_STATE_CUSTOM] = (
-                        "custom_state_required"
-                    )
+                    self._errors[
+                        FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+                    ] = "custom_state_required"
             else:
                 self._custom_state_ui.pop(UI_CUSTOM_DETECTED_KEY, None)
                 self._custom_state_ui.pop(UI_CUSTOM_CLEARED_KEY, None)
@@ -932,11 +924,11 @@ class PresenceBasedLightingFlowHandler(
                         CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
                         defaults[CONF_NORMALIZE_EXTERNAL_PLAIN_ON],
                     )
-                    updated_config[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT] = (
-                        user_input.get(
-                            CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-                            defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
-                        )
+                    updated_config[
+                        CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+                    ] = user_input.get(
+                        CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+                        defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
                     )
                     updated_config[CONF_PRESENCE_DETECTED_TRANSITION] = user_input.get(
                         CONF_PRESENCE_DETECTED_TRANSITION,
@@ -1820,13 +1812,13 @@ class PresenceBasedLightingOptionsFlowHandler(
             self._base_data[CONF_PRESENCE_SENSORS] = user_input[CONF_PRESENCE_SENSORS]
             self._base_data[CONF_CLEARING_SENSORS] = submitted_clearing
             if submitted_clearing == previous_clearing:
-                self._base_data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = (
-                    previous_auto_discovered
-                )
+                self._base_data[
+                    CONF_CLEARING_SENSORS_AUTO_DISCOVERED
+                ] = previous_auto_discovered
             else:
-                self._base_data[CONF_CLEARING_SENSORS_AUTO_DISCOVERED] = (
-                    not submitted_clearing
-                )
+                self._base_data[
+                    CONF_CLEARING_SENSORS_AUTO_DISCOVERED
+                ] = not submitted_clearing
             self._base_data[CONF_ACTIVATION_CONDITIONS] = user_input.get(
                 CONF_ACTIVATION_CONDITIONS, []
             )
@@ -2127,30 +2119,32 @@ class PresenceBasedLightingOptionsFlowHandler(
             ).strip()
 
             if use_dropdown:
-                resolved_detected_state, detected_missing = (
-                    _resolve_custom_state_selection(
-                        resolved_detected_state,
-                        user_input.get(FIELD_PRESENCE_DETECTED_STATE_CUSTOM),
-                        ui_state=self._custom_state_ui,
-                        ui_key=UI_CUSTOM_DETECTED_KEY,
-                    )
+                (
+                    resolved_detected_state,
+                    detected_missing,
+                ) = _resolve_custom_state_selection(
+                    resolved_detected_state,
+                    user_input.get(FIELD_PRESENCE_DETECTED_STATE_CUSTOM),
+                    ui_state=self._custom_state_ui,
+                    ui_key=UI_CUSTOM_DETECTED_KEY,
                 )
-                resolved_cleared_state, cleared_missing = (
-                    _resolve_custom_state_selection(
-                        resolved_cleared_state,
-                        user_input.get(FIELD_PRESENCE_CLEARED_STATE_CUSTOM),
-                        ui_state=self._custom_state_ui,
-                        ui_key=UI_CUSTOM_CLEARED_KEY,
-                    )
+                (
+                    resolved_cleared_state,
+                    cleared_missing,
+                ) = _resolve_custom_state_selection(
+                    resolved_cleared_state,
+                    user_input.get(FIELD_PRESENCE_CLEARED_STATE_CUSTOM),
+                    ui_state=self._custom_state_ui,
+                    ui_key=UI_CUSTOM_CLEARED_KEY,
                 )
                 if detected_missing:
-                    self._errors[FIELD_PRESENCE_DETECTED_STATE_CUSTOM] = (
-                        "custom_state_required"
-                    )
+                    self._errors[
+                        FIELD_PRESENCE_DETECTED_STATE_CUSTOM
+                    ] = "custom_state_required"
                 if cleared_missing:
-                    self._errors[FIELD_PRESENCE_CLEARED_STATE_CUSTOM] = (
-                        "custom_state_required"
-                    )
+                    self._errors[
+                        FIELD_PRESENCE_CLEARED_STATE_CUSTOM
+                    ] = "custom_state_required"
             else:
                 self._custom_state_ui.pop(UI_CUSTOM_DETECTED_KEY, None)
                 self._custom_state_ui.pop(UI_CUSTOM_CLEARED_KEY, None)
@@ -2237,11 +2231,11 @@ class PresenceBasedLightingOptionsFlowHandler(
                         CONF_NORMALIZE_EXTERNAL_PLAIN_ON,
                         defaults[CONF_NORMALIZE_EXTERNAL_PLAIN_ON],
                     )
-                    updated_config[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT] = (
-                        user_input.get(
-                            CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
-                            defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
-                        )
+                    updated_config[
+                        CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT
+                    ] = user_input.get(
+                        CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT,
+                        defaults[CONF_PRESENCE_DETECTED_BRIGHTNESS_PCT],
                     )
                     updated_config[CONF_PRESENCE_DETECTED_TRANSITION] = user_input.get(
                         CONF_PRESENCE_DETECTED_TRANSITION,

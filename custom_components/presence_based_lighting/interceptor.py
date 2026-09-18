@@ -7,7 +7,6 @@ presence state (Presence Lock mode).
 When hass-interceptor is not installed, the integration falls back to the
 event-based approach (listening to EVENT_CALL_SERVICE and reverting state).
 """
-
 from __future__ import annotations
 
 import logging
@@ -405,7 +404,9 @@ class ControlLeaseInterceptor:
             and self._manager.has_any_candidate()
         ):
             try:
-                targets = set(targets) | await async_extract_service_target_entity_ids(call)
+                targets = set(targets) | await async_extract_service_target_entity_ids(
+                    call
+                )
             except Exception:
                 _LOGGER.exception("Failed to resolve explicit-brightness light targets")
                 if self._manager.has_any_enforced_candidate():
@@ -448,7 +449,9 @@ class ControlLeaseInterceptor:
         except Exception:
             # OFF must still pass if HA cannot resolve a selector. Revoke only
             # proven explicit scope rather than guessing unrelated room ownership.
-            _LOGGER.exception("Failed to resolve OFF targets; preserving explicit OFF scope")
+            _LOGGER.exception(
+                "Failed to resolve OFF targets; preserving explicit OFF scope"
+            )
         await self._manager.async_break_for_off_targets(
             targets,
             context=getattr(call, "context", None),

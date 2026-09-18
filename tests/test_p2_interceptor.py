@@ -1,8 +1,5 @@
 """Tests for interceptor.py – PresenceLockInterceptor."""
-import sys
-from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
-from unittest.mock import patch
 
 import pytest
 from custom_components.presence_based_lighting.command_context import CommandOrigin
@@ -35,8 +32,6 @@ from custom_components.presence_based_lighting.const import (
     CONF_REQUIRE_VACANCY_FOR_CLEARED,
 )
 from custom_components.presence_based_lighting.const import CONF_USE_INTERCEPTOR
-from custom_components.presence_based_lighting.const import DEFAULT_USE_INTERCEPTOR
-from custom_components.presence_based_lighting.const import DOMAIN
 from custom_components.presence_based_lighting.interceptor import (
     is_interceptor_available,
 )
