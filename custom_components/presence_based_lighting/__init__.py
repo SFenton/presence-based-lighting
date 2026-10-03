@@ -248,6 +248,10 @@ _ACTUATION_RETRY_DELAY_SECONDS = 1
 _ACTUATION_RETRY_DELAYS_SECONDS = (1.0, 3.0, 7.0)
 _ACTUATION_RETRY_JITTER_MAX_SECONDS = 0.75
 _ACTUATION_MAX_ATTEMPTS = 3
+# Hue groups can echo a stale member state with PBL's own context after an
+# actuation is confirmed, then correct it later with a fresh, context-less
+# update. Treat that correction as convergence for this long.
+_OWN_ECHO_CORRECTION_WINDOW = timedelta(seconds=60)
 _RLC_MIGRATION_RETRY_SECONDS = 30
 _VACANCY_AUTHORITY_AUTOFILL_RETRY_SECONDS = 30
 _UNTRUSTED_STARTUP_STATES = {"unavailable", "unknown"}
@@ -1007,6 +1011,7 @@ class PresenceBasedLightingCoordinator:
                     "pause": None,
                     "last_effective_state": None,  # Track RLC effective state for change detection
                     "last_observed_state": None,  # Last trusted direct state, for redundancy checks
+                    "own_echo": None,  # Contradictory own-context echo after confirmation
                 }
                 self._ownership_manager.register_entity(self.entry.entry_id, entity_id)
                 self._batch_observer.register_managed_entity(
@@ -2461,6 +2466,7 @@ class PresenceBasedLightingCoordinator:
             actuation["target_state"],
         )
         actuation["context_ids"].append(context.id)
+        entity_state["own_echo"] = None
 
         _LOGGER.debug(
             "Calling service %s.%s for entity %s (actuation attempt %d/%d, target=%s)",
@@ -2533,6 +2539,11 @@ class PresenceBasedLightingCoordinator:
         actuation = entity_state["actuation"]
         actuation["last_observed_state"] = observed_state
         actuation["updated_at"] = dt_util.utcnow()
+        if actuation["status"] == ActuationStatus.CONFIRMED:
+            self._note_own_echo_after_confirmation(
+                entity_id, entity_state, observed_state
+            )
+            return
         if actuation["status"] != ActuationStatus.PENDING:
             return
         if observed_state == actuation["target_state"]:
@@ -2545,6 +2556,73 @@ class PresenceBasedLightingCoordinator:
         await self._retry_or_fail_entity_actuation(
             entity_id, entity_state, observed_state
         )
+
+    def _note_own_echo_after_confirmation(
+        self,
+        entity_id: str,
+        entity_state: dict,
+        observed_state: str | None,
+    ) -> None:
+        target_state = entity_state["actuation"]["target_state"]
+        if (
+            target_state is None
+            or observed_state is None
+            or observed_state == target_state
+        ):
+            return
+        entity_state["own_echo"] = {
+            "target_state": target_state,
+            "observed_state": observed_state,
+            "at": dt_util.utcnow(),
+        }
+        _LOGGER.debug(
+            "[%s] Own-context echo %s contradicts confirmed target %s; expecting a late correction",
+            entity_id,
+            observed_state,
+            target_state,
+        )
+
+    async def _handle_late_own_echo_correction(
+        self,
+        entity_id: str,
+        entity_state: dict,
+        effective_new_state: str | None,
+    ) -> bool:
+        """Treat a context-less correction of an own-context echo as convergence."""
+        echo = entity_state.get("own_echo")
+        entity_state["own_echo"] = None
+        if echo is None or effective_new_state is None:
+            return False
+        if effective_new_state != echo["target_state"]:
+            return False
+        if dt_util.utcnow() - echo["at"] > _OWN_ECHO_CORRECTION_WINDOW:
+            return False
+
+        actuation = entity_state["actuation"]
+        actuation["last_observed_state"] = effective_new_state
+        actuation["updated_at"] = dt_util.utcnow()
+        if actuation["target_state"] == effective_new_state:
+            _LOGGER.debug(
+                "[%s] Context-less %s corrects own-context echo %s; confirming late convergence",
+                entity_id,
+                effective_new_state,
+                echo["observed_state"],
+            )
+            self._notify_switch(entity_id)
+            return True
+
+        _LOGGER.info(
+            "[%s] Context-less %s corrects own-context echo %s; current target is %s",
+            entity_id,
+            effective_new_state,
+            echo["observed_state"],
+            actuation["target_state"],
+        )
+        if self._actuation_target_is_still_valid(entity_id, entity_state):
+            await self._apply_intent(entity_id, entity_state, entity_state["intent"])
+        else:
+            self._notify_switch(entity_id)
+        return True
 
     async def _handle_sibling_controlled_change(
         self,
@@ -3771,6 +3849,11 @@ class PresenceBasedLightingCoordinator:
         cfg = entity_state["config"]
         record = self._override_manager.get(entity_id)
         if record is not None and record.is_manual_on:
+            return
+
+        if await self._handle_late_own_echo_correction(
+            entity_id, entity_state, effective_new_state
+        ):
             return
 
         if await self._handle_external_change_matching_actuation_target(

@@ -1,4 +1,6 @@
 """Closed-loop actuator convergence tests."""
+from datetime import timedelta
+
 import pytest
 from custom_components.presence_based_lighting import _ACTUATION_MAX_ATTEMPTS
 from custom_components.presence_based_lighting import ActuationStatus
@@ -264,6 +266,126 @@ async def test_late_target_after_failed_off_is_confirmed_not_manual(
     assert entity_state["actuation"]["status"] == ActuationStatus.CONFIRMED
     assert entity_state["actuation"]["last_error"] is None
     assert coordinator.get_automation_paused("light.living_room") is False
+
+
+async def _confirm_off_with_own_echo(mock_hass, coordinator):
+    """Confirm PBL's off, then replay a Hue group's stale own-context on echo."""
+    entity_state = await _start_cleared_actuation(coordinator)
+    context = mock_hass.services.calls[-1]["context"]
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_ON, STATE_OFF, context)
+    )
+    await coordinator._execute_actuation_confirmation_timer(
+        "light.living_room", entity_state, 0
+    )
+    assert entity_state["actuation"]["status"] == ActuationStatus.CONFIRMED
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_OFF, STATE_ON, context)
+    )
+    return entity_state
+
+
+@pytest.mark.asyncio
+async def test_late_correction_of_own_echo_after_confirmed_off_is_not_manual(
+    mock_hass, mock_config_entry
+):
+    """A context-less off correcting PBL's own stale on echo must not pause."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _confirm_off_with_own_echo(mock_hass, coordinator)
+    calls_before = len(mock_hass.services.calls)
+
+    bridge_context = type("Ctx", (), {"id": "hue_correction", "parent_id": None})()
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_ON, STATE_OFF, bridge_context)
+    )
+
+    assert coordinator.get_automation_paused("light.living_room") is False
+    assert entity_state["state"] == EntityAutomationState.IDLE
+    assert entity_state["actuation"]["status"] == ActuationStatus.CONFIRMED
+    assert entity_state["own_echo"] is None
+    assert len(mock_hass.services.calls) == calls_before
+
+
+@pytest.mark.asyncio
+async def test_own_echo_correction_reasserts_detected_intent(
+    mock_hass, mock_config_entry
+):
+    """A stale on echo must not hide a dark occupied room or pause on correction."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _confirm_off_with_own_echo(mock_hass, coordinator)
+
+    motion_context = type("Ctx", (), {"id": "motion", "parent_id": None})()
+    await coordinator._handle_presence_change(
+        _event(
+            mock_hass,
+            "binary_sensor.living_room_motion",
+            STATE_OFF,
+            STATE_ON,
+            motion_context,
+        )
+    )
+    assert entity_state["actuation"]["target_state"] == STATE_ON
+    assert entity_state["actuation"]["status"] == ActuationStatus.CONFIRMED
+    calls_before = len(mock_hass.services.calls)
+
+    bridge_context = type("Ctx", (), {"id": "hue_correction", "parent_id": None})()
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_ON, STATE_OFF, bridge_context)
+    )
+
+    assert coordinator.get_automation_paused("light.living_room") is False
+    assert entity_state["actuation"]["target_state"] == STATE_ON
+    assert entity_state["actuation"]["status"] == ActuationStatus.PENDING
+    turn_on_calls = [
+        call
+        for call in mock_hass.services.calls[calls_before:]
+        if call["service"] == "turn_on"
+    ]
+    assert len(turn_on_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_off_after_own_echo_window_still_pauses(mock_hass, mock_config_entry):
+    """Manual off semantics are unchanged once the echo correction window passes."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _confirm_off_with_own_echo(mock_hass, coordinator)
+    entity_state["own_echo"]["at"] -= timedelta(seconds=61)
+
+    manual_context = type("Ctx", (), {"id": "manual", "parent_id": None})()
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_ON, STATE_OFF, manual_context)
+    )
+
+    assert coordinator.get_automation_paused("light.living_room") is True
+
+
+@pytest.mark.asyncio
+async def test_own_echo_marker_is_consumed_by_external_change(
+    mock_hass, mock_config_entry
+):
+    """Only the first external change after an echo can be its correction."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _confirm_off_with_own_echo(mock_hass, coordinator)
+
+    bridge_context = type("Ctx", (), {"id": "hue_correction", "parent_id": None})()
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_ON, STATE_OFF, bridge_context)
+    )
+    manual_on = type("Ctx", (), {"id": "manual_on", "parent_id": None})()
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_OFF, STATE_ON, manual_on)
+    )
+    manual_off = type("Ctx", (), {"id": "manual_off", "parent_id": None})()
+    await coordinator._handle_controlled_entity_change(
+        _event(mock_hass, "light.living_room", STATE_ON, STATE_OFF, manual_off)
+    )
+
+    assert entity_state["own_echo"] is None
+    assert coordinator.get_automation_paused("light.living_room") is True
 
 
 @pytest.mark.asyncio
