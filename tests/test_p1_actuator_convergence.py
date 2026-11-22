@@ -13,15 +13,21 @@ from custom_components.presence_based_lighting.const import (
 from custom_components.presence_based_lighting.const import (
     CONF_PRESENCE_DETECTED_SERVICE,
 )
+from custom_components.presence_based_lighting.const import CONF_RLC_TRACKING_ENTITY
+from custom_components.presence_based_lighting.real_last_changed import (
+    ATTR_PREVIOUS_VALID_STATE,
+)
 from homeassistant.const import STATE_OFF
 from homeassistant.const import STATE_ON
+from homeassistant.util import dt as dt_util
 from tests.conftest import assert_service_called
+from tests.conftest import MockContext
 from tests.conftest import MockState
 from tests.conftest import setup_entity_states
 
 
-def _event(mock_hass, entity_id, old_state, new_state, context):
-    mock_hass.states.set(entity_id, new_state, context=context)
+def _event(mock_hass, entity_id, old_state, new_state, context, *, attributes=None):
+    mock_hass.states.set(entity_id, new_state, context=context, attributes=attributes)
     return type(
         "Event",
         (),
@@ -29,7 +35,9 @@ def _event(mock_hass, entity_id, old_state, new_state, context):
             "data": {
                 "entity_id": entity_id,
                 "old_state": MockState(entity_id, old_state),
-                "new_state": MockState(entity_id, new_state, context=context),
+                "new_state": MockState(
+                    entity_id, new_state, context=context, attributes=attributes
+                ),
             }
         },
     )()
@@ -52,6 +60,89 @@ async def _start_cleared_actuation(coordinator):
         timer.cancel()
         entity_state["actuation"]["timer"] = None
     return entity_state
+
+
+async def _rebound_pending_off_then_retarget_detected(
+    mock_hass,
+    coordinator,
+    rebound_shape,
+):
+    """Create the recorder race, then retarget to the fresh presence edge."""
+    hue_group = {"is_hue_group": True}
+    mock_hass.states.set("light.living_room", STATE_ON, attributes=hue_group)
+    mock_hass.states.set(
+        "sensor.living_room_lights",
+        "09:43:36",
+        attributes={ATTR_PREVIOUS_VALID_STATE: STATE_ON},
+    )
+    entity_state = coordinator._entity_states["light.living_room"]
+    entity_state["config"][CONF_RLC_TRACKING_ENTITY] = "sensor.living_room_lights"
+    entity_state["last_effective_state"] = STATE_ON
+    coordinator._rlc_to_entity["sensor.living_room_lights"] = "light.living_room"
+    entity_state = await _start_cleared_actuation(coordinator)
+    own_context = mock_hass.services.calls[-1]["context"]
+    if rebound_shape == "state":
+        await coordinator._handle_controlled_entity_change(
+            _event(
+                mock_hass,
+                "light.living_room",
+                STATE_ON,
+                STATE_OFF,
+                own_context,
+                attributes=hue_group,
+            )
+        )
+        old_rebound_state = STATE_OFF
+    else:
+        old_rebound_state = STATE_ON
+    await coordinator._handle_controlled_entity_change(
+        _event(
+            mock_hass,
+            "light.living_room",
+            old_rebound_state,
+            STATE_ON,
+            own_context,
+            attributes=hue_group,
+        )
+    )
+
+    await coordinator._handle_presence_change(
+        _event(
+            mock_hass,
+            "binary_sensor.living_room_motion",
+            STATE_OFF,
+            STATE_ON,
+            MockContext(id="fresh-presence"),
+        )
+    )
+    assert entity_state["actuation"]["target_state"] == STATE_ON
+    assert entity_state["actuation"]["status"] == ActuationStatus.CONFIRMED
+    assert entity_state["actuation"]["attempts"] == 0
+    return entity_state
+
+
+async def _deliver_late_hue_off(mock_hass, coordinator, context):
+    """The raw callback sees stale RLC state; the RLC callback sees the OFF."""
+    await coordinator._handle_controlled_entity_change(
+        _event(
+            mock_hass,
+            "light.living_room",
+            STATE_ON,
+            STATE_OFF,
+            context,
+            attributes={"is_hue_group": True},
+        )
+    )
+    event = _event(
+        mock_hass,
+        "sensor.living_room_lights",
+        "09:43:36",
+        "09:43:55",
+        context,
+        attributes={ATTR_PREVIOUS_VALID_STATE: STATE_OFF},
+    )
+    event.data["old_state"].attributes[ATTR_PREVIOUS_VALID_STATE] = STATE_ON
+    await coordinator._handle_rlc_tracking_change(event)
 
 
 @pytest.mark.asyncio
@@ -131,6 +222,124 @@ async def test_rebound_does_not_retry_when_presence_returns(
     ]
     assert len(turn_off_calls) == 1
     assert entity_state["actuation"]["status"] == ActuationStatus.CANCELED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rebound_shape", ("state", "attribute_only"))
+@pytest.mark.parametrize("occupied", (True, False))
+async def test_late_unattributed_hue_off_preserves_current_presence_authority(
+    mock_hass,
+    mock_config_entry,
+    rebound_shape,
+    occupied,
+):
+    """A delayed completion of a superseded owned OFF must not pause the room."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _rebound_pending_off_then_retarget_detected(
+        mock_hass,
+        coordinator,
+        rebound_shape,
+    )
+
+    if not occupied:
+        await coordinator._handle_presence_change(
+            _event(
+                mock_hass,
+                "binary_sensor.living_room_motion",
+                STATE_ON,
+                STATE_OFF,
+                MockContext(id="vacancy"),
+            )
+        )
+        entity_state["off_timer"].cancel()
+    mock_hass.services.clear()
+
+    await _deliver_late_hue_off(
+        mock_hass, coordinator, MockContext(id="late-hue-report")
+    )
+
+    assert coordinator.get_automation_paused("light.living_room") is False
+    assert entity_state["state"] == (
+        EntityAutomationState.OCCUPIED if occupied else EntityAutomationState.CLEARING
+    )
+    assert (
+        coordinator.get_entity_control_state("light.living_room")[
+            "late_owned_off_echo_count"
+        ]
+        == 1
+    )
+    assert [
+        call["service"]
+        for call in mock_hass.services.calls
+        if call["service_data"].get("entity_id") == "light.living_room"
+    ] == (["turn_on"] if occupied else [])
+
+
+@pytest.mark.asyncio
+async def test_late_off_after_hue_echo_window_remains_an_external_change(
+    mock_hass,
+    mock_config_entry,
+    monkeypatch,
+):
+    """An aged-out rebound cannot mask a later unattributed physical OFF."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _rebound_pending_off_then_retarget_detected(
+        mock_hass,
+        coordinator,
+        "attribute_only",
+    )
+    later = dt_util.utcnow() + timedelta(seconds=61)
+    monkeypatch.setattr(dt_util, "utcnow", lambda: later)
+    mock_hass.services.clear()
+
+    await _deliver_late_hue_off(
+        mock_hass, coordinator, MockContext(id="late-hue-report-expired")
+    )
+
+    assert coordinator.get_automation_paused("light.living_room") is True
+    assert entity_state["late_owned_off_echo_count"] == 0
+    assert mock_hass.services.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_manual_off_is_not_swallowed_by_pending_echo(
+    mock_hass,
+    mock_config_entry,
+):
+    """An attributed user OFF keeps normal manual-pause precedence."""
+    setup_entity_states(mock_hass, lights_state=STATE_ON, occupancy_state=STATE_OFF)
+    coordinator = _make_coordinator(mock_hass, mock_config_entry)
+    entity_state = await _rebound_pending_off_then_retarget_detected(
+        mock_hass,
+        coordinator,
+        "attribute_only",
+    )
+    manual_context = MockContext(
+        id="manual-off",
+        user_id="user-1",
+    )
+
+    await coordinator._handle_service_call(
+        type(
+            "Event",
+            (),
+            {
+                "data": {
+                    "domain": "light",
+                    "service": "turn_off",
+                    "service_data": {"entity_id": "light.living_room"},
+                },
+                "context": manual_context,
+            },
+        )()
+    )
+    await _deliver_late_hue_off(mock_hass, coordinator, manual_context)
+
+    assert entity_state["pending_off_echo"] is None
+    assert entity_state["late_owned_off_echo_count"] == 0
+    assert coordinator.get_automation_paused("light.living_room") is True
 
 
 @pytest.mark.asyncio
