@@ -143,6 +143,7 @@ Each Presence Allowed switch includes:
 - `rearm_latched` / `rearm_latched_at` / `rearm_armed_by`: Whether and why re-entry became eligible
 - `external_override_at` / `external_override_expires_at`: When the hold started and when it becomes stale
 - `quieted_max_age_action` / `quieted_max_age_reached_at`: Configured and applied stale-hold handling
+- `late_owned_off_echo_count`: How many superseded PBL OFF completions were accepted as un-attributed late echoes
 - `unknown_source_count`: How many external commands could not be attributed to a known source
 - `homekit_batch_mode`: The active bulk-detection kill-switch mode
 - `manual_on` / `manual_on_owner_entry_id` / `manual_on_boundary_phase`: Durable

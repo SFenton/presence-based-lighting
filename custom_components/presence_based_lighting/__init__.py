@@ -248,9 +248,9 @@ _ACTUATION_RETRY_DELAY_SECONDS = 1
 _ACTUATION_RETRY_DELAYS_SECONDS = (1.0, 3.0, 7.0)
 _ACTUATION_RETRY_JITTER_MAX_SECONDS = 0.75
 _ACTUATION_MAX_ATTEMPTS = 3
-# Hue groups can echo a stale member state with PBL's own context after an
-# actuation is confirmed, then correct it later with a fresh, context-less
-# update. Treat that correction as convergence for this long.
+# Hue groups can echo a stale member state with PBL's own context, then report
+# the completed state later without attribution. Keep both post-confirmation and
+# pending-actuation corrections bounded to this window.
 _OWN_ECHO_CORRECTION_WINDOW = timedelta(seconds=60)
 _RLC_MIGRATION_RETRY_SECONDS = 30
 _VACANCY_AUTHORITY_AUTOFILL_RETRY_SECONDS = 30
@@ -1012,6 +1012,8 @@ class PresenceBasedLightingCoordinator:
                     "last_effective_state": None,  # Track RLC effective state for change detection
                     "last_observed_state": None,  # Last trusted direct state, for redundancy checks
                     "own_echo": None,  # Contradictory own-context echo after confirmation
+                    "pending_off_echo": None,
+                    "late_owned_off_echo_count": 0,
                 }
                 self._ownership_manager.register_entity(self.entry.entry_id, entity_id)
                 self._batch_observer.register_managed_entity(
@@ -1616,6 +1618,10 @@ class PresenceBasedLightingCoordinator:
         if entity_state is None:
             return
         if self._control_lease_active(entity_id):
+            self._clear_pending_owned_off_echo(
+                entity_state,
+                "control lease acquired",
+            )
             self._bump_entity_work_generation(entity_state, "control lease acquired")
             self._cancel_entity_timer(entity_state)
             self._cancel_entity_actuation(entity_state, "control lease acquired")
@@ -1769,6 +1775,9 @@ class PresenceBasedLightingCoordinator:
             "quieted_max_age_action": override.max_age_action if override else None,
             "quieted_max_age_reached_at": (
                 override.max_age_reached_at if override else None
+            ),
+            "late_owned_off_echo_count": int(
+                entity_state.get("late_owned_off_echo_count", 0)
             ),
             "unknown_source_count": self._override_manager.unknown_source_count(
                 entity_id
@@ -2467,6 +2476,9 @@ class PresenceBasedLightingCoordinator:
         )
         actuation["context_ids"].append(context.id)
         entity_state["own_echo"] = None
+        marker = entity_state["pending_off_echo"]
+        if marker is not None and marker["off_generation"] != generation:
+            entity_state["pending_off_echo"] = None
 
         _LOGGER.debug(
             "Calling service %s.%s for entity %s (actuation attempt %d/%d, target=%s)",
@@ -2535,6 +2547,7 @@ class PresenceBasedLightingCoordinator:
         entity_id: str,
         entity_state: dict,
         observed_state: str,
+        context: Context | None = None,
     ) -> None:
         actuation = entity_state["actuation"]
         actuation["last_observed_state"] = observed_state
@@ -2553,8 +2566,92 @@ class PresenceBasedLightingCoordinator:
                 observed_state,
             )
             return
+        self._note_pending_owned_off_echo(
+            entity_id,
+            entity_state,
+            observed_state,
+            context,
+        )
         await self._retry_or_fail_entity_actuation(
             entity_id, entity_state, observed_state
+        )
+
+    @staticmethod
+    def _actuation_context_matches(
+        entity_state: dict,
+        context: Context | None,
+    ) -> bool:
+        """Return whether feedback belongs to the current actuation command."""
+        if context is None:
+            return False
+        actuation = entity_state["actuation"]
+        target_state = actuation.get("target_state")
+        context_targets = entity_state.get("context_targets") or {}
+        actuation_contexts = actuation.get("context_ids") or ()
+        for context_id in (
+            getattr(context, "id", None),
+            getattr(context, "parent_id", None),
+        ):
+            if (
+                context_id in actuation_contexts
+                and context_targets.get(context_id) == target_state
+            ):
+                return True
+        return False
+
+    def _note_pending_owned_off_echo(
+        self,
+        entity_id: str,
+        entity_state: dict,
+        observed_state: str | None,
+        context: Context | None,
+    ) -> None:
+        """Remember a contradictory ON from the exact pending owned OFF."""
+        actuation = entity_state["actuation"]
+        if (
+            entity_state["domain"] != "light"
+            or actuation["status"] != ActuationStatus.PENDING
+            or actuation["target_state"] != STATE_OFF
+            or actuation["service_key"] != CONF_PRESENCE_CLEARED_SERVICE
+            or observed_state != STATE_ON
+            or not self._actuation_generation_is_current(entity_state)
+            or not self._actuation_context_matches(entity_state, context)
+        ):
+            return
+        light = self.hass.states.get(entity_id)
+        if (
+            light is None
+            or light.state != STATE_ON
+            or light.attributes.get("is_hue_group") is not True
+        ):
+            return
+        if entity_state["pending_off_echo"] is not None:
+            return
+        generation = self._entity_work_generation(entity_state)
+        entity_state["pending_off_echo"] = {
+            "generation": generation,
+            "off_generation": generation,
+            "at": dt_util.utcnow(),
+            "superseded": False,
+        }
+        _LOGGER.debug(
+            "[%s] Pending owned OFF rebounded to ON for generation %d",
+            entity_id,
+            generation,
+        )
+
+    def _clear_pending_owned_off_echo(
+        self,
+        entity_state: dict,
+        reason: str,
+    ) -> None:
+        if entity_state.get("pending_off_echo") is None:
+            return
+        entity_state["pending_off_echo"] = None
+        _LOGGER.debug(
+            "[%s] Pending owned OFF echo marker cleared: %s",
+            entity_state["config"].get(CONF_ENTITY_ID, "unknown"),
+            reason,
         )
 
     def _note_own_echo_after_confirmation(
@@ -2620,6 +2717,70 @@ class PresenceBasedLightingCoordinator:
         )
         if self._actuation_target_is_still_valid(entity_id, entity_state):
             await self._apply_intent(entity_id, entity_state, entity_state["intent"])
+        else:
+            self._notify_switch(entity_id)
+        return True
+
+    async def _handle_late_pending_owned_off_echo(
+        self,
+        entity_id: str,
+        entity_state: dict,
+        effective_new_state: str | None,
+        context: Context | None,
+    ) -> bool:
+        """Handle one context-free completion of a superseded owned OFF."""
+        marker = entity_state.get("pending_off_echo")
+        if marker is None:
+            return False
+
+        actuation = entity_state["actuation"]
+        if (
+            marker["generation"] != self._entity_work_generation(entity_state)
+            or dt_util.utcnow() - marker["at"] > _OWN_ECHO_CORRECTION_WINDOW
+        ):
+            self._clear_pending_owned_off_echo(
+                entity_state,
+                "expired or obsolete generation",
+            )
+            return False
+
+        if not marker["superseded"]:
+            return False
+
+        source, _, _ = self._resolve_external_policy(entity_id, entity_state, context)
+        attributed = bool(
+            context is None
+            or getattr(context, "user_id", None)
+            or getattr(context, "parent_id", None)
+            or source != SOURCE_UNKNOWN
+        )
+        if effective_new_state != STATE_OFF or attributed:
+            self._clear_pending_owned_off_echo(
+                entity_state,
+                "attributed or unrelated state feedback",
+            )
+            return False
+
+        entity_state["pending_off_echo"] = None
+        entity_state["late_owned_off_echo_count"] += 1
+        actuation["last_observed_state"] = STATE_OFF
+        actuation["updated_at"] = dt_util.utcnow()
+        reassert = actuation["target_state"] == STATE_ON and (
+            self._should_follow_presence(entity_state)
+            and self._actuation_target_is_still_valid(entity_id, entity_state)
+        )
+        _LOGGER.info(
+            "[%s] Pending owned OFF echo accepted: attribution=unattributed, "
+            "disposition=%s, off_generation=%s, current_generation=%s",
+            entity_id,
+            "reassert_on" if reassert else "allow_off",
+            marker["off_generation"],
+            marker["generation"],
+        )
+        if reassert:
+            await self._apply_intent(
+                entity_id, entity_state, {**entity_state["intent"], "force": True}
+            )
         else:
             self._notify_switch(entity_id)
         return True
@@ -2709,6 +2870,22 @@ class PresenceBasedLightingCoordinator:
         actuation = entity_state["actuation"]
         self._cancel_actuation_timer(entity_state)
         service_key = actuation["service_key"]
+        if (
+            service_key == CONF_PRESENCE_CLEARED_SERVICE
+            and actuation["target_state"] == STATE_OFF
+        ):
+            self._clear_pending_owned_off_echo(
+                entity_state,
+                "owned OFF actuation confirmed",
+            )
+        marker = entity_state["pending_off_echo"]
+        if (
+            marker is not None
+            and service_key == CONF_PRESENCE_DETECTED_SERVICE
+            and actuation["target_state"] == STATE_ON
+            and actuation["attempts"] == 0
+        ):
+            marker["superseded"] = True
         actuation.update(
             {
                 "status": ActuationStatus.CONFIRMED,
@@ -2752,6 +2929,10 @@ class PresenceBasedLightingCoordinator:
     ) -> None:
         actuation = entity_state["actuation"]
         self._cancel_actuation_timer(entity_state)
+        self._clear_pending_owned_off_echo(
+            entity_state,
+            "owned actuation reached terminal failure",
+        )
         message = (
             f"target {actuation['target_state']} did not converge "
             f"after {actuation['attempts']} attempts; observed {observed_state}"
@@ -2773,6 +2954,10 @@ class PresenceBasedLightingCoordinator:
         """Set user-controlled presence_allowed state (persisted by switch)."""
         entity_state = self._entity_states[entity_id]
         if not allowed:
+            self._clear_pending_owned_off_echo(
+                entity_state,
+                "presence automation disabled",
+            )
             await self._control_lease_manager.async_break(
                 entity_id,
                 cause="presence_allowed_off",
@@ -3040,6 +3225,10 @@ class PresenceBasedLightingCoordinator:
         - PAUSED state: Automatic, transient, based on manual_disable_states
         """
         entity_state = self._entity_states[entity_id]
+        self._clear_pending_owned_off_echo(
+            entity_state,
+            "explicit automation state change",
+        )
         if paused and self._control_lease_manager.has_candidate(entity_id):
             self._control_lease_manager.break_nowait(
                 entity_id,
@@ -3458,6 +3647,11 @@ class PresenceBasedLightingCoordinator:
                     include_parent=True,
                     expected_target_state=expected_target_state,
                 )
+                if origin != CommandOrigin.OWN:
+                    self._clear_pending_owned_off_echo(
+                        entity_state,
+                        "attributed service command",
+                    )
                 if origin != CommandOrigin.EXTERNAL:
                     continue
                 if expected_target_state == config.get(
@@ -3552,7 +3746,7 @@ class PresenceBasedLightingCoordinator:
 
             new_state = event.data.get("new_state")
             old_state = event.data.get("old_state")
-            if not new_state or not old_state or new_state.state == old_state.state:
+            if not new_state or not old_state:
                 return
 
             entity_state = self._entity_states[entity_id]
@@ -3562,6 +3756,19 @@ class PresenceBasedLightingCoordinator:
                 new_state.context,
                 include_parent=True,
             )
+            if new_state.state == old_state.state:
+                if (
+                    origin == CommandOrigin.OWN
+                    and new_state.state == STATE_ON
+                    and new_state.attributes != old_state.attributes
+                ):
+                    self._note_pending_owned_off_echo(
+                        entity_id,
+                        entity_state,
+                        new_state.state,
+                        new_state.context,
+                    )
+                return
 
             # Check if an RLC tracking entity is configured for this entity
             # If so, use the RLC sensor's state to determine if this is a "real" change
@@ -3605,7 +3812,10 @@ class PresenceBasedLightingCoordinator:
                     if effective_new_state == last_effective:
                         if origin == CommandOrigin.OWN:
                             await self._handle_actuation_feedback(
-                                entity_id, entity_state, new_state.state
+                                entity_id,
+                                entity_state,
+                                new_state.state,
+                                new_state.context,
                             )
                         elif origin == CommandOrigin.SIBLING:
                             await self._handle_sibling_controlled_change(
@@ -3663,7 +3873,10 @@ class PresenceBasedLightingCoordinator:
                 return
             if origin == CommandOrigin.OWN:
                 await self._handle_actuation_feedback(
-                    entity_id, entity_state, effective_new_state
+                    entity_id,
+                    entity_state,
+                    effective_new_state,
+                    new_state.context,
                 )
                 return
             if origin == CommandOrigin.SIBLING:
@@ -3789,7 +4002,10 @@ class PresenceBasedLightingCoordinator:
                 return
             if origin == CommandOrigin.OWN:
                 await self._handle_actuation_feedback(
-                    entity_id, entity_state, new_effective
+                    entity_id,
+                    entity_state,
+                    new_effective,
+                    controlled.context if controlled is not None else None,
                 )
                 return
             if origin == CommandOrigin.SIBLING:
@@ -3853,6 +4069,14 @@ class PresenceBasedLightingCoordinator:
 
         if await self._handle_late_own_echo_correction(
             entity_id, entity_state, effective_new_state
+        ):
+            return
+
+        if await self._handle_late_pending_owned_off_echo(
+            entity_id,
+            entity_state,
+            effective_new_state,
+            context,
         ):
             return
 
@@ -5164,7 +5388,13 @@ class PresenceBasedLightingCoordinator:
     ) -> bool:
         """Persist an accepted manual command before its device dispatch."""
         entity_state = self._entity_states.get(entity_id)
-        if entity_state is None or not self._manual_on_enabled(entity_state):
+        if entity_state is None:
+            return False
+        self._clear_pending_owned_off_echo(
+            entity_state,
+            "explicit manual control",
+        )
+        if not self._manual_on_enabled(entity_state):
             return False
         if not self._manual_on_authority_allowed(entity_id):
             return False
@@ -5553,6 +5783,10 @@ class PresenceBasedLightingCoordinator:
         turned the entity off, and re-asserting anything here would either fight
         that command or bounce the light straight back on.
         """
+        self._clear_pending_owned_off_echo(
+            entity_state,
+            "external quieted hold",
+        )
         pause_source = (
             "external_batch"
             if record.source == SOURCE_HOMEKIT_BATCH
@@ -6109,6 +6343,21 @@ class PresenceBasedLightingCoordinator:
         """Invalidate delayed work that captured an older generation."""
         generation = self._entity_work_generation(entity_state) + 1
         entity_state["work_generation"] = generation
+        marker = entity_state.get("pending_off_echo")
+        if marker is not None:
+            intent = entity_state["intent"]
+            if (
+                intent["desired"] == DesiredState.DETECTED
+                and intent["service_key"] == CONF_PRESENCE_DETECTED_SERVICE
+                and intent["target_state"] == STATE_ON
+                and intent["authority"]
+            ):
+                marker["generation"] = generation
+            else:
+                self._clear_pending_owned_off_echo(
+                    entity_state,
+                    "generation advanced under a different intent",
+                )
         _LOGGER.debug(
             "[%s] work generation advanced to %d (%s)",
             entity_state["config"].get(CONF_ENTITY_ID, "unknown"),
